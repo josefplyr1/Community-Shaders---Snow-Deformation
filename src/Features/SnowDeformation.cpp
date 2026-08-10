@@ -37,6 +37,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowBorderTrampledFade,
 	SnowBorderUntrampledFade,
 	SnowSnowFade,
+	RangeShellM,
+	RangeTrenchesM,
+	RangeBlanketM,
+	RangeSkinsM,
 	TrailDarkening,
 	TrailAOStrength,
 	NormalStrength,
@@ -140,48 +144,9 @@ void SnowDeformation::SetupResources()
 
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>());
 
+	CreateHeightFieldResources();
+
 	{
-		D3D11_TEXTURE2D_DESC heightDesc = {
-			.Width = kHeightMapDim,
-			.Height = kHeightMapDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32_FLOAT,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC heightSrvDesc = {
-			.Format = heightDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC heightRtvDesc = {
-			.Format = heightDesc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC heightUavDesc = {
-			.Format = heightDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-		auto makeHeightTexture = [&]() {
-			auto* texture = new Texture2D(heightDesc);
-			texture->CreateSRV(heightSrvDesc);
-			texture->CreateRTV(heightRtvDesc);
-			texture->CreateUAV(heightUavDesc);
-			return texture;
-		};
-		for (int i = 0; i < 2; i++) {
-			heightTopRaw[i] = makeHeightTexture();
-			heightBottomRaw[i] = makeHeightTexture();
-		}
-		heightTopFiltered = makeHeightTexture();
-		heightBottomFiltered = makeHeightTexture();
-		heightScratch = makeHeightTexture();
-
 		// RT0 MAX (tops) + RT1 MIN (bottoms): highest and lowest surfaces
 		// win per texel in any draw order — no depth buffer needed.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
@@ -270,6 +235,28 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 		if (auto _ttSteep = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds over objects (1.0 = 45 degrees). Steeper = lifted snow clings tighter: narrow banks against cliffs instead of broad aprons, and juttier, less smoothed-over rocks."));
+
+		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttRd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost — stress-test territory."));
+			ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
+			if (auto _ttRs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
+			ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				trenchRangeDirty = true;
+			if (auto _ttRt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+			ImGui::SliderFloat(T(TKEY("range_blanket"), "Object Blanket"), &settings.RangeBlanketM, 29.0f, 750.0f, "%.0f m");
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				heightFieldDirty = true;
+			if (auto _ttRb = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_blanket_tooltip"), "Object lift/shelter/mound field radius. Resolution scales with range up to a 2048 ceiling (~117 MB VRAM); detail coarsens beyond ~230 m. Applies on slider release."));
+			ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRk = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+			ImGui::TreePop();
+		}
 		if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
 			if (settings.ShowDebugTexture) {
@@ -329,7 +316,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!actor || !actor->Is3DLoaded())
 			return;
 		auto position = actor->GetPosition();
-		if (cameraPosition.GetSquaredDistance(position) > MAX_ACTOR_SQ_DISTANCE)
+		if (cameraPosition.GetSquaredDistance(position) > 0.25f * deformWorldSize * deformWorldSize)
 			return;
 		auto root = actor->Get3D(false);
 		if (!root)
@@ -461,6 +448,97 @@ static void SD_CopyShadowTarget(ID3D11ShaderResourceView* a_srcSRV, const char* 
 	}
 
 	globals::d3d::context->CopyResource(a_tex.get(), srcTex.get());
+}
+
+void SnowDeformation::CreateHeightFieldResources()
+{
+	for (int i = 0; i < 2; i++) {
+		delete heightTopRaw[i];
+		heightTopRaw[i] = nullptr;
+		delete heightBottomRaw[i];
+		heightBottomRaw[i] = nullptr;
+	}
+	delete heightTopFiltered;
+	heightTopFiltered = nullptr;
+	delete heightBottomFiltered;
+	heightBottomFiltered = nullptr;
+	delete heightScratch;
+	heightScratch = nullptr;
+
+	D3D11_TEXTURE2D_DESC heightDesc = {
+		.Width = heightMapDim,
+		.Height = heightMapDim,
+		.MipLevels = 1,
+		.ArraySize = 1,
+		.Format = DXGI_FORMAT_R32_FLOAT,
+		.SampleDesc = { .Count = 1 },
+		.Usage = D3D11_USAGE_DEFAULT,
+		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS
+	};
+	D3D11_SHADER_RESOURCE_VIEW_DESC heightSrvDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+	};
+	D3D11_RENDER_TARGET_VIEW_DESC heightRtvDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC heightUavDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+
+	auto makeHeightTexture = [&]() {
+		auto* texture = new Texture2D(heightDesc);
+		texture->CreateSRV(heightSrvDesc);
+		texture->CreateRTV(heightRtvDesc);
+		texture->CreateUAV(heightUavDesc);
+		return texture;
+	};
+	for (int i = 0; i < 2; i++) {
+		heightTopRaw[i] = makeHeightTexture();
+		heightBottomRaw[i] = makeHeightTexture();
+	}
+	heightTopFiltered = makeHeightTexture();
+	heightBottomFiltered = makeHeightTexture();
+	heightScratch = makeHeightTexture();
+
+	heightMapValid = false;
+}
+
+void SnowDeformation::ApplyRangeSettings()
+{
+	// Trench window: content is scale-relative, so a resize clears the map.
+	if (trenchRangeDirty || !rangeInitApplied) {
+		float newWorldSize = std::clamp(settings.RangeTrenchesM, 29.0f, 200.0f) * 2.0f * kUnitsPerMeter;
+		if (std::abs(newWorldSize - deformWorldSize) > 1.0f) {
+			deformWorldSize = newWorldSize;
+			clearRequested = true;
+		}
+		trenchRangeDirty = false;
+	}
+
+	// Blanket height field: dim scales with extent to keep texels <= 16
+	// units, capped at 2048 (VRAM/perf ceiling — texels coarsen beyond
+	// ~230 m; the cone transform is texel-step based, so mounds stay
+	// correctly sloped at any resolution).
+	if (heightFieldDirty || !rangeInitApplied) {
+		float targetExtent = std::clamp(settings.RangeBlanketM, 29.0f, 750.0f) * kUnitsPerMeter;
+		uint32_t targetDim = 512;
+		while (targetDim < uint32_t(targetExtent * 2.0f / 16.0f) && targetDim < 2048)
+			targetDim <<= 1;
+		if (targetDim != heightMapDim || std::abs(targetExtent - heightHalfExtent) > 1.0f) {
+			heightMapDim = targetDim;
+			heightHalfExtent = targetExtent;
+			CreateHeightFieldResources();
+		}
+		heightFieldDirty = false;
+	}
+
+	rangeInitApplied = true;
 }
 
 void SnowDeformation::CaptureShadowAtlas()
@@ -801,6 +879,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 void SnowDeformation::Prepass()
 {
+	ApplyRangeSettings();
+
 	auto context = globals::d3d::context;
 
 	// The lighting shader samples t101 whenever the feature is compiled in, so
@@ -836,7 +916,7 @@ void SnowDeformation::Prepass()
 	pendingScrollDelta = { 0, 0 };
 
 	perFrameData.WindowOrigin = windowOrigin;
-	perFrameData.TexelSize = kTexelSize;
+	perFrameData.TexelSize = deformWorldSize / kTextureDim;
 
 	float deltaTime = *globals::game::deltaTime;
 	perFrameData.RefillAmount = settings.RefillTime > 0.0f ? deltaTime / settings.RefillTime : 0.0f;
@@ -895,19 +975,20 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		// cached FrameBuffer camera position: it is exactly what the lighting
 		// PS sees as CameraPosAdjust, so map and terrain never diverge.
 		auto eyePosFB = globals::game::frameBufferCached.GetCameraPosAdjust();
+		const float deformTexel = deformWorldSize / kTextureDim;
 		float2 desiredOrigin = {
-			std::floor((eyePosFB.x - kWorldSize * 0.5f) / kTexelSize) * kTexelSize,
-			std::floor((eyePosFB.y - kWorldSize * 0.5f) / kTexelSize) * kTexelSize
+			std::floor((eyePosFB.x - deformWorldSize * 0.5f) / deformTexel) * deformTexel,
+			std::floor((eyePosFB.y - deformWorldSize * 0.5f) / deformTexel) * deformTexel
 		};
 
-		pendingScrollDelta.x += (int)std::lround((desiredOrigin.x - windowOrigin.x) / kTexelSize);
-		pendingScrollDelta.y += (int)std::lround((desiredOrigin.y - windowOrigin.y) / kTexelSize);
+		pendingScrollDelta.x += (int)std::lround((desiredOrigin.x - windowOrigin.x) / deformTexel);
+		pendingScrollDelta.y += (int)std::lround((desiredOrigin.y - windowOrigin.y) / deformTexel);
 		windowOrigin = desiredOrigin;
 	}
 
 	SettingsGPU data{};
 	data.WindowOrigin = windowOrigin;
-	data.InvWorldSize = 1.0f / kWorldSize;
+	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.DeformationDepth = settings.DeformationDepth;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.ObjectsSnowDepth = settings.ObjectsSnowDepth;
@@ -1044,11 +1125,15 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
-	cbData.GridSpacing = kShellGridSpacing;
+	// Shell range: the slider scales the warped grid's inner spacing — the
+	// warp shape is unchanged, so range costs no extra vertices, only
+	// near-field density (8 units at the 375 m default).
+	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
+	cbData.GridSpacing = shellSpacing;
 	cbData.GridDim = kShellGridDim;
 	// The warped grid is camera-centered: snap the center to the grid step
 	// so inner vertices stay texel-stable, then offset by the warped span.
-	const float warpedHalfSpan = ShellWarpedHalfSpan();
+	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
 	cbData.WarpedHalfSpan = warpedHalfSpan;
 	cbData.GridOrigin = {
 		std::floor(cbData.CameraPosAdjust.x / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan,
@@ -1059,7 +1144,7 @@ void SnowDeformation::DrawShell()
 	cbData.TerrainTexelSize = kShellVertexSpacing;
 	cbData.TerrainDim = kShellWindowDim;
 	cbData.ShellDebugData = shellDataDebug;
-	cbData.DeformInvWorldSize = 1.0f / kWorldSize;
+	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
 	// Keep shader-side sampling math in small grid-local coordinates.
 	cbData.GridToTerrainOffset = {
@@ -1191,7 +1276,7 @@ void SnowDeformation::DrawShell()
 	// S7 blanket: objects lift the shell when their tops sit within the cap.
 	cbData.ObjectLiftCap = settings.ObjectsSnowDepth > 0.01f ? kObjectLiftCap : 0.0f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
-	cbData.ObjectHeightHalfExtent = kHeightMapHalfExtent;
+	cbData.ObjectHeightHalfExtent = heightHalfExtent;
 
 	cbData.RoadSnowDepth = settings.RoadSnowDepth;
 
@@ -1863,7 +1948,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
-	if (dx * dx + dy * dy > kStaticsCaptureRange * kStaticsCaptureRange)
+	if (dx * dx + dy * dy > (settings.RangeSkinsM * kUnitsPerMeter) * (settings.RangeSkinsM * kUnitsPerMeter))
 		return;
 
 	// The same geometry renders through multiple passes; capture once.
@@ -1993,7 +2078,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Camera-following window, snapped to texel size for stability.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	constexpr float texel = kHeightMapHalfExtent * 2.0f / kHeightMapDim;
+	const float texel = heightHalfExtent * 2.0f / heightMapDim;
 	float2 newCenter = {
 		std::floor(eye.x / texel) * texel,
 		std::floor(eye.y / texel) * texel
@@ -2011,14 +2096,14 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ScrollDelta = scrollDelta;
 	processData.ClearAll = heightMapValid ? 0u : 1u;
 	processData.HeightWindowCenter = newCenter;
-	processData.HeightHalfExtent = kHeightMapHalfExtent;
+	processData.HeightHalfExtent = heightHalfExtent;
 	processData.SlopePerUnit = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);  // 1.0 = 45 degrees
 	processData.TerrainWindowOrigin = { shellWindowCellX * 4096.0f, shellWindowCellY * 4096.0f };
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
 	processData.DeformWindowOriginH = windowOrigin;
-	processData.DeformInvWorldSizeH = 1.0f / kWorldSize;
+	processData.DeformInvWorldSizeH = 1.0f / deformWorldSize;
 	processData.CorpseSphereCount = (uint32_t)corpseMoundSpheres.size();
 	processData.CorpseMoundCap = 20.0f;
 	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
@@ -2036,7 +2121,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		uint32_t exclusionCount = 0;
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
-				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
+				tes->ForEachReferenceInRange(player, heightHalfExtent * 1.5f,
 					[&](RE::TESObjectREFR* a_ref) {
 						if (exclusionCount >= kMaxExclusions)
 							return RE::BSContainer::ForEachResult::kStop;
@@ -2097,7 +2182,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShaderResources(0, 2, scrollSRVs);
 	context->CSSetUnorderedAccessViews(0, 2, scrollUAVs, nullptr);
 	context->CSSetShader(heightScrollCS, nullptr, 0);
-	context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
+	context->Dispatch((heightMapDim + 7) / 8, (heightMapDim + 7) / 8, 1);
 
 	ID3D11ShaderResourceView* nullCsSRVs[2] = { nullptr, nullptr };
 	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
@@ -2108,7 +2193,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->OMSetRenderTargets(2, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
-	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
+	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(heightMapDim), float(heightMapDim), 0.0f, 1.0f };
 	context->RSSetViewports(1, &heightViewport);
 
 	context->VSSetShader(heightVS, nullptr, 0);
@@ -2159,7 +2244,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = settings.ObjectsSnowDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.HeightHalfExtent = heightHalfExtent;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);
@@ -2169,7 +2254,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11RenderTargetView* nullRTVs[2] = { nullptr, nullptr };
 	context->OMSetRenderTargets(2, nullRTVs, nullptr);
 
-	constexpr UINT dispatchDim = (kHeightMapDim + 7) / 8;
+	const UINT dispatchDim = (heightMapDim + 7) / 8;
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
@@ -2529,7 +2614,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = settings.ObjectsSnowDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.HeightHalfExtent = heightHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation
 		// for flat split-normal surfaces — planks, roofs, pole caps.
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);

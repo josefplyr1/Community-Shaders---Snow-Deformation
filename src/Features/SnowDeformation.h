@@ -95,6 +95,11 @@ public:
 		float SnowBorderUntrampledFade = 5.0f;
 		/** @brief View-ray band (units) over which the OBJECT snow skin cross-fades into the LANDSCAPE shell behind it — kills the hard seam between the two snow kinds. 15 = Josef-tuned sweet spot. */
 		float SnowSnowFade = 15.0f;
+		/** @brief Render distances in METERS (converted via kUnitsPerMeter). Shell scales the warped grid spacing (CB-only, live); trenches resize the deformation window (map clears on change); blanket resizes the height field (textures recreated on change); skins is a plain capture cutoff. */
+		float RangeShellM = 375.0f;
+		float RangeTrenchesM = 100.0f;
+		float RangeBlanketM = 375.0f;
+		float RangeSkinsM = 375.0f;
 		float TrailDarkening = 0.6f;
 		float TrailAOStrength = 0.5f;
 		float NormalStrength = 1.0f;
@@ -183,18 +188,21 @@ public:
 	static constexpr float kShellWarpInnerVerts = 256.0f;
 	static constexpr float kShellWarpGrowth = 1.0902f;
 
-	/** @brief World half-span of the warped shell grid (center to edge). */
-	static float ShellWarpedHalfSpan()
+	/** @brief World half-span of the warped shell grid (center to edge) at a given inner spacing. Linear in spacing: the range slider scales spacing, the warp shape is unchanged. */
+	static float ShellWarpedHalfSpan(float a_spacing = kShellGridSpacing)
 	{
 		const float outerVerts = kShellGridDim * 0.5f - kShellWarpInnerVerts;
 		const float outer = kShellWarpGrowth * (std::pow(kShellWarpGrowth, outerVerts) - 1.0f) / (kShellWarpGrowth - 1.0f);
-		return (kShellWarpInnerVerts + outer) * kShellGridSpacing;
+		return (kShellWarpInnerVerts + outer) * a_spacing;
 	}
+
+	/** @brief Skyrim world units per meter (1 unit ≈ 1.43 cm). Range sliders are in meters. */
+	static constexpr float kUnitsPerMeter = 70.0f;
 
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units)
 	// — sized so the warped grid never samples past the window even with the
 	// camera at a cell edge.
-	static constexpr int kShellWindowDim = 512;
+	static constexpr int kShellWindowDim = 1024;
 	static constexpr float kShellVertexSpacing = 128.0f;
 	static constexpr int kShellTexelsPerCell = 32;
 	static constexpr int kShellWindowCells = kShellWindowDim / kShellTexelsPerCell;
@@ -559,6 +567,21 @@ private:
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;
+
+	// ---- Runtime render-distance state (driven by the Range* settings) ----
+	/** @brief Deformation window world size (2x trench range). Changing it invalidates the map (content is scale-relative), so the trench slider clears on apply. */
+	float deformWorldSize = 14000.0f;
+	/** @brief Height-field dimensions/extent; textures are recreated when the blanket range changes (dim scales to keep texels <= 16 units, capped at 2048). */
+	uint32_t heightMapDim = 512;
+	float heightHalfExtent = 2048.0f;
+	bool heightFieldDirty = false;
+	bool trenchRangeDirty = false;
+	bool rangeInitApplied = false;
+
+	/** @brief (Re)creates the 7 height-field textures at heightMapDim. Safe to call at runtime (Prepass, before the height pipeline runs). */
+	void CreateHeightFieldResources();
+	/** @brief Applies pending range-setting changes: trench window resize (+map clear) and height-field recreation. Called at Prepass start; first call applies loaded settings. */
+	void ApplyRangeSettings();
 
 	std::unordered_map<uintptr_t, uint8_t> snowMasks;
 	std::shared_mutex snowMaskMutex;
