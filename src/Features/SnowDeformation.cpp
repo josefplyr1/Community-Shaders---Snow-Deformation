@@ -322,6 +322,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!root)
 			return;
 
+		// Airborne actors do not touch the snow: jumping, levitating or
+		// falling carves nothing until contact. (Ragdolls have no character
+		// controller state — their movement gate handles them instead.)
+		if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
+			return;
+
 		const float groundZ = position.z;
 		const uint32_t formID = actor->formID;
 		// The living keep their trenches open just by being there; the dead

@@ -424,6 +424,21 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
 	float2 absXY = GridOrigin + gridLocal;
 
+	// World-anchored outer rings: warped-zone vertex offsets are camera-
+	// relative, so distant geometry MORPHED as the camera moved — terrain
+	// resampled at ever-shifting positions read as breathing shapes,
+	// landscape peeking through, and blotchy far shading. Snapping each
+	// vertex to its OWN ring's step in WORLD space pins distant vertices in
+	// place; a vertex hops one ring-step only when the camera crosses one,
+	// which distance and TAA absorb. The inner linear region is already
+	// stable through GridOrigin's whole-texel snapping, so the snap blends
+	// in smoothly where the rings start stretching.
+	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
+	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
+	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
+	absXY = lerp(absXY, snapped, snapT);
+	gridLocal = absXY - GridOrigin;
+
 	float coverage;
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);

@@ -97,9 +97,9 @@ public:
 		float SnowSnowFade = 15.0f;
 		/** @brief Render distances in METERS (converted via kUnitsPerMeter). Shell scales the warped grid spacing (CB-only, live); trenches resize the deformation window (map clears on change); blanket resizes the height field (textures recreated on change); skins is a plain capture cutoff. */
 		float RangeShellM = 375.0f;
-		float RangeTrenchesM = 100.0f;
-		float RangeBlanketM = 375.0f;
-		float RangeSkinsM = 375.0f;
+		float RangeTrenchesM = 200.0f;
+		float RangeBlanketM = 29.0f;
+		float RangeSkinsM = 750.0f;
 		float TrailDarkening = 0.6f;
 		float TrailAOStrength = 0.5f;
 		float NormalStrength = 1.0f;
