@@ -331,22 +331,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// The living keep their trenches open just by being there; the dead
 		// carve only WHILE MOVING (the ragdoll fall stamps its imprint),
 		// then go quiet at rest — and the refill slowly buries them. A
-		// corpse already at rest when first seen never stamps at all —
-		// UNLESS we watched it die: dismemberment (decapitation) swaps the
-		// actor's 3D at death, re-enumerating every shape as "first sight",
-		// which would otherwise eat the fall imprint.
+		// corpse already at rest when first seen never stamps at all.
+		// (A "fresh kill waives first-sight" mechanism for decapitation's
+		// 3D swap was tried and reverted: it produced re-trench pulses on
+		// buried corpses.)
 		const bool isDead = actor->IsDead();
-		const bool freshKill = isDead && stampSeenAlive.contains(formID);
-		if (!isDead) {
-			if (stampSeenAlive.size() > 2048)
-				stampSeenAlive.clear();
-			stampSeenAlive.insert(formID);
-		}
 
 		// Airborne LIVING actors do not touch the snow: jumping, levitating
 		// or falling carves nothing until contact. Dead ragdolls are exempt:
-		// their controllers freeze in stale states (often kInAir), and their
-		// movement gate governs them instead.
+		// their controllers freeze in stale states (often kInAir), which
+		// would suppress normal corpse imprints; their movement gate
+		// governs them instead.
 		if (!isDead)
 			if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
 				return;
@@ -385,7 +380,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					moved = sqDelta > 3.0f * 3.0f;
 				}
 				[[maybe_unused]] bool firstSight = (it == stampPrevPositions.end());
-				if (isDead && ((firstSight && !freshKill) || (!firstSight && !moved))) {
+				if (isDead && (firstSight || !moved)) {
 					// Corpse at rest: no stamp. Keep the OLD anchor so
 					// ragdoll micro-jitter cannot hold the trench open, but
 					// real movement (dragging, explosions) re-triggers
