@@ -336,6 +336,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		const float groundZ = position.z;
 		const uint32_t formID = actor->formID;
+		// The living keep their trenches open just by being there; the dead
+		// carve only WHILE MOVING (the ragdoll fall stamps its imprint),
+		// then go quiet at rest — and the refill slowly buries them. A
+		// corpse already at rest when first seen never stamps at all.
+		const bool isDead = actor->IsDead();
 		uint32_t shapeIndex = 0;
 		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
@@ -359,10 +364,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float2 current = { centerPos.x, centerPos.y };
 				float2 previous = current;
 				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
-				if (auto it = stampPrevPositions.find(key); it != stampPrevPositions.end()) {
+				auto it = stampPrevPositions.find(key);
+				bool moved = true;
+				if (it != stampPrevPositions.end()) {
 					float2 delta = { current.x - it->second.x, current.y - it->second.y };
-					if (delta.x * delta.x + delta.y * delta.y < 256.0f * 256.0f)
+					float sqDelta = delta.x * delta.x + delta.y * delta.y;
+					if (sqDelta < 256.0f * 256.0f)
 						previous = it->second;
+					moved = sqDelta > 3.0f * 3.0f;
+				}
+				[[maybe_unused]] bool firstSight = (it == stampPrevPositions.end());
+				if (isDead && (firstSight || !moved)) {
+					// Corpse at rest: no stamp. Keep the OLD anchor so
+					// ragdoll micro-jitter cannot hold the trench open, but
+					// real movement (dragging, explosions) re-triggers
+					// against it. First-seen corpses store a baseline.
+					currentPositions[key] = firstSight ? current : it->second;
+					return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				currentPositions[key] = current;
 

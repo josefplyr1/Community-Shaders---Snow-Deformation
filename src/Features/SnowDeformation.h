@@ -67,7 +67,8 @@ public:
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
-		float StampRadius = 20.0f;
+		/** @brief Scale on Havok collision-shape radii (20 = 1.0x). 30 = Josef-tuned default. */
+		float StampRadius = 30.0f;
 		float RefillTime = 700.0f;
 		bool ShowDebugTexture = false;
 
