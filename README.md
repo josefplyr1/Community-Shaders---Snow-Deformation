@@ -1,3 +1,8 @@
+> **Development fork — not the official Community Shaders repository.**
+> This fork of [Community Shaders](https://github.com/doodlum/skyrim-community-shaders) (v1.8.3) carries the work-in-progress **Snow Deformation** feature: `src/Features/SnowDeformation.*` and `features/Snow Deformation/`, plus small hooks in the shared renderer files. Everything below is the unmodified upstream README; all credits, links, and releases belong to the upstream project.
+
+---
+
 [![Latest Release](https://img.shields.io/github/v/release/doodlum/skyrim-community-shaders)](https://github.com/doodlum/skyrim-community-shaders/releases)
 [![License](https://img.shields.io/github/license/doodlum/skyrim-community-shaders)](./LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/doodlum/skyrim-community-shaders)](https://github.com/doodlum/skyrim-community-shaders/commits)
