@@ -16,6 +16,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/Skin.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowDeformation.h"
 #include "Features/SkySync.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -119,6 +120,8 @@ void State::Draw()
 						globals::features::exponentialHeightFog.CaptureDirectionalShadowMap();
 					if (skylighting.loaded)
 						skylighting.CaptureShadowCascadeSRV();
+					if (globals::features::snowDeformation.loaded)
+						globals::features::snowDeformation.CaptureShadowAtlas();
 				}
 			}
 		}

@@ -346,6 +346,25 @@ namespace SharedData
 		float4 wetParams;
 	};
 
+	struct SnowDeformationSettings
+	{
+		float2 WindowOrigin;
+		float InvWorldSize;
+		float DeformationDepth;
+
+		uint EnableSnowDeformation;
+		float ObjectsSnowDepth;
+		float TrailAOStrength;
+		float NormalStrength;
+
+		uint DebugTerrainOverlay;
+		float ParallaxDepth;
+		// Deformation window origin relative to this view's CameraPosAdjust:
+		// vertex shaders only have camera-relative world positions, so the
+		// statics-shell VS carve uses this instead of an absolute origin.
+		float2 WindowOriginRelCam;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -367,6 +386,7 @@ namespace SharedData
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
+		SnowDeformationSettings snowDeformationSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

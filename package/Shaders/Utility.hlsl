@@ -141,6 +141,21 @@ VS_OUTPUT main(VS_INPUT input)
 #		else
 	precise float4x4 modelViewProj = mul(FrameBuffer::CameraViewProj, World);
 	positionCS = mul(modelViewProj, positionMS);
+
+#			if defined(SNOW_DEFORMATION) && !defined(TREE_ANIM) && !defined(LOD_LANDSCAPE)
+	// Statics-shell diagnostic lift, mirrored into the utility passes (depth
+	// prepass / shadowmaps) so displaced geometry keeps matching depth
+	// everywhere — displacing only the lighting pass makes its fragments
+	// fail the depth test against un-displaced prepass depth.
+	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation &&
+				 SharedData::snowDeformationSettings.ObjectsSnowDepth > 0.01 &&
+				 (SharedData::snowDeformationSettings.DebugTerrainOverlay & 2) != 0)
+	{
+		precise float4 snowPositionWS = float4(mul(World, positionMS).xyz, 1.0);
+		snowPositionWS.z += SharedData::snowDeformationSettings.ObjectsSnowDepth;
+		positionCS = mul(FrameBuffer::CameraViewProj, snowPositionWS);
+	}
+#			endif
 #		endif
 
 #		if defined(RENDER_SHADOWMAP) && defined(RENDER_SHADOWMAP_CLAMPED)

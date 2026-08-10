@@ -11,6 +11,7 @@
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowDeformation.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
@@ -302,6 +303,14 @@ void Deferred::DeferredPasses()
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+
+	// Snow shell: extra deferred geometry drawn after the game's opaque
+	// passes, before the composite consumes the G-buffer.
+	{
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.DrawShell();
+	}
 
 	{
 		ID3D11Buffer* buffers[1] = { *globals::game::perFrame };
@@ -724,5 +733,9 @@ void Deferred::Hooks::Renderer_ResetState::thunk(void* This)
 
 	ID3D11Buffer* buffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, buffers);
+	// Vertex stage too: the snow statics shell displaces in the Lighting VS
+	// and needs Permutation (b4) + FeatureData (b6). No game shader uses
+	// b4-b6 in any stage (only these shared CS cbuffers occupy them).
+	context->VSSetConstantBuffers(4, 3, buffers);
 	context->CSSetConstantBuffers(5, 2, buffers + 1);
 }

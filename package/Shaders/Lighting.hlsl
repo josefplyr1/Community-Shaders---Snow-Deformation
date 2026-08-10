@@ -140,6 +140,15 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
+// Neither "SNOW" nor projected-ness are reliable compile defines for regular
+// draws — both live in the runtime descriptor (Permutation b4), so the block
+// compiles into every plain-object VS and gates itself per draw.
+#	if defined(SNOW_DEFORMATION) && !defined(SKINNED) && !defined(MODELSPACENORMALS) && !defined(TREE_ANIM) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(EYE) && !defined(SKIN) && !defined(HAIR)
+#		define SNOW_DEFORMATION_STATICS_SHELL
+// Live deformation map (same SRV the pixel stage gets at t101).
+Texture2D<float> SnowDeformationMapVS : register(t101);
+#	endif
+
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
@@ -181,6 +190,67 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // SKINNED
 
 	vsout.Position = viewPos;
+
+#	if defined(SNOW_DEFORMATION_STATICS_SHELL)
+	// S6 statics shell v3: displace ONLY the rasterized position — every
+	// interpolant (WorldPosition, uvs, projection coords) keeps the original
+	// location, so the projected-snow sampling and lighting cannot break.
+	// Earlier attempts that displaced positions feeding the projection math
+	// turned snow pixels flat blue. worldPosition is camera-relative; +Z is
+	// world up; ViewProj at b12 c8 is the same matrix the skinned path uses.
+	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation && SharedData::snowDeformationSettings.ObjectsSnowDepth > 0.01)
+	{
+		bool snowStaticsLiftDebug = (SharedData::snowDeformationSettings.DebugTerrainOverlay & 2) != 0;
+		bool snowStaticsIsProjectedSnow =
+			(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ProjectedUV) != 0 &&
+			(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::Snow) != 0;
+		[branch] if (snowStaticsLiftDebug || snowStaticsIsProjectedSnow)
+		{
+			float snowObjDepth = SharedData::snowDeformationSettings.ObjectsSnowDepth;
+
+			[branch] if (!snowStaticsLiftDebug)
+			{
+				// Real path: gate by up-facing world normal and carve by the
+				// live deformation map (bilinear via Loads, no VS sampler).
+				float3 snowNormalMS = input.Normal.xyz * 2.0 - 1.0;
+				float3 snowNormalWS = normalize(float3(
+					dot(World[0].xyz, snowNormalMS),
+					dot(World[1].xyz, snowNormalMS),
+					dot(World[2].xyz, snowNormalMS)));
+				snowObjDepth *= smoothstep(0.25, 0.7, snowNormalWS.z);
+
+				float2 deformUV = (worldPosition.xy - SharedData::snowDeformationSettings.WindowOriginRelCam) * SharedData::snowDeformationSettings.InvWorldSize;
+				[branch] if (all(deformUV > 0.0) && all(deformUV < 1.0))
+				{
+					float2 deformDims;
+					SnowDeformationMapVS.GetDimensions(deformDims.x, deformDims.y);
+					float2 deformT = clamp(deformUV * deformDims - 0.5, 0.0, deformDims.x - 1.001);
+					int2 deformT0 = (int2)deformT;
+					float2 deformF = deformT - deformT0;
+					int2 deformT1 = min(deformT0 + 1, int2(deformDims) - 1);
+					float deform00 = SnowDeformationMapVS.Load(int3(deformT0.x, deformT0.y, 0));
+					float deform10 = SnowDeformationMapVS.Load(int3(deformT1.x, deformT0.y, 0));
+					float deform01 = SnowDeformationMapVS.Load(int3(deformT0.x, deformT1.y, 0));
+					float deform11 = SnowDeformationMapVS.Load(int3(deformT1.x, deformT1.y, 0));
+					float deform = lerp(lerp(deform00, deform10, deformF.x), lerp(deform01, deform11, deformF.x), deformF.y);
+					snowObjDepth *= 1.0 - saturate(deform);
+				}
+			}
+
+			[branch] if (snowObjDepth > 0.01)
+			{
+				float4 snowDisplacedWorld = worldPosition + float4(0, 0, snowObjDepth, 0);
+				vsout.Position = mul(ViewProj, snowDisplacedWorld);
+				// Diagnostic bias: pull the displaced geometry slightly toward
+				// the camera so it wins the depth test even against an
+				// un-displaced depth writer — if lifted geometry appears with
+				// this, the vanishing color pass is depth-test failure.
+				[flatten] if (snowStaticsLiftDebug)
+					vsout.Position.z -= 0.001 * vsout.Position.w;
+			}
+		}
+	}
+#	endif  // SNOW_DEFORMATION_STATICS_SHELL
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
 	vsout.Position.z += min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
@@ -866,6 +936,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
+#	if defined(SNOW_DEFORMATION) && defined(LANDSCAPE)
+#		include "SnowDeformation/SnowDeformation.hlsli"
+#	endif
+
 #	if defined(TERRAIN_VARIATION) && (defined(LANDSCAPE) || defined(LOD_LAND_BLEND) || (defined(LOD_BLENDING) && defined(LODLANDSCAPE)))
 #		include "TerrainVariation/TerrainVariation.hlsli"
 #	endif
@@ -1190,6 +1264,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 blendedRMAOS = 0;
 #		endif
 
+#		if defined(SNOW_DEFORMATION)
+	// Computed before the parallax block so trail depth can feed the POM
+	// march; consumed again later for albedo/AO/normal and the debug overlay.
+	float snowDeformation = 0.0;
+	float snowDeformationSnowness = 0.0;
+	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation)
+	{
+#			if defined(TRUE_PBR)
+		// PBR terrain replaces the vanilla per-layer snow constants, so the
+		// CPU side publishes per-tile snow-material bits via the permutation
+		// data (see SnowDeformation::BSLightingShader_SetupMaterial).
+		uint snowTileBits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
+		float4 snowIsSnow1to4 = float4(snowTileBits & 1, (snowTileBits >> 1) & 1, (snowTileBits >> 2) & 1, (snowTileBits >> 3) & 1);
+		float2 snowIsSnow5to6 = float2((snowTileBits >> 4) & 1, (snowTileBits >> 5) & 1);
+		snowDeformationSnowness = saturate(dot(input.LandBlendWeights1, snowIsSnow1to4) + dot(input.LandBlendWeights2.xy, snowIsSnow5to6));
+#			else
+		snowDeformationSnowness = saturate(dot(input.LandBlendWeights1, LandscapeTexture1to4IsSnow) + input.LandBlendWeights2.x * LandscapeTexture5to6IsSnow.x + input.LandBlendWeights2.y * LandscapeTexture5to6IsSnow.y);
+#			endif
+
+		[branch] if (snowDeformationSnowness > 0.0)
+		{
+			float2 snowDeformationWorldXY = input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
+			snowDeformation = SnowDeformation::GetDeformation(snowDeformationWorldXY) * snowDeformationSnowness;
+		}
+	}
+#		endif
+
 #		if defined(EMAT)
 	if (LANDSCAPE_PARALLAX_ENABLED) {
 		float terrainMaxTexDim = 0.0;
@@ -1236,6 +1337,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
+
 		hasTerrainParallaxShadow =
 			viewPosition.z < ExtendedMaterials::ParallaxCheapDistance &&
 			ExtendedMaterials::TerrainHasAnyDisplacement() &&
@@ -1316,6 +1418,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	normal = float4(blendedNormalRGB, blendedNormalAlpha);
 #		if defined(TRUE_PBR)
 	rawRMAOS = blendedRMAOS;
+#		endif
+
+#		if defined(SNOW_DEFORMATION)
+	// Terrain-side trail shading (darkening/AO/normal tilt/parallax) was
+	// retired once the shell carved real geometry; the computation above
+	// only feeds the diagnostic overlay now.
+
+	// Diagnostic overlay: R = outside deformation window, G = raw
+	// deformation sample, B = detected snowness.
+	[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
+	{
+		float2 debugWorldXY = input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
+		float2 debugUV = SnowDeformation::GetDeformationUV(debugWorldXY);
+		float debugOutside = (all(debugUV > 0.0) && all(debugUV < 1.0)) ? 0.0 : 1.0;
+		float debugDeformation = SnowDeformation::GetDeformation(debugWorldXY);
+		baseColor.xyz = lerp(baseColor.xyz, float3(debugOutside, debugDeformation, snowDeformationSnowness), 0.75);
+	}
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor = TexColorSampler.SampleBias(SampColorSampler, diffuseUv, SharedData::MipBias);
@@ -1543,6 +1662,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 projectedNormal = normalize(mul(tbn, float3(ProjectedUVParams2.xx * normal.xy, normal.z)));
 #		endif  // SPARKLE
 #	endif      // defined (MODELSPACENORMALS) && !defined (SKINNED)
+
 
 #	if defined(SKIN) && defined(CS_SKIN)
 #		if defined(WETNESS_EFFECTS)
@@ -2931,6 +3051,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
+
+#		if defined(SNOW_DEFORMATION) && !defined(LANDSCAPE)
+	// Statics-shell diagnostic (paired with the VS lift): magenta proves the
+	// CS-compiled PIXEL shader renders this object. Blue-without-magenta
+	// means CS shaders are not driving these draws at all, and the in-place
+	// displacement approach cannot work for them.
+	[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 2) != 0)
+		psout.Diffuse.xyz = float3(1.0, 0.0, 1.0);
+#		endif
 #	endif
 
 #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
