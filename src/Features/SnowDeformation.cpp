@@ -2020,7 +2020,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.DeformWindowOriginH = windowOrigin;
 	processData.DeformInvWorldSizeH = 1.0f / kWorldSize;
 	processData.CorpseSphereCount = (uint32_t)corpseMoundSpheres.size();
-	processData.CorpseMoundCap = 40.0f;
+	processData.CorpseMoundCap = 20.0f;
 	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
 		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
 	heightProcessCB->Update(processData);
