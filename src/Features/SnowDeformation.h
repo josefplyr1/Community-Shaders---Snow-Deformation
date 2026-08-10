@@ -565,6 +565,8 @@ private:
 	/** @brief Last stamped world position per actor (formID), for capsule stamping. Rebuilt every frame from live actors so it cannot grow stale. */
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
+	/** @brief Actors seen alive: a fresh kill waives the dead-first-sight stamp suppression, because dismemberment (decapitation) swaps the 3D at death and re-enumerates every shape as "first sight" — which silently ate the fall imprint. */
+	std::unordered_set<uint32_t> stampSeenAlive;
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;
 
