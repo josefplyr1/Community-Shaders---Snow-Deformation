@@ -313,6 +313,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	uint stampCount = 0;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
+	corpseMoundSpheres.clear();
 
 	// Stamps come from the actors' actual Havok collision shapes — the same
 	// per-shape extraction Grass Collision uses (Util::GetShapeBound over
@@ -378,8 +379,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// Corpse at rest: no stamp. Keep the OLD anchor so
 					// ragdoll micro-jitter cannot hold the trench open, but
 					// real movement (dragging, explosions) re-triggers
-					// against it. First-seen corpses store a baseline.
+					// against it. First-seen corpses store a baseline. The
+					// resting shapes feed the burial mounds instead.
 					currentPositions[key] = firstSight ? current : it->second;
+					if (corpseMoundSpheres.size() < 32)
+						corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				currentPositions[key] = current;
@@ -2013,6 +2017,12 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
+	processData.DeformWindowOriginH = windowOrigin;
+	processData.DeformInvWorldSizeH = 1.0f / kWorldSize;
+	processData.CorpseSphereCount = (uint32_t)corpseMoundSpheres.size();
+	processData.CorpseMoundCap = 40.0f;
+	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
+		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -2163,6 +2173,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
+	// Deformation map (t3): CombineCS gates corpse mounds on local refill.
+	ID3D11ShaderResourceView* deformSRV = GetDeformationSRV();
+	context->CSSetShaderResources(3, 1, &deformSRV);
 
 	// Combine: terrain + grounded object tops -> base field (topFiltered),
 	// plus the shelter mask for floating structures (bottomFiltered).
@@ -2202,8 +2215,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Six swaps: the final result lands back in heightTopFiltered.
 	static_assert(std::size(kConeSteps) % 2 == 0);
 
-	ID3D11ShaderResourceView* nullTerrainSRV = nullptr;
-	context->CSSetShaderResources(2, 1, &nullTerrainSRV);
+	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
+	context->CSSetShaderResources(2, 2, nullTailSRVs);
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 

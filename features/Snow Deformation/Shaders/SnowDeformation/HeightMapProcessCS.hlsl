@@ -30,7 +30,13 @@ cbuffer HeightProcessCB : register(b0)
 	uint TerrainDim;
 
 	float GhostDecay;  // units/frame the accumulated maps drift toward empty
-	float3 padH;
+	float2 DeformWindowOriginH;  // deformation-map addressing (refill gate)
+	float DeformInvWorldSizeH;
+
+	uint CorpseSphereCount;  // resting dead actors' collision spheres
+	float CorpseMoundCap;    // max mound height above terrain
+	float2 padH;
+	float4 CorpseSpheres[32];  // xyz world center, w radius
 }
 
 #define MAX_EXCLUSIONS 96
@@ -61,6 +67,7 @@ float ExclusionNoise(float2 worldXY)
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
 Texture2D<float4> TerrainWindow : register(t2);
+Texture2D<float> DeformMap : register(t3);  // CombineCS: corpse-mound refill gate
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
 
@@ -184,6 +191,41 @@ float SampleTerrainHeight(float2 worldXY)
 			}
 			field = lerp(field, terrain, influence);
 			suppress = max(suppress, influence);
+		}
+	}
+
+	// Corpse burial mounds: resting dead actors inject their collision-
+	// sphere caps as field tops — CAPPED above terrain so a mammoth makes a
+	// bump, not a hill — gated by the LOCAL REFILL state so the story reads
+	// fall -> imprint -> snow closes -> mound swells over the buried body.
+	// Stateless: loot or move the corpse and the mound is gone next frame.
+	// The cone transform downstream rounds every mound into a natural lump.
+	for (uint corpseI = 0; corpseI < CorpseSphereCount; corpseI++) {
+		float4 sphere = CorpseSpheres[corpseI];
+		float2 dc = worldXY - sphere.xy;
+		float sqDist = dot(dc, dc);
+		[branch] if (sqDist < sphere.w * sphere.w)
+		{
+			// Grounded corpses only: a body on a high ledge must not mound
+			// the blanket far below it.
+			[branch] if (sphere.z - sphere.w - terrain < 40.0)
+			{
+				float capZ = sphere.z + sqrt(sphere.w * sphere.w - sqDist);
+				float mound = min(capZ, terrain + CorpseMoundCap);
+
+				float deform = 0.0;
+				float2 deformUV = (worldXY - DeformWindowOriginH) * DeformInvWorldSizeH;
+				[branch] if (all(deformUV >= 0.0) && all(deformUV <= 1.0))
+				{
+					float2 deformDims;
+					DeformMap.GetDimensions(deformDims.x, deformDims.y);
+					deform = DeformMap.Load(int3(int2(deformUV * deformDims), 0));
+				}
+				// Refill first, then the mound: no mound while the death
+				// imprint is still carved open.
+				float refillGate = 1.0 - saturate(deform / 0.3);
+				field = max(field, lerp(terrain, mound, refillGate));
+			}
 		}
 	}
 

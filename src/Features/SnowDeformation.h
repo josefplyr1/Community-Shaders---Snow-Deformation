@@ -442,7 +442,15 @@ public:
 
 		/** @brief Units/frame the accumulated tops/bottoms drift toward empty — stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. Always on (0.5). */
 		float GhostDecay;
-		float3 padH;
+		/** @brief Deformation-map addressing for the corpse-mound refill gate (same mapping SampleDeformation uses). */
+		float2 DeformWindowOriginH;
+		float DeformInvWorldSizeH;
+
+		/** @brief Dead actors at rest, as collision spheres (xyz world center, w radius): CombineCS raises capped snow mounds over them, gated by local refill. */
+		uint32_t CorpseSphereCount;
+		float CorpseMoundCap;
+		float2 padH;
+		float4 CorpseSpheres[32];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
@@ -549,6 +557,8 @@ private:
 	/** @brief Last stamped world position per actor (formID), for capsule stamping. Rebuilt every frame from live actors so it cannot grow stale. */
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
+	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
+	std::vector<float4> corpseMoundSpheres;
 
 	std::unordered_map<uintptr_t, uint8_t> snowMasks;
 	std::shared_mutex snowMaskMutex;
