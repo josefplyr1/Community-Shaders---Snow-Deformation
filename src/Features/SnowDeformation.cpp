@@ -232,9 +232,14 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
-		if (auto _ttSteep = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds over objects (1.0 = 45 degrees). Steeper = lifted snow clings tighter: narrow banks against cliffs instead of broad aprons, and juttier, less smoothed-over rocks."));
+		if (ImGui::TreeNodeEx(T(TKEY("snow_mounds"), "Snow Mounds"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttMounds = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_mounds_tooltip"), "How the blanket mounds over objects and buried corpses."));
+			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
+			if (auto _ttSteep = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds over objects (1.0 = 45 degrees). Steeper = lifted snow clings tighter: narrow banks against cliffs instead of broad aprons, and juttier, less smoothed-over rocks."));
+			ImGui::TreePop();
+		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttRd = Util::HoverTooltipWrapper())
