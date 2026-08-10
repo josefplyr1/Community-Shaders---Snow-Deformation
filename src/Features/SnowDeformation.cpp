@@ -300,6 +300,11 @@ void SnowDeformation::DrawSettings()
 	}
 }
 
+// Settled-latch tuning: accumulated displacement that wakes a settled corpse
+// (real dragging/explosions), and how long a corpse must be still to settle.
+static constexpr float kCorpseWakeDistance = 50.0f;
+static constexpr uint16_t kCorpseSettleFrames = 90;
+
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
 	uint stampCount = 0;
@@ -337,6 +342,24 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// buried corpses.)
 		const bool isDead = actor->IsDead();
 
+		// Settled latch: resting anchors are FROZEN (so micro-jitter cannot
+		// hold the trench open), which lets slow ragdoll drift accumulate
+		// toward the 3-unit gate and fire a one-frame trench pulse under a
+		// buried corpse. Once still for kCorpseSettleFrames, a corpse only
+		// re-stamps after kCorpseWakeDistance of ACCUMULATED displacement —
+		// real dragging or explosions, not creep.
+		CorpseRest* rest = nullptr;
+		if (isDead) {
+			if (corpseRestStates.size() > 512 && !corpseRestStates.contains(formID))
+				corpseRestStates.clear();
+			rest = &corpseRestStates[formID];
+		} else {
+			// Seen alive (including reanimation): back to living rules.
+			corpseRestStates.erase(formID);
+		}
+		bool anyShapeMoved = false;
+		bool anyShapeWoken = false;
+
 		// Airborne LIVING actors do not touch the snow: jumping, levitating
 		// or falling carves nothing until contact. Dead ragdolls are exempt:
 		// their controllers freeze in stale states (often kInAir), which
@@ -372,15 +395,24 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
 				auto it = stampPrevPositions.find(key);
 				bool moved = true;
+				float sqDelta = 0.0f;
 				if (it != stampPrevPositions.end()) {
 					float2 delta = { current.x - it->second.x, current.y - it->second.y };
-					float sqDelta = delta.x * delta.x + delta.y * delta.y;
+					sqDelta = delta.x * delta.x + delta.y * delta.y;
 					if (sqDelta < 256.0f * 256.0f)
 						previous = it->second;
 					moved = sqDelta > 3.0f * 3.0f;
 				}
 				[[maybe_unused]] bool firstSight = (it == stampPrevPositions.end());
-				if (isDead && (firstSight || !moved)) {
+				// Measured against the frozen resting anchor, so dragging
+				// accumulates past the wake distance within a few frames
+				// while jitter oscillating around a point never does.
+				const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
+				if (isDead) {
+					anyShapeMoved |= !firstSight && moved;
+					anyShapeWoken |= woken;
+				}
+				if (isDead && (firstSight || !moved || (rest->settled && !woken))) {
 					// Corpse at rest: no stamp. Keep the OLD anchor so
 					// ragdoll micro-jitter cannot hold the trench open, but
 					// real movement (dragging, explosions) re-triggers
@@ -406,6 +438,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
+
+		if (rest) {
+			if (anyShapeWoken) {
+				rest->settled = false;
+				rest->stillFrames = 0;
+			} else if (anyShapeMoved) {
+				rest->stillFrames = 0;
+			} else if (!rest->settled && ++rest->stillFrames >= kCorpseSettleFrames) {
+				rest->settled = true;
+			}
+		}
 	};
 
 	if (auto player = RE::PlayerCharacter::GetSingleton())

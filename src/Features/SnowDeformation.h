@@ -562,11 +562,18 @@ private:
 	DirectX::XMINT2 pendingScrollDelta = { 0, 0 };
 	bool clearRequested = true;
 
-	/** @brief Last stamped world position per actor (formID), for capsule stamping. Rebuilt every frame from live actors so it cannot grow stale. */
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;
+
+	/** @brief Stillness latch per corpse (formID). Ragdoll micro-drift accumulates against the FROZEN resting anchors and would eventually cross the 3-unit movement gate, firing a one-frame trench pulse under an already-buried corpse. Once a corpse has been still long enough it settles: only a large accumulated displacement (real dragging, explosions) wakes it again. Erased when the actor is seen alive (reanimation). */
+	struct CorpseRest
+	{
+		uint16_t stillFrames = 0;
+		bool settled = false;
+	};
+	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
 
 	// ---- Runtime render-distance state (driven by the Range* settings) ----
 	/** @brief Deformation window world size (2x trench range). Changing it invalidates the map (content is scale-relative), so the trench slider clears on apply. */
