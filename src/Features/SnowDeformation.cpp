@@ -10,6 +10,7 @@
 #include "I18n/I18n.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "Utils/ActorUtils.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -224,7 +225,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttLin = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_texture_linear_tooltip"), "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored."));
 
-		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f units");
+		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
+		if (auto _ttStamp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
 		ImGui::SliderFloat(T(TKEY("refill_time"), "Snow Refill Time"), &settings.RefillTime, 0.0f, 3600.0f, "%.0f s");
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_time_tooltip"), "Time for compressed snow to fully recover. 0 disables refilling."));
@@ -309,51 +312,81 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
 	uint stampCount = 0;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
-	std::unordered_map<uint32_t, float2> currentPositions;
+	std::unordered_map<uint64_t, float2> currentPositions;
 
-	auto addStamp = [&](RE::ActorHandle a_handle) {
+	// Stamps come from the actors' actual Havok collision shapes — the same
+	// per-shape extraction Grass Collision uses (Util::GetShapeBound over
+	// TraverseScenegraphCollision) instead of one scaled circle at the actor
+	// center. Feet and lower-leg capsules carve individually (trails gain
+	// real footfall structure), ragdolls carve where their limbs lie, and
+	// horses or giants get wide tracks from their genuinely larger shapes
+	// with no per-race tuning.
+	auto addStamps = [&](RE::ActorHandle a_handle) {
 		if (stampCount >= kMaxStamps)
 			return;
 		auto actor = a_handle.get();
-		if (actor && actor->Is3DLoaded()) {
-			auto position = actor->GetPosition();
-			if (cameraPosition.GetSquaredDistance(position) > MAX_ACTOR_SQ_DISTANCE)
-				return;
+		if (!actor || !actor->Is3DLoaded())
+			return;
+		auto position = actor->GetPosition();
+		if (cameraPosition.GetSquaredDistance(position) > MAX_ACTOR_SQ_DISTANCE)
+			return;
+		auto root = actor->Get3D(false);
+		if (!root)
+			return;
 
-			// Scale the stamp with actor size so horses and giants carve wider
-			// trails than humans without per-race configuration.
-			float scale = actor->GetScale();
+		const float groundZ = position.z;
+		const uint32_t formID = actor->formID;
+		uint32_t shapeIndex = 0;
+		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			RE::NiPoint3 centerPos;
+			float radius;
+			if (Util::GetShapeBound(a_object, centerPos, radius)) {
+				// Stable per-skeleton traversal order keys the trail history.
+				const uint32_t thisIndex = shapeIndex++;
+				if (stampCount >= kMaxStamps)
+					return RE::BSVisit::BSVisitControl::kStop;
+				// Only shapes near the snow surface carve: feet, calves, a
+				// sneaking torso, ragdoll limbs — not heads walking past.
+				if (centerPos.z - radius > groundZ + 40.0f)
+					return RE::BSVisit::BSVisitControl::kContinue;
+				if (radius < 4.0f || radius > 128.0f)
+					return RE::BSVisit::BSVisitControl::kContinue;
 
-			// Capsule stamping: the segment runs from the actor's previous
-			// stamped position, so fast movers carve continuous trails
-			// instead of chains of spaced circles (the lumpy-trail cause).
-			// Large jumps (teleports, cell loads) collapse to a point.
-			float2 current = { position.x, position.y };
-			float2 previous = current;
-			if (auto it = stampPrevPositions.find(actor->formID); it != stampPrevPositions.end()) {
-				float2 delta = { current.x - it->second.x, current.y - it->second.y };
-				if (delta.x * delta.x + delta.y * delta.y < 256.0f * 256.0f)
-					previous = it->second;
+				// Capsule stamping: the segment runs from this shape's
+				// previous position, so fast movers carve continuous trails
+				// instead of chains of spaced circles. Large jumps
+				// (teleports, cell loads) collapse to a point.
+				float2 current = { centerPos.x, centerPos.y };
+				float2 previous = current;
+				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
+				if (auto it = stampPrevPositions.find(key); it != stampPrevPositions.end()) {
+					float2 delta = { current.x - it->second.x, current.y - it->second.y };
+					if (delta.x * delta.x + delta.y * delta.y < 256.0f * 256.0f)
+						previous = it->second;
+				}
+				currentPositions[key] = current;
+
+				float4 stamp{};
+				stamp.x = current.x;
+				stamp.y = current.y;
+				stamp.z = 1.0f;
+				// StampRadius acts as a scale on the shape's own radius
+				// (default 20 = 1.0x the Havok shape size).
+				stamp.w = radius * settings.StampRadius * 0.05f;
+				perFrameData.Stamps[stampCount] = stamp;
+				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+				stampCount++;
 			}
-			currentPositions[actor->formID] = current;
-
-			float4 stamp{};
-			stamp.x = current.x;
-			stamp.y = current.y;
-			stamp.z = 1.0f;
-			stamp.w = settings.StampRadius * scale;
-			perFrameData.Stamps[stampCount] = stamp;
-			perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
-			stampCount++;
-		}
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
 	};
 
 	if (auto player = RE::PlayerCharacter::GetSingleton())
-		addStamp(player->GetHandle());
+		addStamps(player->GetHandle());
 
 	if (const auto processLists = RE::ProcessLists::GetSingleton()) {
 		for (auto& actorHandle : processLists->highActorHandles)
-			addStamp(actorHandle);
+			addStamps(actorHandle);
 	}
 
 	stampPrevPositions = std::move(currentPositions);

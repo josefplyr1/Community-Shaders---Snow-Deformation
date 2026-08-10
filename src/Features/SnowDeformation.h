@@ -32,7 +32,7 @@ public:
 	static constexpr uint kTextureDim = 2048;
 	static constexpr float kWorldSize = 8192.0f;
 	static constexpr float kTexelSize = kWorldSize / kTextureDim;
-	static constexpr uint kMaxStamps = 64;
+	static constexpr uint kMaxStamps = 128;
 
 	// Per-texture-class depth: landscape mods retexture the same vanilla LTEX
 	// files, so classes match on diffuse filename substrings — FIRST match
@@ -546,7 +546,8 @@ private:
 	bool clearRequested = true;
 
 	/** @brief Last stamped world position per actor (formID), for capsule stamping. Rebuilt every frame from live actors so it cannot grow stale. */
-	std::unordered_map<uint32_t, float2> stampPrevPositions;
+	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
+	std::unordered_map<uint64_t, float2> stampPrevPositions;
 
 	std::unordered_map<uintptr_t, uint8_t> snowMasks;
 	std::shared_mutex snowMaskMutex;
