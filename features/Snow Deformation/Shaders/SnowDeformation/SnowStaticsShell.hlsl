@@ -357,6 +357,11 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
+	// Written so the parallax trench relief is REAL to the depth buffer:
+	// the carved floor's projected depth replaces the flat top's, so feet
+	// and props z-test against the trench instead of vanishing under it,
+	// and camera motion sees a geometrically consistent surface.
+	float Depth : SV_Depth;
 };
 
 // Smooth value noise (~24-unit cells) modulating the coverage edge, standing
@@ -414,17 +419,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// flake artifacts.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
 	float2 trenchGridLocal = input.GridLocal;
+	float3 viewDirWS = normalize(input.WorldPos);
+	// Ray parameter (world units along the view ray) to the parallax hit —
+	// 0 means no carve; drives the SV_Depth push at the end.
+	float trenchHitS = 0.0;
 	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
-		float3 viewDirWS = normalize(input.WorldPos);
 		[branch] if (pomDepth > 0.5)
 		{
 			// At depth t below the snow top the ray has drifted by
 			// view.xy/-view.z * t in world XY. In air while t < carve(xy);
 			// the hit is refined linearly between the straddling samples.
 			// The -view.z clamp keeps grazing rays from smearing.
-			float2 stepXY = viewDirWS.xy / max(-viewDirWS.z, 0.25);
+			float invRayZ = 1.0 / max(-viewDirWS.z, 0.25);
+			float2 stepXY = viewDirWS.xy * invRayZ;
 			float tPrev = 0.0;
 			float carvePrev = pomDepth * pixelDeform;
 			[loop] for (uint pomI = 1; pomI <= 8; pomI++) {
@@ -434,7 +443,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 				[branch] if (t >= carve)
 				{
 					float w = saturate((carvePrev - tPrev) / max((carvePrev - tPrev) + (t - carve), 1e-4));
-					trenchGridLocal = input.GridLocal + stepXY * lerp(tPrev, t, w);
+					float tHit = lerp(tPrev, t, w);
+					trenchGridLocal = input.GridLocal + stepXY * tHit;
+					trenchHitS = tHit * invRayZ;
 					break;
 				}
 				tPrev = t;
@@ -661,6 +672,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float stochasticBlend = (screenNoise * screenNoise) < coverageAlpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
+	// Depth: unchanged pixels echo the rasterized depth; carved pixels
+	// project the parallax hit point through the SAME (jittered) matrix
+	// the VS used, so the trench floor is real to the z-buffer.
+	psout.Depth = input.Position.z;
+	[branch] if (trenchHitS > 0.0)
+	{
+		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
+		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
+	}
 	psout.Diffuse = float4(preLit, coverageAlpha);
 	psout.MotionVectors = float4(motionVector, 0.0, coverageAlpha);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
