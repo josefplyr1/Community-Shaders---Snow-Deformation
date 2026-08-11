@@ -156,6 +156,56 @@ float SampleDeformation(float2 gridLocal)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+#ifdef PATCH
+// B-spline bicubic deformation sample — the landscape shell's smoothing,
+// ported so patch trench walls CURVE the way landscape trench walls do
+// instead of showing bilinear facets.
+float PatchDeformBilinear(float2 t, float2 dims)
+{
+	t = clamp(t, 0.0, dims - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float SampleDeformationSmooth(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = uv * dims - 0.5;
+	float2 i = floor(t);
+	float2 f = t - i;
+
+	float2 f2 = f * f;
+	float2 f3 = f2 * f;
+	float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+	float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+	float2 w3 = f3 / 6.0;
+
+	float2 g0 = w0 + w1;
+	float2 g1 = w2 + w3;
+	float2 h0 = i - 1.0 + w1 / g0;
+	float2 h1 = i + 1.0 + w3 / g1;
+
+	float v00 = PatchDeformBilinear(float2(h0.x, h0.y), dims);
+	float v10 = PatchDeformBilinear(float2(h1.x, h0.y), dims);
+	float v01 = PatchDeformBilinear(float2(h0.x, h1.y), dims);
+	float v11 = PatchDeformBilinear(float2(h1.x, h1.y), dims);
+
+	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
+}
+#endif
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -236,7 +286,8 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float top = PatchTop(worldXY);
 	float skinDepth = PatchSkinDepth(worldXY);
 	float2 gridLocal = worldXY - GridOrigin;
-	float deform = saturate(SampleDeformation(gridLocal));
+	// Bicubic, like the landscape shell — rounded trench walls.
+	float deform = saturate(SampleDeformationSmooth(gridLocal));
 
 	VS_OUTPUT vsout;
 	vsout.CurrentClip = float4(0.0, 0.0, 0.0, 1.0);
@@ -246,7 +297,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	vsout.GridLocal = gridLocal;
 	vsout.Coverage = 1.0;
 	vsout.Flat = 0.0;
-	[branch] if (top < -50000.0 || skinDepth < 1.0 || deform < 0.02)
+	// NO trample-level cull: culling per VERTEX killed whole triangles
+	// wherever a trench edge crossed the grid — the triangular see-through
+	// holes. The patch now exists over every valid top; untrampled cells
+	// simply hide behind the skin (drawn first, slightly higher, so
+	// early-z rejects the covered pixels for free).
+	[branch] if (top < -50000.0 || skinDepth < 1.0)
 	{
 		float nan = asfloat(0x7fc00000);
 		vsout.Position = float4(nan, nan, nan, nan);
@@ -254,10 +310,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	}
 
 	// The landscape shell's carve, verbatim: floored so the mesh beneath
-	// never shows, at any trample level.
+	// never shows, at any trample level. Sunk slightly below the skin's
+	// nominal surface so the untrampled rim tucks UNDER the skin instead
+	// of z-fighting it.
 	float floorDepth = min(skinDepth, 5.0 * smoothstep(0.5, 8.0, skinDepth));
 	float depth = max(skinDepth * (1.0 - deform), floorDepth);
-	float3 worldAbs = float3(worldXY, top + depth);
+	float3 worldAbs = float3(worldXY, top + depth - 0.75);
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
@@ -265,11 +323,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	// Carved-surface shading normal from the deformation gradient — the
-	// 8-unit geometry carries the shape, this smooths the facets.
+	// Carved-surface shading normal from the SMOOTH deformation gradient —
+	// the 8-unit geometry carries the shape, this rounds the shading with
+	// the same curve the depth uses.
 	float2 grad = float2(
-		SampleDeformation(gridLocal + float2(4.0, 0.0)) - SampleDeformation(gridLocal - float2(4.0, 0.0)),
-		SampleDeformation(gridLocal + float2(0.0, 4.0)) - SampleDeformation(gridLocal - float2(0.0, 4.0))) / 8.0;
+		SampleDeformationSmooth(gridLocal + float2(4.0, 0.0)) - SampleDeformationSmooth(gridLocal - float2(4.0, 0.0)),
+		SampleDeformationSmooth(gridLocal + float2(0.0, 4.0)) - SampleDeformationSmooth(gridLocal - float2(0.0, 4.0))) / 8.0;
 	vsout.NormalWS = normalize(float3(grad * skinDepth * 0.6, 1.0));
 	return vsout;
 }
@@ -454,11 +513,15 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
+#ifndef PATCH
 	// Written so the parallax trench relief is REAL to the depth buffer:
 	// the carved floor's projected depth replaces the flat top's, so feet
 	// and props z-test against the trench instead of vanishing under it,
-	// and camera motion sees a geometrically consistent surface.
+	// and camera motion sees a geometrically consistent surface. The PATCH
+	// is real geometry and skips it — keeping early-z, which is what makes
+	// its full-span coverage cheap (hidden pixels reject before shading).
 	float Depth : SV_Depth;
+#endif
 };
 
 // Smooth value noise (~24-unit cells) modulating the coverage edge, standing
@@ -828,6 +891,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float stochasticBlend = (screenNoise * screenNoise) < coverageAlpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
+#ifndef PATCH
 	// Depth: unchanged pixels echo the rasterized depth; carved pixels
 	// project the parallax hit point through the SAME (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
@@ -837,6 +901,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
 		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
 	}
+#endif
 	psout.Diffuse = float4(preLit, coverageAlpha);
 	psout.MotionVectors = float4(motionVector, 0.0, coverageAlpha);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
