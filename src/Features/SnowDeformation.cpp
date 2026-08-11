@@ -2263,10 +2263,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
 
-	// Road-mesh model class: deterministic texture-path match (the lesson
-	// from the failed geometry-stats classifiers), cached per material.
+	// Road-mesh model class: deterministic NAME + texture-path match (the
+	// lesson from the failed geometry-stats classifiers). The name check
+	// matters: road models are built from MULTIPLE trishapes ('RoadChunk...:0',
+	// ':2'), and only some wear road textures — matching textures alone split
+	// one road across two depth settings, stacking two shells (the hovering
+	// second sheet Josef isolated).
 	bool road = false;
-	if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
+	{
+		std::string loweredName(a_pass->geometry->name.c_str());
+		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		road = loweredName.find("road") != std::string::npos || loweredName.find("bridge") != std::string::npos;
+	}
+	if (!road)
+		if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
 		static std::unordered_map<const void*, bool> roadMaterialCache;
 		if (roadMaterialCache.size() > 4096)
 			roadMaterialCache.clear();
