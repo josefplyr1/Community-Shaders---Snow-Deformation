@@ -99,7 +99,7 @@ cbuffer ShellCB : register(b0)
 	float LodShadowEnd;
 	float LodShadowActive;
 	float ScreenSpaceShadowsActive;  // t45 bound: long-range depth-marched shadows
-	float StrictCoverage;            // object skins: strict pre-drape coverage gate
+	float padLod;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);

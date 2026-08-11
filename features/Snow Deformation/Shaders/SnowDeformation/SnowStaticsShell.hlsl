@@ -92,7 +92,7 @@ cbuffer ShellCB : register(b0)
 	float LodShadowEnd;
 	float LodShadowActive;
 	float ScreenSpaceShadowsActive;  // t45 bound: long-range depth-marched shadows
-	float StrictCoverage;            // object skins: strict pre-drape coverage gate
+	float padLod;
 }
 
 cbuffer StaticCB : register(b1)
@@ -618,12 +618,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// visible down to the mesh (a tight gate faded the skirt out and
 	// re-opened the very gaps the drape closes); truly vertical faces
 	// still shed. Flat paint keeps the tops-only gate.
-	// STRICT mode (Josef's A/B toggle) = the pre-drape gate: nothing
-	// steeper than ~66 degrees wears snow — the era with clean walls and
-	// rock flanks. WIDE mode = the r114 drape gate that keeps pinned lips
-	// visible further down but smears translucent snow onto steep faces.
-	float2 roundedGate = StrictCoverage > 0.5 ? float2(0.4, 0.7) : float2(0.15, 0.6);
-	float pixelCoverage = input.Flat > 0.5 ? smoothstep(0.4, 0.7, input.Coverage) : smoothstep(roundedGate.x, roundedGate.y, input.Coverage);
+	// STRICT gate, permanent (A/B-tested by Josef, r129): nothing steeper
+	// than ~66 degrees wears snow. The r114 wide drape gate (0.15-0.6) is
+	// retired for good — it smeared translucent snow onto steep faces
+	// (wall fog, boulder-flank sheets, bark streaks, wet-sheen look). The
+	// drape's GEOMETRY still pins shell edges to the mesh; only the lip's
+	// visibility fades at the strict threshold, which tested clean.
+	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
 #	ifndef PATCH
 	// Geometric steepness gate — ONE fix for three symptoms (wall fog,
 	// boulder-flank sheets, trunk-bark streaks): on huge low-poly

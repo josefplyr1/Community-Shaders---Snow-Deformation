@@ -84,8 +84,6 @@ public:
 		float SnowMeshesDepth = 3.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default 10, deliberately BELOW the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield (Josef-tuned). */
 		float RoadMeshesDepth = 10.0f;
-		/** @brief ON (default) = the pre-drape STRICT coverage gate (0.4-0.7): no snow on faces steeper than ~66 degrees — kills the translucent smears/wet-sheen on walls, boulder flanks and bark that the r114 wide gate (0.15-0.6) introduced, at the cost of drape lips fading out sooner. OFF = the wide draped gate. A/B toggle per Josef. */
-		bool StrictObjectCoverage = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
@@ -285,8 +283,7 @@ public:
 		float LodShadowActive;
 		/** @brief Screen-Space Shadows texture (t45) is bound and valid: the depth-marched long-range shadows that carry distant LOD tree shadows beyond the two cascades. Bare ground multiplies them into its lighting, so the shell must too. */
 		float ScreenSpaceShadowsActive;
-		/** @brief >0.5: strict pre-drape coverage gate on object skins (see Settings::StrictObjectCoverage). */
-		float StrictCoverage;
+		float padLod;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

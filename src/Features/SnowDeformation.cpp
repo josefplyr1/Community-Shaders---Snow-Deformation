@@ -33,7 +33,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ObjectsSnowDepth,
 	SnowMeshesDepth,
 	RoadMeshesDepth,
-	StrictObjectCoverage,
 	SnowTexturePath,
 	SnowTextureLinear,
 	SnowMoundSteepness,
@@ -218,9 +217,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
-			ImGui::Checkbox(T(TKEY("strict_coverage"), "Strict Steep-Face Coverage"), &settings.StrictObjectCoverage);
-			if (auto _ttStrict = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("strict_coverage_tooltip"), "ON: snow never sits on object faces steeper than ~66 degrees (classic behavior — clean walls, rock flanks and bark). OFF: wide draped coverage that follows the snow lip further down steep faces, but can smear translucent snow onto them."));
 			ImGui::TreePop();
 		}
 
@@ -1539,7 +1535,6 @@ void SnowDeformation::DrawShell()
 	// smoothstep never degenerates when the sliders cross).
 	cbData.SkinFadeStart = settings.RangeSkinsFadeM * kUnitsPerMeter;
 	cbData.SkinFadeEnd = std::max(settings.RangeSkinsM * kUnitsPerMeter, cbData.SkinFadeStart + kUnitsPerMeter);
-	cbData.StrictCoverage = settings.StrictObjectCoverage ? 1.0f : 0.0f;
 	// Height field: the object-blanket lift is gone — the field now carries
 	// only terrain + corpse mounds, with shelter/exclusions in the mask, so
 	// the shell branch stays permanently enabled.
