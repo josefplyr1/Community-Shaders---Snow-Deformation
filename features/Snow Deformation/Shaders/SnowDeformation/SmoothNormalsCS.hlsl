@@ -10,12 +10,18 @@
 // outward and mushroom like pole caps, and already-smooth meshes (rocks)
 // are unchanged since their normals already agree.
 //
-// Two passes over a copy of the mesh's vertex buffer:
+// Three passes over a copy of the mesh's vertex buffer:
 //   AccumulateCS — quantized-position hash table accumulates fixed-point
 //                  normal sums (linear probing, fingerprint-guarded).
 //   ResolveCS    — per vertex, look up its position's sum and write the
 //                  normalized average. w=1 marks validity; unresolvable
 //                  vertices write 0 and the VS falls back to the raw normal.
+//   FlatStatsCS  — one-group reduction writing the mesh's FLATNESS stats to
+//                  OutNormals[VertexCount]: x = fraction of vertices whose
+//                  smoothed normal diverges from the raw one. Split-normal
+//                  plates (walkways, roofs, planks) score high; organically
+//                  smooth meshes (rocks, drifts) score ~0. The skin VS reads
+//                  it to pick flat vs rounded snow — no CPU readback.
 //
 // Runs ONCE per unique geometry (cached CPU-side by vertex buffer).
 
@@ -105,6 +111,39 @@ uint FindSlot(uint h1, uint h2, bool claim)
 	HashTable.InterlockedAdd(base + 0, asuint(fixedNrm.x), ignored);
 	HashTable.InterlockedAdd(base + 4, asuint(fixedNrm.y), ignored);
 	HashTable.InterlockedAdd(base + 8, asuint(fixedNrm.z), ignored);
+}
+#endif
+
+#ifdef FLATSTATS
+groupshared uint gsDivergent[64];
+groupshared uint gsTotal[64];
+[numthreads(64, 1, 1)] void main(uint3 gtid
+								 : SV_GroupThreadID) {
+	uint divergent = 0;
+	uint total = 0;
+	for (uint v = gtid.x; v < VertexCount; v += 64) {
+		float4 smoothN = OutNormals[v];
+		[branch] if (smoothN.w > 0.5)
+		{
+			total++;
+			// ~18-degree divergence marks a split-normal (edge/corner) vertex.
+			if (dot(smoothN.xyz, normalize(LoadNormal(v))) < 0.95)
+				divergent++;
+		}
+	}
+	gsDivergent[gtid.x] = divergent;
+	gsTotal[gtid.x] = total;
+	GroupMemoryBarrierWithGroupSync();
+	if (gtid.x == 0) {
+		uint sumDivergent = 0;
+		uint sumTotal = 0;
+		for (uint i = 0; i < 64; i++) {
+			sumDivergent += gsDivergent[i];
+			sumTotal += gsTotal[i];
+		}
+		float flatFraction = sumTotal > 0 ? float(sumDivergent) / float(sumTotal) : 0.0;
+		OutNormals[VertexCount] = float4(flatFraction, float(sumTotal), 0.0, 1.0);
+	}
 }
 #endif
 

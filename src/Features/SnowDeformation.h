@@ -78,9 +78,9 @@ public:
 		float RoadSnowDepth = -5.0f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
-		/** @brief S6 statics skin, FLAT-PROJECTED class: layer height on objects whose snow is a projected diffuse overlay (cliffs, rocks, roofs). The projection is visually flat — inflating over it never became truly 3D, so this stays at 1. 0 disables the class. */
+		/** @brief S6 statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal, no pillow). */
 		float ObjectsSnowDepth = 1.0f;
-		/** @brief S6 statics skin, SNOW-MESH class: layer height on real snow geometry (drifts, landscape-snow-textured meshes), where inflation reads correctly. */
+		/** @brief S6 statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
 		float SnowMeshesDepth = 5.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
@@ -343,8 +343,6 @@ public:
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
-		/** @brief True when captured via the projected-UV+snow flag pair (flat projected diffuse class); false for the drift/snow-mesh texture match. Selects which depth slider drives the draw. */
-		bool projected;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -381,6 +379,8 @@ public:
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
 	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
 	ID3D11ComputeShader* smoothResolveCS = nullptr;
+	/** @brief Third pass: one-group reduction writing the mesh's flat/rounded classification (fraction of smoothed-vs-raw divergent vertices) into the stats element appended at SmoothedNormals[vertexCount]. */
+	ID3D11ComputeShader* smoothFlatStatsCS = nullptr;
 	ConstantBuffer* smoothCB = nullptr;
 
 	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the two SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (VS falls back to raw normals). */
@@ -412,7 +412,11 @@ public:
 		float HeightHalfExtent;
 		/** @brief >0.5: a smoothed-normal buffer is bound at VS t10 for this object (pillow inflation for flat meshes). */
 		float HasSmoothedNormals;
-		float3 padStat;
+		/** @brief ROUNDED-class depth (ObjectsDepth carries the FLAT-class depth); the VS picks per mesh from the GPU flatness stats. */
+		float RoundedDepth;
+		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
+		float VertexCountF;
+		float padStat;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

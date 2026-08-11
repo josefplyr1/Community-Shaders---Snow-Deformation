@@ -20,7 +20,9 @@ cbuffer StaticCB : register(b1)
 	float HeightHalfExtent;
 
 	float HasSmoothedNormals;  // layout sync with SnowStaticsShell; unused here
-	float3 padStat;
+	float RoundedDepth;
+	float VertexCountF;
+	float padStat;
 }
 
 struct VS_INPUT

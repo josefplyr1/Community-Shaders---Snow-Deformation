@@ -349,6 +349,28 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	float rampDepth = terrain.y;
 	coverage = saturate(terrain.z);
 
+	// Distant de-noising: out here one terrain-window texel spans 100+
+	// world units, and the bilinear height/coverage under-resolve — on
+	// slopes the interpolated height dips BELOW the real landscape mesh
+	// and single bare texels punch pinholes into continuous snowfields,
+	// holes that crawl as the window re-rasterizes with camera motion. A
+	// snow-biased neighborhood MAX over one texel radius lifts the shell
+	// clear of the mesh and fills the pinholes; the blend-in leaves the
+	// near field untouched.
+	float camDist = length(gridLocal - WarpedHalfSpan);
+	[branch] if (camDist > 6000.0)
+	{
+		float farBlend = smoothstep(6000.0, 12000.0, camDist);
+		float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
+		float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
+		float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
+		float3 n3 = SampleTerrain(gridLocal - float2(0.0, TerrainTexelSize));
+		float maxHeight = max(max(n0.x, n1.x), max(n2.x, n3.x));
+		float maxCoverage = saturate(max(max(n0.z, n1.z), max(n2.z, n3.z)));
+		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight), farBlend);
+		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
+	}
+
 	// S7 height field: t4 holds the SLOPE-LIMITED field — terrain lifted
 	// only by corpse burial mounds (the object-top blanket lift was removed),
 	// run through the angle-of-repose cone transform; t5 holds the shelter

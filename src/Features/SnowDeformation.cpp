@@ -205,12 +205,12 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttClasses = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
-			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Objects (Flat Projected Snow)"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Objects (Flat Snow)"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Skin height on objects whose snow is a flat projected diffuse overlay (cliffs, rocks, roofs). The projection stays visually flat, so keep this low. 0 disables."));
-			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Objects (Snow Meshes)"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
+				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
+			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Objects (Rounded Snow)"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Skin height on real snow geometry (drifts, landscape-snow-textured meshes), where the puffed layer reads correctly in 3D. 0 disables."));
+				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
 			bool classDepthsChanged = false;
 			for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 				classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
@@ -1233,6 +1233,9 @@ void SnowDeformation::ClearShaderCache()
 	if (smoothResolveCS)
 		smoothResolveCS->Release();
 	smoothResolveCS = nullptr;
+	if (smoothFlatStatsCS)
+		smoothFlatStatsCS->Release();
+	smoothFlatStatsCS = nullptr;
 	if (shellPS)
 		shellPS->Release();
 	shellPS = nullptr;
@@ -2087,11 +2090,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// shell and must not contribute to the blanket height map either.
 	if (flags.all(Flag::kTreeAnim))
 		return;
-	// Two capture classes with separate depth sliders: flag-pair hits are the
-	// FLAT-PROJECTED class (the projection is a flat diffuse overlay), drift/
-	// landscape-snow texture matches are the SNOW-MESH class (real geometry).
-	const bool projected = flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow);
-	if (!projected) {
+	// (Flat-vs-rounded depth classes are decided per MESH on the GPU from
+	// smoothed-vs-raw normal divergence — a flag-based split failed because
+	// nearly every qualifying draw carries the projected pair.)
+	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
 			return;
@@ -2118,10 +2120,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			return;
 	}
 
-	// Class-specific disable: a zeroed slider turns off just that class.
-	if ((projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth) <= 0.01f)
-		return;
-
 	// Range cap: distant mountains are snow-projected everywhere in Skyrim;
 	// the shell only matters where deformation can happen.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -2135,7 +2133,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, projected });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
 }
 
 // Compiles one stage of the statics shell, RETURNING the bytecode blob —
@@ -2422,7 +2420,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth;
+		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
 		staticsCB->Update(scb);
@@ -2511,7 +2511,9 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
 	if (!smoothResolveCS)
 		smoothResolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
-	if (!smoothAccumulateCS || !smoothResolveCS || !smoothCB)
+	if (!smoothFlatStatsCS)
+		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+	if (!smoothAccumulateCS || !smoothResolveCS || !smoothFlatStatsCS || !smoothCB)
 		return nullptr;
 
 	auto desc = rendererData->vertexDesc;
@@ -2593,8 +2595,13 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	if (FAILED(device->CreateUnorderedAccessView(tableBuffer.get(), &rawUavDesc, tableUAV.put())))
 		return nullptr;
 
+	// One extra element past the vertices: the mesh's flatness stats
+	// (fraction of vertices whose smoothed normal diverges from the raw
+	// one — high on split-normal plates like walkways and roofs), read by
+	// the VS to pick the flat or rounded snow behavior without any CPU
+	// readback.
 	D3D11_BUFFER_DESC outDesc{};
-	outDesc.ByteWidth = vertexCount * 16;
+	outDesc.ByteWidth = (vertexCount + 1) * 16;
 	outDesc.Usage = D3D11_USAGE_DEFAULT;
 	outDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	outDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
@@ -2606,14 +2613,14 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	D3D11_SHADER_RESOURCE_VIEW_DESC outSrvDesc{};
 	outSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
 	outSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	outSrvDesc.Buffer.NumElements = vertexCount;
+	outSrvDesc.Buffer.NumElements = vertexCount + 1;
 	winrt::com_ptr<ID3D11ShaderResourceView> outSRV;
 	if (FAILED(device->CreateShaderResourceView(outBuffer.get(), &outSrvDesc, outSRV.put())))
 		return nullptr;
 	D3D11_UNORDERED_ACCESS_VIEW_DESC outUavDesc{};
 	outUavDesc.Format = DXGI_FORMAT_UNKNOWN;
 	outUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	outUavDesc.Buffer.NumElements = vertexCount;
+	outUavDesc.Buffer.NumElements = vertexCount + 1;
 	winrt::com_ptr<ID3D11UnorderedAccessView> outUAV;
 	if (FAILED(device->CreateUnorderedAccessView(outBuffer.get(), &outUavDesc, outUAV.put())))
 		return nullptr;
@@ -2641,6 +2648,9 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	context->Dispatch(groups, 1, 1);
 	context->CSSetShader(smoothResolveCS, nullptr, 0);
 	context->Dispatch(groups, 1, 1);
+	// Flatness stats: one group strided over the resolved normals.
+	context->CSSetShader(smoothFlatStatsCS, nullptr, 0);
+	context->Dispatch(1, 1, 1);
 
 	ID3D11ShaderResourceView* nullCsSRV = nullptr;
 	context->CSSetShaderResources(0, 1, &nullCsSRV);
@@ -2792,7 +2802,9 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth;
+		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation
