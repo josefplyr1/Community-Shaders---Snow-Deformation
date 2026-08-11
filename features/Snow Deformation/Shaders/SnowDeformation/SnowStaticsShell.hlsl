@@ -182,6 +182,98 @@ struct VS_OUTPUT
 };
 
 #ifdef VSHADER
+#	ifdef PATCH
+// TRENCH PATCH: the landscape shell's recipe applied to objects — a dense
+// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
+// the top-down object height raster and carved per VERTEX by the
+// deformation map. REAL geometry: real silhouettes, floors that hold at
+// every camera angle, no parallax. Grid cells with no object top, no
+// trampling, or a painted-flat (0-depth) class collapse to NaN and cull;
+// the skin dithers itself away over trails to hand off (see the PS).
+Texture2D<float> ObjectTopRaw : register(t11);
+Texture2D<float> ObjectSkinDepth : register(t12);
+
+// Max-of-4 texel sample: bilinear would poison against sentinel texels at
+// object edges; MAX both ignores them and keeps the patch on the highest
+// (safest) surface.
+float2 PatchTexel(float2 worldXY, float2 dims)
+{
+	float2 local = (worldXY - HeightWindowCenter) / HeightHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+float PatchTop(float2 worldXY)
+{
+	float2 dims;
+	ObjectTopRaw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	return max(max(ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0))),
+		max(ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0))));
+}
+
+float PatchSkinDepth(float2 worldXY)
+{
+	float2 dims;
+	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	return max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
+		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
+}
+
+VS_OUTPUT main(uint vertexID : SV_VertexID)
+{
+	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = vertexID / 6;
+	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kCorners[vertexID % 6];
+	// WorldRow0.xy carries the snapped patch origin (see the CPU fill).
+	float2 worldXY = WorldRow0.xy + gridXY * 8.0;
+
+	float top = PatchTop(worldXY);
+	float skinDepth = PatchSkinDepth(worldXY);
+	float2 gridLocal = worldXY - GridOrigin;
+	float deform = saturate(SampleDeformation(gridLocal));
+
+	VS_OUTPUT vsout;
+	vsout.CurrentClip = float4(0.0, 0.0, 0.0, 1.0);
+	vsout.PreviousClip = float4(0.0, 0.0, 0.0, 1.0);
+	vsout.WorldPos = float3(0.0, 0.0, 0.0);
+	vsout.NormalWS = float3(0.0, 0.0, 1.0);
+	vsout.GridLocal = gridLocal;
+	vsout.Coverage = 1.0;
+	vsout.Flat = 0.0;
+	[branch] if (top < -50000.0 || skinDepth < 1.0 || deform < 0.02)
+	{
+		float nan = asfloat(0x7fc00000);
+		vsout.Position = float4(nan, nan, nan, nan);
+		return vsout;
+	}
+
+	// The landscape shell's carve, verbatim: floored so the mesh beneath
+	// never shows, at any trample level.
+	float floorDepth = min(skinDepth, 5.0 * smoothstep(0.5, 8.0, skinDepth));
+	float depth = max(skinDepth * (1.0 - deform), floorDepth);
+	float3 worldAbs = float3(worldXY, top + depth);
+
+	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
+	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
+	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	vsout.WorldPos = rel;
+	// Carved-surface shading normal from the deformation gradient — the
+	// 8-unit geometry carries the shape, this smooths the facets.
+	float2 grad = float2(
+		SampleDeformation(gridLocal + float2(4.0, 0.0)) - SampleDeformation(gridLocal - float2(4.0, 0.0)),
+		SampleDeformation(gridLocal + float2(0.0, 4.0)) - SampleDeformation(gridLocal - float2(0.0, 4.0))) / 8.0;
+	vsout.NormalWS = normalize(float3(grad * skinDepth * 0.6, 1.0));
+	return vsout;
+}
+#	else
 VS_OUTPUT main(VS_INPUT input)
 {
 	float3 posMS = input.Position.xyz;
@@ -278,6 +370,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Flat = isFlat;
 	return vsout;
 }
+#	endif
 #endif
 
 #ifdef PSHADER
@@ -415,6 +508,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Ray parameter (world units along the view ray) to the parallax hit —
 	// 0 means no carve; drives the SV_Depth push at the end.
 	float trenchHitS = 0.0;
+#	ifndef PATCH
+	// Hand-off to the trench patch: trampled ROUNDED pixels near the camera
+	// dissolve out so the patch's REAL carved geometry beneath shows
+	// through. Far trails (outside the patch span) and painted-flat trails
+	// keep the parallax relief instead.
+	[branch] if (input.Flat < 0.5 && pixelDeform > 0.02 && length(input.WorldPos.xy) < 950.0)
+	{
+		if (Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.03, 0.15, pixelDeform))
+			discard;
+	}
+#	endif
+	// PATCH pixels have REAL carved geometry and a VS gradient normal —
+	// neither the parallax march nor the pixel tilt applies.
+#	ifndef PATCH
 	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
@@ -474,6 +581,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float pixelDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0) * pixelCoverage;
 		normalWS = normalize(normalWS + float3(deformGradient * pixelDepth * 0.6, 0.0));
 	}
+#	endif
 
 	// Per-pixel coverage: noisy up-facing gate (vanilla-projection-like
 	// extent). NO deformation carve in alpha: cutting holes revealed the
@@ -532,13 +640,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// texture mismatch), whatever the seam blends above decided.
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
 
+#	ifndef PATCH
 	// Skirt cull: inflation stretches triangles between displaced up-facing
 	// vertices and their welded wall/side neighbors, and at rounded depths
 	// those stretches read as faint VERTICAL snow streaks down house walls,
 	// cliff faces and log sides. The GEOMETRIC facing (derivative normal)
-	// exposes them — a real snow surface is never near-vertical.
+	// exposes them — a real snow surface is never near-vertical. The PATCH
+	// is exempt: its trench WALLS are legitimately steep real geometry.
 	float3 geoNormal = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
 	coverageAlpha *= smoothstep(0.08, 0.22, abs(geoNormal.z));
+#	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the

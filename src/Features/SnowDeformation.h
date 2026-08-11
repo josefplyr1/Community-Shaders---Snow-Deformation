@@ -451,6 +451,13 @@ public:
 	/** @brief Object tops more than this far above the terrain do not lift the blanket (buildings must not become snow tents). */
 	static constexpr float kObjectLiftCap = 150.0f;
 
+	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth (flat 0-ish, rounded ~25) so the trench patch knows how thick the snow above any object top is. No scroll persistence — a missed frame degenerates patch verts for one frame, invisible. */
+	Texture2D* heightSkinDepth = nullptr;
+
+	/** @brief Trench patch: the landscape shell's dense-grid carve applied to OBJECT tops — real geometry where parallax could not notch silhouettes or hold floors angle-stably. */
+	ID3D11VertexShader* patchVS = nullptr;
+	ID3D11PixelShader* patchPS = nullptr;
+
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top), the final slope-limited field + shelter mask the shell samples, and a cone-iteration scratch. Top empty = -100000, bottom empty = +100000. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };

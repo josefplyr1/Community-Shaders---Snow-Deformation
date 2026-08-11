@@ -154,11 +154,12 @@ void SnowDeformation::SetupResources()
 		// win per texel in any draw order — no depth buffer needed.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
-		for (int i = 0; i < 2; i++) {
+		// RT2 (skin depth) blends MAX like the tops.
+		for (int i = 0; i < 3; i++) {
 			minmaxBlendDesc.RenderTarget[i].BlendEnable = TRUE;
 			minmaxBlendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
-			minmaxBlendDesc.RenderTarget[i].BlendOp = i == 0 ? D3D11_BLEND_OP_MAX : D3D11_BLEND_OP_MIN;
+			minmaxBlendDesc.RenderTarget[i].BlendOp = i == 1 ? D3D11_BLEND_OP_MIN : D3D11_BLEND_OP_MAX;
 			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
@@ -685,6 +686,8 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomFiltered = nullptr;
 	delete heightScratch;
 	heightScratch = nullptr;
+	delete heightSkinDepth;
+	heightSkinDepth = nullptr;
 
 	D3D11_TEXTURE2D_DESC heightDesc = {
 		.Width = heightMapDim,
@@ -726,6 +729,19 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTopFiltered = makeHeightTexture();
 	heightBottomFiltered = makeHeightTexture();
 	heightScratch = makeHeightTexture();
+
+	// Skin-depth raster for the trench patch: R16F, SRV+RTV only (cleared
+	// and re-rasterized fresh every frame).
+	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
+	skinDepthDesc.Format = DXGI_FORMAT_R16_FLOAT;
+	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+	D3D11_SHADER_RESOURCE_VIEW_DESC skinDepthSrvDesc = heightSrvDesc;
+	skinDepthSrvDesc.Format = skinDepthDesc.Format;
+	D3D11_RENDER_TARGET_VIEW_DESC skinDepthRtvDesc = heightRtvDesc;
+	skinDepthRtvDesc.Format = skinDepthDesc.Format;
+	heightSkinDepth = new Texture2D(skinDepthDesc);
+	heightSkinDepth->CreateSRV(skinDepthSrvDesc);
+	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 
 	heightMapValid = false;
 }
@@ -1259,6 +1275,12 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsPS)
 		staticsPS->Release();
 	staticsPS = nullptr;
+	if (patchVS)
+		patchVS->Release();
+	patchVS = nullptr;
+	if (patchPS)
+		patchPS->Release();
+	patchPS = nullptr;
 	if (heightVS)
 		heightVS->Release();
 	heightVS = nullptr;
@@ -2238,7 +2260,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine)
+static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr)
 {
 	struct ShaderInclude : public ID3DInclude
 	{
@@ -2270,6 +2292,7 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 
 	D3D_SHADER_MACRO macros[] = {
 		{ a_stageDefine, "" },
+		{ a_extraDefine ? a_extraDefine : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -2315,6 +2338,25 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
 				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
+		}
+	}
+
+	// Trench patch (PATCH define): SV_VertexID grid, no input layout. The
+	// draw guards on the pointers, so a compile failure just skips the pass.
+	if (!patchVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchVS)))
+				Util::SetResourceName(patchVS, "SnowDeformation::TrenchPatchVS");
+		}
+	}
+	if (!patchPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
+				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
 		}
 	}
 
@@ -2465,8 +2507,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShaderResources(0, 2, nullCsSRVs);
 	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
 
-	ID3D11RenderTargetView* heightRTVs[2] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get() };
-	context->OMSetRenderTargets(2, heightRTVs, nullptr);
+	const float skinDepthClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
+	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
+	context->OMSetRenderTargets(3, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(heightMapDim), float(heightMapDim), 0.0f, 1.0f };
@@ -2523,14 +2567,19 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
+		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
+		// reads the same classification the skin uses.
+		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
+		context->VSSetShaderResources(10, 1, &rasterSmoothSRV);
+		scb.HasSmoothedNormals = rasterSmoothSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);
 	}
 	globals::profiler->EndPass();
 
-	ID3D11RenderTargetView* nullRTVs[2] = { nullptr, nullptr };
-	context->OMSetRenderTargets(2, nullRTVs, nullptr);
+	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
+	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 
 	const UINT dispatchDim = (heightMapDim + 7) / 8;
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
@@ -2940,6 +2989,36 @@ void SnowDeformation::DrawCapturedStatics()
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
 	context->IASetInputLayout(nullptr);
+
+	// TRENCH PATCH: the landscape shell's dense-grid carve applied to object
+	// tops — real carved geometry drawn after the skins so it shows through
+	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
+	if (patchVS && patchPS && heightSkinDepth && settings.SnowMeshesDepth > 1.0f) {
+		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
+		context->VSSetShader(patchVS, nullptr, 0);
+		context->PSSetShader(patchPS, nullptr, 0);
+
+		StaticsCB scb{};
+		// WorldRow0.xy = snapped patch origin (256 quads x 8 units = +-1024
+		// around the height-window center, which tracks the camera).
+		scb.WorldRow0 = {
+			std::floor((heightWindowCenter.x - 1024.0f) / 8.0f) * 8.0f,
+			std::floor((heightWindowCenter.y - 1024.0f) / 8.0f) * 8.0f, 0.0f, 0.0f
+		};
+		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = heightHalfExtent;
+		staticsCB->Update(scb);
+
+		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+		context->VSSetShaderResources(11, 2, patchSRVs);
+		context->Draw(256 * 256 * 6, 0);
+		ID3D11ShaderResourceView* nullPatchSRVs[2] = { nullptr, nullptr };
+		context->VSSetShaderResources(11, 2, nullPatchSRVs);
+		globals::profiler->EndPass();
+	}
+
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);
 	context->PSSetConstantBuffers(1, 1, &nullCB);
