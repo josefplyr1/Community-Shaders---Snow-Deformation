@@ -619,6 +619,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// re-opened the very gaps the drape closes); truly vertical faces
 	// still shed. Flat paint keeps the tops-only gate.
 	float pixelCoverage = input.Flat > 0.5 ? smoothstep(0.4, 0.7, input.Coverage) : smoothstep(0.15, 0.6, input.Coverage);
+#	ifndef PATCH
+	// Geometric steepness gate — ONE fix for three symptoms (wall fog,
+	// boulder-flank sheets, trunk-bark streaks): on huge low-poly
+	// triangles the INTERPOLATED normal smears one top vertex's up-ness
+	// down the whole face, and sloped faces (30-60 degrees) sail over the
+	// vertical sliver cull. The DERIVATIVE normal knows each pixel's true
+	// facing: snow sheds off anything steeper than ~65 degrees regardless
+	// of interpolation. The band sits BELOW the interpolated gate's range,
+	// so rounded snow edges (z 0.4+) stay interpolation-shaped and the old
+	// per-face blockiness cannot return. The PATCH is exempt: its trench
+	// walls are legitimately steep.
+	float3 geoFacing = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
+	pixelCoverage *= smoothstep(0.22, 0.42, abs(geoFacing.z));
+#	endif
 
 	// Per-pixel trench RELIEF: the vertex carve cannot dent low-poly meshes
 	// (cliff edges measure 20-160 units — no vertex ever lands inside a
