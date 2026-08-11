@@ -358,12 +358,19 @@ public:
 	std::unordered_set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
-	// ---- TEMPORARY: LOD-shadow diagnostics (remove once distant LOD shadows work) ----
-	/** @brief Cascade descriptor count the engine reports, the three end-split distances, whether the slice-2 path activated, and the copied atlas's slice count. */
+	// ---- LOD-shadow diagnostics (kept per Josef — negligible cost, useful history) ----
+	/** @brief Cascade descriptor count the engine reports, the three end-split distances, whether the (retired) slice-2 path activated, and the copied atlas's slice count. */
 	uint32_t dbgLodDescriptorCount = 0;
 	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
 	float dbgLodActive = 0.0f;
 	uint32_t dbgLodAtlasSlices = 0;
+
+	// ---- Skin-trench design diagnostics: vertex density of captured meshes ----
+	/** @brief When set, every UNIQUE captured skin mesh logs its name, vertex/triangle counts, world bound radius and estimated edge length once — the data that decides how object skins can carve REAL trench geometry (subdivision factor, tessellation budget). */
+	bool debugLogSkinStats = false;
+	std::unordered_set<const void*> skinStatsLogged;
+	/** @brief Total skin vertices drawn last frame (the budget a subdivision approach would multiply). */
+	uint32_t statSkinVertsDrawn = 0;
 
 	// ---- Shell as shadow CASTER: injected into the live cascade atlas ----
 

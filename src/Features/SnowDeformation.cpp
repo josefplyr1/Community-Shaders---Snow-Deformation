@@ -291,6 +291,13 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttLift = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_statics_lift_tooltip"), "Diagnostic: raises EVERY object by the Objects depth, ignoring the snow gates. If the world visibly lifts, the statics-shell data path works and only the snow detection is wrong."));
 
+			if (ImGui::Checkbox(T(TKEY("debug_skin_stats"), "Log Skin Mesh Stats"), &debugLogSkinStats)) {
+				if (debugLogSkinStats)
+					skinStatsLogged.clear();
+			}
+			if (auto _ttSkinStats = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_skin_stats_tooltip"), "Logs every unique captured skin mesh once (name, vertices, triangles, bound radius, estimated edge length) to CommunityShaders.log — the density data for making object skins carve real trench geometry."));
+
 			ImGui::TreePop();
 		}
 
@@ -302,9 +309,9 @@ void SnowDeformation::DrawSettings()
 			(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
 		ImGui::Text("Shell data: %zu cells baked, %u in window, %u snow texels, height [%.0f, %.0f]",
 			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels, shellStatMinHeight, shellStatMaxHeight);
-		// TEMPORARY: LOD-shadow diagnostics (remove once distant LOD shadows work).
 		ImGui::Text("LOD shadow: descriptors=%u endSplits=%.0f/%.0f/%.0f active=%.0f atlasSlices=%u",
 			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodActive, dbgLodAtlasSlices);
+		ImGui::Text("Skin verts drawn: %u (subdivision budget baseline)", statSkinVertsDrawn);
 
 		ImGui::TreePop();
 	}
@@ -2780,6 +2787,7 @@ void SnowDeformation::DrawCapturedStatics()
 			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
 	};
 
+	statSkinVertsDrawn = 0;
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
@@ -2795,6 +2803,22 @@ void SnowDeformation::DrawCapturedStatics()
 			continue;
 		}
 		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+
+		// Skin-trench design diagnostics: per unique mesh, the numbers that
+		// decide how real trench geometry can be carved into object skins —
+		// vertex-level carving needs vertices at trench scale (~10-30
+		// units), so the estimated edge length tells the required
+		// subdivision factor, and the per-frame vertex total the budget.
+		statSkinVertsDrawn += triShape->GetTrishapeRuntimeData().vertexCount;
+		if (debugLogSkinStats && skinStatsLogged.size() < 256 && skinStatsLogged.insert(rendererData->vertexBuffer).second) {
+			const uint32_t triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
+			const float worldRadius = geometry->worldBound.radius;
+			// Rough sphere-surface heuristic: edge ~ sqrt(4*pi*r^2 / tris).
+			const float estEdge = triangleCount > 0 ? std::sqrt(12.566f * worldRadius * worldRadius / float(triangleCount)) : 0.0f;
+			logger::info("[SNOW DEFORMATION] Skin mesh: '{}' verts={} tris={} boundR={:.0f} scale={:.2f} estEdge={:.1f} units",
+				geometry->name.c_str(), triShape->GetTrishapeRuntimeData().vertexCount, triangleCount,
+				worldRadius, cap.world.scale, estEdge);
+		}
 		if (indexCount == 0) {
 			logSkip(geometry, "zero triangles");
 			continue;
