@@ -279,7 +279,9 @@ public:
 		DirectX::XMFLOAT4X4 LodShadowProj;
 		float LodShadowEnd;
 		float LodShadowActive;
-		float2 padLod;
+		/** @brief Screen-Space Shadows texture (t45) is bound and valid: the depth-marched long-range shadows that carry distant LOD tree shadows beyond the two cascades. Bare ground multiplies them into its lighting, so the shell must too. */
+		float ScreenSpaceShadowsActive;
+		float padLod;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

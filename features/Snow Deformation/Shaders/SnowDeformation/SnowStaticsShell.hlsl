@@ -32,6 +32,7 @@
 SamplerState ShellLinearSampler : register(s1);
 #	define LinearSampler ShellLinearSampler
 #	include "Common/ShadowSampling.hlsli"
+#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
@@ -90,7 +91,8 @@ cbuffer ShellCB : register(b0)
 	column_major float4x4 LodShadowProj;  // slice-2 LOD shadow cascade (see SnowShadow.hlsli)
 	float LodShadowEnd;
 	float LodShadowActive;
-	float2 padLod;
+	float ScreenSpaceShadowsActive;  // t45 bound: long-range depth-marched shadows
+	float padLod;
 }
 
 cbuffer StaticCB : register(b1)
@@ -588,6 +590,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
+	// Screen-Space Shadows: same long-range term bare ground multiplies in.
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);

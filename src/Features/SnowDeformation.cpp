@@ -5,6 +5,7 @@
 #include <imgui_stdlib.h>
 
 #include "Deferred.h"
+#include "Features/ScreenSpaceShadows.h"
 #include "Features/TerrainBlending.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -1523,6 +1524,18 @@ void SnowDeformation::DrawShell()
 		}
 	}
 	dbgLodActive = cbData.LodShadowActive;
+
+	// Screen-Space Shadows: bind its output (t45) for the shell + statics
+	// passes and flag it valid. The feature clears the texture to WHITE
+	// every Prepass even when disabled, so multiplying is always safe once
+	// the texture exists.
+	cbData.ScreenSpaceShadowsActive = 0.0f;
+	auto& screenSpaceShadowsFeature = globals::features::screenSpaceShadows;
+	if (screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) {
+		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
+		globals::d3d::context->PSSetShaderResources(45, 1, &sssSRV);
+		cbData.ScreenSpaceShadowsActive = 1.0f;
+	}
 	// TEMPORARY: throttled log so the whole chain is visible in
 	// CommunityShaders.log without menu screenshots.
 	static uint32_t dbgLodLogCounter = 0;

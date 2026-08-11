@@ -35,6 +35,7 @@
 SamplerState ShellLinearSampler : register(s1);
 #	define LinearSampler ShellLinearSampler
 #	include "Common/ShadowSampling.hlsli"
+#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
@@ -97,7 +98,8 @@ cbuffer ShellCB : register(b0)
 	column_major float4x4 LodShadowProj;  // slice-2 LOD shadow cascade (see SnowShadow.hlsli)
 	float LodShadowEnd;
 	float LodShadowActive;
-	float2 padLod;
+	float ScreenSpaceShadowsActive;  // t45 bound: long-range depth-marched shadows
+	float padLod;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -912,6 +914,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float soft = lerp(0.06, 0.35, farShadowT);
 		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
+
+	// Screen-Space Shadows (the integrated long-range depth march): these
+	// carry the distant LOD tree shadows far beyond the two cascades — bare
+	// ground multiplies them into its lighting (Lighting.hlsl), so the
+	// shell does the same or distant snow reads shadowless.
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
