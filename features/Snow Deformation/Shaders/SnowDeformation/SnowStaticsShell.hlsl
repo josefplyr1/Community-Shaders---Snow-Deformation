@@ -305,19 +305,27 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float topYP = PatchTop(worldXY + float2(0.0, 8.0));
 	float topYN = PatchTop(worldXY - float2(0.0, 8.0));
 	float minNeighborTop = min(min(topXP, topXN), min(topYP, topYN));
-	bool rim = (top - minNeighborTop) > 60.0;
+	// 100 units: house facades still cull (wall drops are 300+), but steep
+	// boulder crests no longer lose their trench-edge vertices (the small
+	// notch triangles at rock rims).
+	bool rim = (top - minNeighborTop) > 100.0;
 
 	// Neighborhood trample test: the patch lives only around trails, but
-	// sampled with a 1.5-cell margin so every triangle touching a trench
-	// edge keeps ALL its vertices — the per-vertex cull that produced
-	// triangular see-through holes cannot recur at trench boundaries.
+	// sampled with a 1.5-cell margin — INCLUDING DIAGONALS: a vertex
+	// diagonal to a trail cell shed its triangle when only the cardinal
+	// directions were checked (the small rim triangles). Every triangle
+	// touching a trench edge keeps ALL its vertices.
 	float aliveDeform = SampleDeformation(gridLocal);
 	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(12.0, 0.0)));
 	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(12.0, 0.0)));
 	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(0.0, 12.0)));
 	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(0.0, 12.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(10.0, 10.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(10.0, 10.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(10.0, -10.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(-10.0, 10.0)));
 
-	[branch] if (top < -50000.0 || skinDepth < 1.0 || rim || aliveDeform < 0.01)
+	[branch] if (top < -50000.0 || skinDepth < 1.0 || rim || aliveDeform < 0.005)
 	{
 		float nan = asfloat(0x7fc00000);
 		vsout.Position = float4(nan, nan, nan, nan);
@@ -333,7 +341,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// of z-fighting it.
 	float floorDepth = min(skinDepth, 5.0 * smoothstep(0.5, 8.0, skinDepth));
 	float depth = max(skinDepth * (1.0 - deform), floorDepth);
-	float3 worldAbs = float3(worldXY, top + depth - 0.75);
+	float3 worldAbs = float3(worldXY, top + depth - 0.4);
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
@@ -615,10 +623,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	//   replace a flank — discarding the log's side pixels (whose map
 	//   column carries the trail) punched see-through holes.
 	// Far trails and painted-flat trails keep the parallax relief instead.
-	[branch] if (input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.02 && length(input.WorldPos.xy) < 950.0)
+	[branch] if (input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.005 && length(input.WorldPos.xy) < 950.0)
 	{
+		// Sharp hand-off band: the skin stays FULL height (its carve lives
+		// in the patch), so every percent of trample it survives is a
+		// full-height ledge overhanging the already-carved patch — the
+		// hovering rim sheets. Fully gone by 6% trample keeps the ledge
+		// under ~2 units.
 		float3 geoUp = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
-		if (abs(geoUp.z) > 0.55 && Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.03, 0.15, pixelDeform))
+		if (abs(geoUp.z) > 0.55 && Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.01, 0.06, pixelDeform))
 			discard;
 	}
 #	endif
