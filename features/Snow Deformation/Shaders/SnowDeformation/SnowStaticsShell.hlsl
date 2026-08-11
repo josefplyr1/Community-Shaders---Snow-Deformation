@@ -332,7 +332,13 @@ VS_OUTPUT main(VS_INPUT input)
 	// this was reverted — real position-averaged normals replace it.)
 	// Flat meshes gate accumulation on the RAW normal (their straight-up
 	// inflate direction would paint the sides white).
-	float upFacing = smoothstep(0.4, 0.7, isFlat > 0.5 ? nrmWS.z : inflateWS.z);
+	// ROUNDED meshes use the DRAPE ramp: with the old hard 0.4-0.7 gate a
+	// deep layer became a full-height cap hovering over bare sides, joined
+	// by near-vertical skirts (the culled gaps onto the log mesh). Ramping
+	// depth over almost the whole up-facing range pins the shell's edges
+	// to the mesh — it puffs at the top and meets the surface in a sloped
+	// snow lip.
+	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, inflateWS.z);
 	// NO vertex carve: on low-poly meshes a carved vertex dragged whole
 	// 100+-unit triangles down with it — jagged sawtooth walls into the
 	// surrounding untrampled snow, and knife ridges between parallel
@@ -491,7 +497,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 worldXY = GridOrigin + input.GridLocal;
 	// Per-pixel up-facing gate from the interpolated RAW normal (see the VS
 	// note on Coverage): smooth accumulation edges on low-poly meshes.
-	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
+	// Rounded shells use the wide DRAPE gate so the pinned snow lip stays
+	// visible down to the mesh (a tight gate faded the skirt out and
+	// re-opened the very gaps the drape closes); truly vertical faces
+	// still shed. Flat paint keeps the tops-only gate.
+	float pixelCoverage = input.Flat > 0.5 ? smoothstep(0.4, 0.7, input.Coverage) : smoothstep(0.15, 0.6, input.Coverage);
 
 	// Per-pixel trench RELIEF: the vertex carve cannot dent low-poly meshes
 	// (cliff edges measure 20-160 units — no vertex ever lands inside a
@@ -641,14 +651,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
 
 #	ifndef PATCH
-	// Skirt cull: inflation stretches triangles between displaced up-facing
-	// vertices and their welded wall/side neighbors, and at rounded depths
-	// those stretches read as faint VERTICAL snow streaks down house walls,
-	// cliff faces and log sides. The GEOMETRIC facing (derivative normal)
-	// exposes them — a real snow surface is never near-vertical. The PATCH
-	// is exempt: its trench WALLS are legitimately steep real geometry.
+	// Sliver cull, RELAXED for the drape: only truly degenerate vertical
+	// slivers die now — the sloped snow lips joining a draped shell to the
+	// mesh are legitimate geometry (the old 0.08-0.22 cull deleted them,
+	// which opened the windows onto the log mesh). The PATCH is exempt:
+	// its trench walls are steep real geometry.
 	float3 geoNormal = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
-	coverageAlpha *= smoothstep(0.08, 0.22, abs(geoNormal.z));
+	coverageAlpha *= smoothstep(0.02, 0.09, abs(geoNormal.z));
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
@@ -664,8 +673,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Snow texture taps — shared by albedo, normal and RMAOS. Sampled at
 	// the parallax-corrected position so the texture rides the relief.
+	// Steep drape sides re-project along the facing wall plane: the
+	// top-down projection stretches down a puffed shell's flanks, and the
+	// stochastic cells follow the same plane so the anti-tiling stays
+	// coherent instead of smearing.
 	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
+	float2 snowCellXY = worldXY;
+	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+	[branch] if (snowSteepness > 0.001)
+	{
+		float worldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float2 sidePlane = abs(normalWS.x) > abs(normalWS.y) ? float2(worldXY.y, worldZAbs) : float2(worldXY.x, worldZAbs);
+		snowUV = lerp(snowUV, (SnowUVOffset + sidePlane) / kSnowUVTile, snowSteepness);
+		snowCellXY = lerp(worldXY, sidePlane, snowSteepness);
+	}
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
 
 	// Micro-relief — identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
