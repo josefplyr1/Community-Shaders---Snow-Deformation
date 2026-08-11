@@ -82,6 +82,8 @@ public:
 		float ObjectsSnowDepth = 0.0f;
 		/** @brief S6 statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
 		float SnowMeshesDepth = 5.0f;
+		/** @brief Model-class override: ROAD MESHES (matched deterministically by road/bridge texture paths, not geometry stats) wear their own deep layer — carved by the trench patch into the deep wagon-rut look. */
+		float RoadMeshesDepth = 25.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
@@ -351,6 +353,8 @@ public:
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
+		/** @brief Road/bridge texture-path match: this capture uses RoadMeshesDepth for BOTH class depths, so the GPU class pick cannot override it. */
+		bool road;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */

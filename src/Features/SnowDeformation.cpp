@@ -32,6 +32,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowClassDepths,
 	ObjectsSnowDepth,
 	SnowMeshesDepth,
+	RoadMeshesDepth,
 	SnowTexturePath,
 	SnowTextureLinear,
 	SnowMoundSteepness,
@@ -204,15 +205,24 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_time_tooltip"), "Time for compressed snow to fully recover. 0 disables refilling."));
 
+		if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Snow Depth by Model Class"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttModels = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge textures; flat vs round is classified automatically per mesh."));
+			ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttRoad = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Deep snow layer on road and bridge meshes — carved by real trenches into the trodden wagon-rut look."));
+			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+			if (auto _ttObj = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
+			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
+			if (auto _ttMesh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttClasses = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
-			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Objects (Flat Snow)"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
-			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Objects (Rounded Snow)"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
 			bool classDepthsChanged = false;
 			for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 				classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
@@ -2193,7 +2203,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	if (!settings.EnableSnowDeformation || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f))
+	if (!settings.EnableSnowDeformation || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
 		return;
 	// Main world view only: probe/reflection passes must not fill the list.
 	if (!globals::state->inWorld)
@@ -2253,7 +2263,28 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
+	// Road-mesh model class: deterministic texture-path match (the lesson
+	// from the failed geometry-stats classifiers), cached per material.
+	bool road = false;
+	if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
+		static std::unordered_map<const void*, bool> roadMaterialCache;
+		if (roadMaterialCache.size() > 4096)
+			roadMaterialCache.clear();
+		auto [roadIt, roadInserted] = roadMaterialCache.try_emplace(roadMaterial, false);
+		if (roadInserted) {
+			if (auto textureSet = roadMaterial->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+					std::string lowered(path);
+					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					roadIt->second = lowered.find("road") != std::string::npos || lowered.find("bridge") != std::string::npos;
+				}
+			}
+		}
+		road = roadIt->second;
+	}
+
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road });
 }
 
 // Compiles one stage of the statics shell, RETURNING the bytecode blob —
@@ -2562,8 +2593,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = settings.ObjectsSnowDepth;
-		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
@@ -2813,7 +2844,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	if (capturedStatics.empty() || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f))
+	if (capturedStatics.empty() || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
 		return;
 	if (!EnsureStaticsShaders())
 		return;
@@ -2966,8 +2997,8 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = settings.ObjectsSnowDepth;
-		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
@@ -2993,7 +3024,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// TRENCH PATCH: the landscape shell's dense-grid carve applied to object
 	// tops — real carved geometry drawn after the skins so it shows through
 	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
-	if (patchVS && patchPS && heightSkinDepth && settings.SnowMeshesDepth > 1.0f) {
+	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 1.0f || settings.RoadMeshesDepth > 1.0f)) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		context->VSSetShader(patchVS, nullptr, 0);
 		context->PSSetShader(patchPS, nullptr, 0);
