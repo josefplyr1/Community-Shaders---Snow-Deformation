@@ -81,9 +81,9 @@ public:
 		/** @brief S6 statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal, no pillow). Default 0: painted directly onto the surface — even 1 unit reads as a tiny hover (Josef-tuned). */
 		float ObjectsSnowDepth = 0.0f;
 		/** @brief S6 statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
-		float SnowMeshesDepth = 5.0f;
-		/** @brief Model-class override: ROAD MESHES (matched deterministically by road/bridge texture paths, not geometry stats) wear their own deep layer — carved by the trench patch into the deep wagon-rut look. */
-		float RoadMeshesDepth = 25.0f;
+		float SnowMeshesDepth = 3.0f;
+		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default 10, deliberately BELOW the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield (Josef-tuned). */
+		float RoadMeshesDepth = 10.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
@@ -98,8 +98,8 @@ public:
 		float SnowBorderTrampledFade = 20.0f;
 		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
 		float SnowBorderUntrampledFade = 5.0f;
-		/** @brief View-ray band (units) over which the OBJECT snow skin cross-fades into the LANDSCAPE shell behind it — kills the hard seam between the two snow kinds. 15 = Josef-tuned sweet spot. */
-		float SnowSnowFade = 15.0f;
+		/** @brief View-ray band (units) over which the OBJECT snow skin cross-fades into the LANDSCAPE shell behind it — kills the hard seam between the two snow kinds. 10 = Josef-tuned for the road(10)-vs-landscape(~30) height difference. */
+		float SnowSnowFade = 10.0f;
 		/** @brief Render distances in METERS (converted via kUnitsPerMeter). Shell scales the warped grid spacing (CB-only, live); trenches resize the deformation window (map clears on change); skins is a plain capture cutoff. */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
