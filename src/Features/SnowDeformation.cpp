@@ -508,10 +508,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			const auto position = a_ref->GetPosition();
 			const uint32_t formID = a_ref->formID;
 			auto prevIt = propPrevPositions.find(formID);
-			currentPropPositions[formID] = position;
-			if (prevIt == propPrevPositions.end())
+			if (prevIt == propPrevPositions.end()) {
+				currentPropPositions[formID] = position;
 				return RE::BSContainer::ForEachResult::kContinue;  // first sight: baseline only
-			if (position.GetSquaredDistance(prevIt->second) < 3.0f * 3.0f)
+			}
+			// FROZEN anchor: slow motion accumulates toward the gate instead
+			// of being reset every frame — a Sigil stone rolling at under 3
+			// units/frame never stamped with a per-frame anchor. Sleeping
+			// Havok props are truly frozen, so drift pulses cannot happen.
+			const bool propMoved = position.GetSquaredDistance(prevIt->second) >= 3.0f * 3.0f;
+			currentPropPositions[formID] = propMoved ? position : prevIt->second;
+			if (!propMoved)
 				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
 			if (stampCount >= kMaxStamps)
 				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors

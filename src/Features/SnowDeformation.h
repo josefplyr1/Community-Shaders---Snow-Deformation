@@ -78,8 +78,8 @@ public:
 		float RoadSnowDepth = -5.0f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
-		/** @brief S6 statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal, no pillow). */
-		float ObjectsSnowDepth = 1.0f;
+		/** @brief S6 statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal, no pillow). Default 0: painted directly onto the surface — even 1 unit reads as a tiny hover (Josef-tuned). */
+		float ObjectsSnowDepth = 0.0f;
 		/** @brief S6 statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
 		float SnowMeshesDepth = 5.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */

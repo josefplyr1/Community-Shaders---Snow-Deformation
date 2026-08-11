@@ -358,16 +358,26 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// clear of the mesh and fills the pinholes; the blend-in leaves the
 	// near field untouched.
 	float camDist = length(gridLocal - WarpedHalfSpan);
-	[branch] if (camDist > 6000.0)
+	[branch] if (camDist > 4000.0)
 	{
-		float farBlend = smoothstep(6000.0, 12000.0, camDist);
+		float farBlend = smoothstep(4000.0, 10000.0, camDist);
 		float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
 		float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
 		float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
 		float3 n3 = SampleTerrain(gridLocal - float2(0.0, TerrainTexelSize));
-		float maxHeight = max(max(n0.x, n1.x), max(n2.x, n3.x));
-		float maxCoverage = saturate(max(max(n0.z, n1.z), max(n2.z, n3.z)));
-		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight), farBlend);
+		float3 n4 = SampleTerrain(gridLocal + float2(TerrainTexelSize, TerrainTexelSize));
+		float3 n5 = SampleTerrain(gridLocal - float2(TerrainTexelSize, TerrainTexelSize));
+		float3 n6 = SampleTerrain(gridLocal + float2(TerrainTexelSize, -TerrainTexelSize));
+		float3 n7 = SampleTerrain(gridLocal + float2(-TerrainTexelSize, TerrainTexelSize));
+		float maxHeight = max(max(max(n0.x, n1.x), max(n2.x, n3.x)), max(max(n4.x, n5.x), max(n6.x, n7.x)));
+		float maxCoverage = saturate(max(max(max(n0.z, n1.z), max(n2.z, n3.z)), max(max(n4.z, n5.z), max(n6.z, n7.z))));
+		// Within-texel ridge error: one height sample per 100+ world units
+		// cannot see a crest between texel centers — on a slope the real
+		// mesh can top the interpolated field by half the local gradient,
+		// which is exactly the crawling holes that survived the plain max.
+		// Pad by that bound so the shell always clears the mesh.
+		float ridgePad = 0.25 * max(abs(n0.x - n1.x), abs(n2.x - n3.x));
+		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
 		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
 	}
 
@@ -809,19 +819,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satVdotH = saturate(dot(V, H));
 
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	// Distant shadow softening: the far cascade's texels and the self-shadow
+	// march's terrain-window texels (100+ units out there) both quantize
+	// into hard blocky patches on distant snow. Fade the crisp per-texel
+	// terms toward the smooth world shadow with distance — smoother, not
+	// more detailed, so it costs nothing.
+	float farShadowT = smoothstep(6000.0, 15000.0, length(input.WorldPos));
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS);
+		sunShadow = worldShadow * lerp(SnowShadow::GetCascadeShadow(input.WorldPos, normalWS), 1.0, farShadowT);
 	}
 	else
 	{
 		// Fallback: the Volumetric Shadows 512px VSM moments copy (blurry).
 		float detailedShadow;
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
-		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+		sunShadow = worldShadow * lerp(min(dynamicShadow, detailedShadow), 1.0, farShadowT);
 	}
 
 	// Heightfield self-shadowing: the shell IS a heightfield, so march it
@@ -858,7 +874,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
-		sunShadow *= smoothstep(-0.12, 0.06, sunTan - horizonTan);
+		// Near: the original crisp band. Far: a much wider penumbra plus
+		// attenuated strength — the march's per-texel horizon steps stop
+		// reading as hard-edged blocks.
+		float soft = lerp(0.06, 0.35, farShadowT);
+		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;

@@ -270,7 +270,11 @@ VS_OUTPUT main(VS_INPUT input)
 	// is physics — a vertical face does not collect snow just because its
 	// top edge is welded to a horizontal one. Gating on the smoothed normal
 	// painted the upper halves of box poles white.
-	vsout.Coverage = smoothstep(0.4, 0.7, nrmWS.z);
+	// RAW normal Z, interpolated — the PS runs the up-facing smoothstep
+	// PER PIXEL. Thresholding in the VS made low-poly rocks flip whole
+	// FACES between snowed and bare (blocky patches); thresholding the
+	// interpolated normal instead varies smoothly across faces.
+	vsout.Coverage = nrmWS.z;
 	vsout.GridLocal = gridLocal;
 	vsout.Flat = isFlat;
 	return vsout;
@@ -388,6 +392,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 normalWS = normalize(input.NormalWS);
 	float2 worldXY = GridOrigin + input.GridLocal;
+	// Per-pixel up-facing gate from the interpolated RAW normal (see the VS
+	// note on Coverage): smooth accumulation edges on low-poly meshes.
+	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
 
 	// Per-pixel trench APPEARANCE: the vertex carve is floored (cover never
 	// strips) and useless on low-poly meshes, so trenches on objects read
@@ -397,7 +404,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// stretching to side-facing ones) the shading produced flat flake
 	// artifacts.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
-	[branch] if (pixelDeform > 0.001 && input.Coverage > 0.35)
+	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		const float step = 4.0;
 		float dXP = SampleDeformation(input.GridLocal + float2(step, 0.0));
@@ -410,7 +417,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// up the slope so walls shade like real dents. Tilt is capped and
 		// softened — full-depth gradients carved black gashes on deep-snow
 		// cliffs.
-		float pixelDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0) * input.Coverage;
+		float pixelDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0) * pixelCoverage;
 		normalWS = normalize(normalWS + float3(deformGradient * pixelDepth * 0.6, 0.0));
 	}
 
@@ -420,7 +427,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// (vertex-stage carve, floored so cover always remains).
 	// RAW-normal gate (interpolated per-vertex): the pillow's shading normal
 	// is smoothed, but accumulation must follow the real surface facing.
-	float coverageGate = saturate(input.Coverage + (CoverageNoise(worldXY) - 0.5) * 0.3);
+	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3);
 	float coverageAlpha = smoothstep(0.05, 0.35, coverageGate);
 
 	// Blend into the ground shell: where this pixel sits at or below the
@@ -463,7 +470,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the landscape shell's kTrenchFloor: a carved, solidly-covered pixel
 	// must never dissolve to the object's own texture (the road-mesh
 	// texture mismatch), whatever the seam blends above decided.
-	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, input.Coverage));
+	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
+
+	// Skirt cull: inflation stretches triangles between displaced up-facing
+	// vertices and their welded wall/side neighbors, and at rounded depths
+	// those stretches read as faint VERTICAL snow streaks down house walls,
+	// cliff faces and log sides. The GEOMETRIC facing (derivative normal)
+	// exposes them — a real snow surface is never near-vertical.
+	float3 geoNormal = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
+	coverageAlpha *= smoothstep(0.08, 0.22, abs(geoNormal.z));
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the
