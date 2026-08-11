@@ -25,10 +25,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableSnowDeformation,
 	StampRadius,
 	RefillTime,
+	RefillOnlyWhenSnowing,
 	DeformationDepth,
 	RoadSnowDepth,
 	SnowClassDepths,
 	ObjectsSnowDepth,
+	SnowMeshesDepth,
 	SnowTexturePath,
 	SnowTextureLinear,
 	SnowMoundSteepness,
@@ -39,8 +41,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowSnowFade,
 	RangeShellM,
 	RangeTrenchesM,
-	RangeBlanketM,
 	RangeSkinsM,
+	RangeSkinsFadeM,
 	TrailDarkening,
 	TrailAOStrength,
 	NormalStrength,
@@ -193,6 +195,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
+		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
+		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing. Trails and trenches persist through clear weather."));
 		ImGui::SliderFloat(T(TKEY("refill_time"), "Snow Refill Time"), &settings.RefillTime, 0.0f, 3600.0f, "%.0f s");
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_time_tooltip"), "Time for compressed snow to fully recover. 0 disables refilling."));
@@ -200,9 +205,12 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttClasses = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
-			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Objects (Projected Snow)"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Objects (Flat Projected Snow)"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "S6 statics shell: puffs snow-projected objects (cliffs, rocks, roofs, logs) outward along their up-facing surfaces, carved by the deformation map. 0 disables."));
+				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Skin height on objects whose snow is a flat projected diffuse overlay (cliffs, rocks, roofs). The projection stays visually flat, so keep this low. 0 disables."));
+			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Objects (Snow Meshes)"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
+			if (auto _ttMesh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Skin height on real snow geometry (drifts, landscape-snow-textured meshes), where the puffed layer reads correctly in 3D. 0 disables."));
 			bool classDepthsChanged = false;
 			for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 				classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
@@ -252,14 +260,12 @@ void SnowDeformation::DrawSettings()
 				trenchRangeDirty = true;
 			if (auto _ttRt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
-			ImGui::SliderFloat(T(TKEY("range_blanket"), "Object Blanket"), &settings.RangeBlanketM, 29.0f, 750.0f, "%.0f m");
-			if (ImGui::IsItemDeactivatedAfterEdit())
-				heightFieldDirty = true;
-			if (auto _ttRb = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_blanket_tooltip"), "Object lift/shelter/mound field radius. Resolution scales with range up to a 2048 ceiling (~117 MB VRAM); detail coarsens beyond ~230 m. Applies on slider release."));
 			ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
 			if (auto _ttRk = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+			ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRkf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
 			ImGui::TreePop();
 		}
 		if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
@@ -459,6 +465,109 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			addStamps(actorHandle);
 	}
 
+	// Loose inanimate objects (dropped weapons, kicked clutter, tumbling
+	// barrels, thrown ingredients) carve while they MOVE; at rest they go
+	// quiet and the refill buries their imprint — same story as corpses.
+	// The gate runs on the cheap REFERENCE position first, so collision
+	// traversal only ever happens for props actually in motion: resting
+	// world clutter costs one hash lookup per frame. Anchors refresh every
+	// frame (unlike the frozen corpse anchors), so micro-creep can never
+	// accumulate into a stamp pulse.
+	std::unordered_map<uint32_t, RE::NiPoint3> currentPropPositions;
+	const auto tes = RE::TES::GetSingleton();
+	auto* playerRef = RE::PlayerCharacter::GetSingleton();
+	if (tes && playerRef) {
+		tes->ForEachReferenceInRange(playerRef, 0.5f * deformWorldSize, [&](RE::TESObjectREFR* a_ref) {
+			if (!a_ref || a_ref->As<RE::Actor>())
+				return RE::BSContainer::ForEachResult::kContinue;
+			auto* base = a_ref->GetBaseObject();
+			if (!base)
+				return RE::BSContainer::ForEachResult::kContinue;
+			// Havok-movable base types only — statics, trees, furniture and
+			// containers never travel, and flying projectiles must not carve
+			// the snow under their flight path.
+			switch (base->GetFormType()) {
+			case RE::FormType::Misc:
+			case RE::FormType::Weapon:
+			case RE::FormType::Armor:
+			case RE::FormType::Ammo:
+			case RE::FormType::Book:
+			case RE::FormType::Ingredient:
+			case RE::FormType::AlchemyItem:
+			case RE::FormType::SoulGem:
+			case RE::FormType::KeyMaster:
+			case RE::FormType::Light:
+			case RE::FormType::MovableStatic:
+				break;
+			default:
+				return RE::BSContainer::ForEachResult::kContinue;
+			}
+			if (!a_ref->Is3DLoaded())
+				return RE::BSContainer::ForEachResult::kContinue;
+
+			const auto position = a_ref->GetPosition();
+			const uint32_t formID = a_ref->formID;
+			auto prevIt = propPrevPositions.find(formID);
+			currentPropPositions[formID] = position;
+			if (prevIt == propPrevPositions.end())
+				return RE::BSContainer::ForEachResult::kContinue;  // first sight: baseline only
+			if (position.GetSquaredDistance(prevIt->second) < 3.0f * 3.0f)
+				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
+			if (stampCount >= kMaxStamps)
+				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors
+			auto root = a_ref->Get3D(false);
+			if (!root)
+				return RE::BSContainer::ForEachResult::kContinue;
+
+			// Ground reference is the LAND height, not the object's own
+			// origin — a thrown or carried item rides high above it, so the
+			// near-surface gate keeps mid-air flight paths from carving.
+			float groundZ = position.z;
+			tes->GetLandHeight(position, groundZ);
+
+			uint32_t shapeIndex = 0;
+			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+				RE::NiPoint3 centerPos;
+				float radius;
+				if (Util::GetShapeBound(a_object, centerPos, radius)) {
+					const uint32_t thisIndex = shapeIndex++;
+					if (stampCount >= kMaxStamps)
+						return RE::BSVisit::BSVisitControl::kStop;
+					if (centerPos.z - radius > groundZ + 40.0f)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					if (radius < 4.0f || radius > 128.0f)
+						return RE::BSVisit::BSVisitControl::kContinue;
+
+					// Same capsule-trail scheme as actors: props share the
+					// (formID << 16 | shape) keyspace, which cannot collide
+					// with actor keys because formIDs are unique.
+					float2 current = { centerPos.x, centerPos.y };
+					float2 previous = current;
+					const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
+					auto it = stampPrevPositions.find(key);
+					if (it != stampPrevPositions.end()) {
+						float2 delta = { current.x - it->second.x, current.y - it->second.y };
+						if (delta.x * delta.x + delta.y * delta.y < 256.0f * 256.0f)
+							previous = it->second;
+					}
+					currentPositions[key] = current;
+
+					float4 stamp{};
+					stamp.x = current.x;
+					stamp.y = current.y;
+					stamp.z = 1.0f;
+					stamp.w = radius * settings.StampRadius * 0.05f;
+					perFrameData.Stamps[stampCount] = stamp;
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					stampCount++;
+				}
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+			return RE::BSContainer::ForEachResult::kContinue;
+		});
+	}
+	propPrevPositions = std::move(currentPropPositions);
+
 	stampPrevPositions = std::move(currentPositions);
 	perFrameData.StampCount = stampCount;
 }
@@ -582,22 +691,9 @@ void SnowDeformation::ApplyRangeSettings()
 		trenchRangeDirty = false;
 	}
 
-	// Blanket height field: dim scales with extent to keep texels <= 16
-	// units, capped at 2048 (VRAM/perf ceiling — texels coarsen beyond
-	// ~230 m; the cone transform is texel-step based, so mounds stay
-	// correctly sloped at any resolution).
-	if (heightFieldDirty || !rangeInitApplied) {
-		float targetExtent = std::clamp(settings.RangeBlanketM, 29.0f, 750.0f) * kUnitsPerMeter;
-		uint32_t targetDim = 512;
-		while (targetDim < uint32_t(targetExtent * 2.0f / 16.0f) && targetDim < 2048)
-			targetDim <<= 1;
-		if (targetDim != heightMapDim || std::abs(targetExtent - heightHalfExtent) > 1.0f) {
-			heightMapDim = targetDim;
-			heightHalfExtent = targetExtent;
-			CreateHeightFieldResources();
-		}
-		heightFieldDirty = false;
-	}
+	// The height field (shelter, exclusions, corpse mounds) runs at a fixed
+	// near-camera window since the object-blanket lift was removed — no
+	// range setting drives it anymore.
 
 	rangeInitApplied = true;
 }
@@ -980,7 +1076,15 @@ void SnowDeformation::Prepass()
 	perFrameData.TexelSize = deformWorldSize / kTextureDim;
 
 	float deltaTime = *globals::game::deltaTime;
-	perFrameData.RefillAmount = settings.RefillTime > 0.0f ? deltaTime / settings.RefillTime : 0.0f;
+	// Refill gate: with RefillOnlyWhenSnowing (default), compressed snow only
+	// recovers while the CURRENT weather actually carries snow — trails
+	// persist through clear spells (and interiors, where there is no sky).
+	bool refillActive = !settings.RefillOnlyWhenSnowing;
+	if (!refillActive)
+		if (auto* sky = RE::Sky::GetSingleton())
+			if (auto* weather = sky->currentWeather)
+				refillActive = weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
+	perFrameData.RefillAmount = (refillActive && settings.RefillTime > 0.0f) ? deltaTime / settings.RefillTime : 0.0f;
 
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
@@ -1334,8 +1438,15 @@ void SnowDeformation::DrawShell()
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
-	// S7 blanket: objects lift the shell when their tops sit within the cap.
-	cbData.ObjectLiftCap = settings.ObjectsSnowDepth > 0.01f ? kObjectLiftCap : 0.0f;
+	// Statics-skin distance dissolve: starts at the blend slider, fully gone
+	// at the skins capture range (floored one meter past the start so the
+	// smoothstep never degenerates when the sliders cross).
+	cbData.SkinFadeStart = settings.RangeSkinsFadeM * kUnitsPerMeter;
+	cbData.SkinFadeEnd = std::max(settings.RangeSkinsM * kUnitsPerMeter, cbData.SkinFadeStart + kUnitsPerMeter);
+	// Height field: the object-blanket lift is gone — the field now carries
+	// only terrain + corpse mounds, with shelter/exclusions in the mask, so
+	// the shell branch stays permanently enabled.
+	cbData.ObjectLiftCap = kObjectLiftCap;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = heightHalfExtent;
 
@@ -1959,7 +2070,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	if (!settings.EnableSnowDeformation || settings.ObjectsSnowDepth <= 0.01f)
+	if (!settings.EnableSnowDeformation || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f))
 		return;
 	// Main world view only: probe/reflection passes must not fill the list.
 	if (!globals::state->inWorld)
@@ -1976,7 +2087,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// shell and must not contribute to the blanket height map either.
 	if (flags.all(Flag::kTreeAnim))
 		return;
-	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
+	// Two capture classes with separate depth sliders: flag-pair hits are the
+	// FLAT-PROJECTED class (the projection is a flat diffuse overlay), drift/
+	// landscape-snow texture matches are the SNOW-MESH class (real geometry).
+	const bool projected = flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow);
+	if (!projected) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
 			return;
@@ -2003,6 +2118,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			return;
 	}
 
+	// Class-specific disable: a zeroed slider turns off just that class.
+	if ((projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth) <= 0.01f)
+		return;
+
 	// Range cap: distant mountains are snow-projected everywhere in Skyrim;
 	// the shell only matters where deformation can happen.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -2016,7 +2135,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, projected });
 }
 
 // Compiles one stage of the statics shell, RETURNING the bytecode blob —
@@ -2303,7 +2422,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.ObjectsDepth = cap.projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
 		staticsCB->Update(scb);
@@ -2537,7 +2656,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	if (capturedStatics.empty() || settings.ObjectsSnowDepth <= 0.01f)
+	if (capturedStatics.empty() || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f))
 		return;
 	if (!EnsureStaticsShaders())
 		return;
@@ -2673,7 +2792,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.ObjectsDepth = cap.projected ? settings.ObjectsSnowDepth : settings.SnowMeshesDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation

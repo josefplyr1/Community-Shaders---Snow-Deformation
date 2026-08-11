@@ -84,7 +84,8 @@ cbuffer ShellCB : register(b0)
 
 	float BorderUntrampledFade;
 	float SnowSnowFade;  // object-skin <-> landscape-shell cross-fade band
-	float2 pad5;
+	float SkinFadeStart;  // statics-skin distance dissolve band (units)
+	float SkinFadeEnd;
 }
 
 cbuffer StaticCB : register(b1)
@@ -435,6 +436,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 	}
 
+	// Distance dissolve: from SkinFadeStart the skin stochastically thins
+	// back into the object's own material, fully gone by SkinFadeEnd (the
+	// capture range) — distant objects keep their real look instead of
+	// turning blank white.
+	float pixelDist = length(input.WorldPos);
+	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
+
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
@@ -448,7 +456,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// luminance height-proxy fallback otherwise. Applied after the coverage
 	// gate: bending the normal first would jitter the up-facing test into
 	// speckled edges.
-	float pixelDist = length(input.WorldPos);
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{

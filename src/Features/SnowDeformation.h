@@ -67,18 +67,21 @@ public:
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
-		/** @brief Scale on Havok collision-shape radii (20 = 1.0x). 30 = Josef-tuned default. */
-		float StampRadius = 30.0f;
+		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size, Josef-tuned default). */
+		float StampRadius = 20.0f;
 		float RefillTime = 700.0f;
+		/** @brief When set (default), compressed snow only recovers while the current weather is actually snowing — trails persist through clear spells and interiors. */
+		bool RefillOnlyWhenSnowing = true;
 		bool ShowDebugTexture = false;
 
 		float DeformationDepth = 30.0f;
 		float RoadSnowDepth = -5.0f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
-		/** @brief S6 statics shell: snow layer height on snow-flagged/snow-textured objects (cliffs, rocks, roofs, drifts). 0 disables — default off while the feature stabilizes. */
-		/** @brief Default 1 (not higher) until flat-mesh plank/roof snow is under control — see the paper-plane item in memory. */
+		/** @brief S6 statics skin, FLAT-PROJECTED class: layer height on objects whose snow is a projected diffuse overlay (cliffs, rocks, roofs). The projection is visually flat — inflating over it never became truly 3D, so this stays at 1. 0 disables the class. */
 		float ObjectsSnowDepth = 1.0f;
+		/** @brief S6 statics skin, SNOW-MESH class: layer height on real snow geometry (drifts, landscape-snow-textured meshes), where inflation reads correctly. */
+		float SnowMeshesDepth = 5.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
@@ -95,11 +98,12 @@ public:
 		float SnowBorderUntrampledFade = 5.0f;
 		/** @brief View-ray band (units) over which the OBJECT snow skin cross-fades into the LANDSCAPE shell behind it — kills the hard seam between the two snow kinds. 15 = Josef-tuned sweet spot. */
 		float SnowSnowFade = 15.0f;
-		/** @brief Render distances in METERS (converted via kUnitsPerMeter). Shell scales the warped grid spacing (CB-only, live); trenches resize the deformation window (map clears on change); blanket resizes the height field (textures recreated on change); skins is a plain capture cutoff. */
+		/** @brief Render distances in METERS (converted via kUnitsPerMeter). Shell scales the warped grid spacing (CB-only, live); trenches resize the deformation window (map clears on change); skins is a plain capture cutoff. */
 		float RangeShellM = 375.0f;
-		float RangeTrenchesM = 200.0f;
-		float RangeBlanketM = 29.0f;
+		float RangeTrenchesM = 100.0f;
 		float RangeSkinsM = 750.0f;
+		/** @brief Distance (m) where the object-snow skin STARTS dissolving; fully gone at the Object Snow range end. Cures distant blank-white objects by blending them back to their own material. */
+		float RangeSkinsFadeM = 100.0f;
 		float TrailDarkening = 0.6f;
 		float TrailAOStrength = 0.5f;
 		float NormalStrength = 1.0f;
@@ -267,7 +271,9 @@ public:
 
 		float BorderUntrampledFade;
 		float SnowSnowFade;
-		float2 pad5;
+		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material — start of the fade and the hard end (the skins capture range). */
+		float SkinFadeStart;
+		float SkinFadeEnd;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -337,6 +343,8 @@ public:
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
+		/** @brief True when captured via the projected-UV+snow flag pair (flat projected diffuse class); false for the drift/snow-mesh texture match. Selects which depth slider drives the draw. */
+		bool projected;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -575,13 +583,15 @@ private:
 	};
 	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
 
+	/** @brief Last reference position per loose inanimate object (formID), rebuilt every frame from the in-range scan. Props carve only while their REFERENCE moves — the anchor refreshes every frame, so collision traversal never runs for resting clutter and micro-creep can't accumulate into stamp pulses. */
+	std::unordered_map<uint32_t, RE::NiPoint3> propPrevPositions;
+
 	// ---- Runtime render-distance state (driven by the Range* settings) ----
 	/** @brief Deformation window world size (2x trench range). Changing it invalidates the map (content is scale-relative), so the trench slider clears on apply. */
 	float deformWorldSize = 14000.0f;
-	/** @brief Height-field dimensions/extent; textures are recreated when the blanket range changes (dim scales to keep texels <= 16 units, capped at 2048). */
+	/** @brief Height-field dimensions/extent (fixed near-camera window: shelter, exclusions, corpse mounds — the object-blanket lift is gone, so no range setting drives these anymore). */
 	uint32_t heightMapDim = 512;
 	float heightHalfExtent = 2048.0f;
-	bool heightFieldDirty = false;
 	bool trenchRangeDirty = false;
 	bool rangeInitApplied = false;
 

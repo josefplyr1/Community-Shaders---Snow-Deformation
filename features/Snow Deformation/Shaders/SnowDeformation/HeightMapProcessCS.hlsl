@@ -2,10 +2,11 @@
 //
 // ScrollCS  — persistence: carries the accumulated raw top/bottom maps into
 //             the current window position (whole-texel offsets).
-// CombineCS — builds the blanket base field: terrain height everywhere,
-//             max'd with grounded object tops (bottom clearance < 40); also
-//             writes the shelter mask (floating structures 60+ units up ⇒
-//             no snow beneath: dynamic "No Snow Under Roofs").
+// CombineCS — builds the base field: terrain height everywhere, lifted only
+//             by corpse burial mounds; also writes the shelter mask
+//             (floating structures 60+ units up ⇒ no snow beneath: dynamic
+//             "No Snow Under Roofs"). The object-top blanket lift was
+//             removed — it produced shell seams and distant spike cones.
 // ConeCS    — angle of repose: iterative min-plus cone transform. No point
 //             of the field may rise steeper than SlopePerUnit from its
 //             neighbors, so thin/tall features (posts, walls) barely lift
@@ -135,21 +136,16 @@ float SampleTerrainHeight(float2 worldXY)
 	float field = terrain;
 	float suppress = 0.0;
 
+	// Shelter only: the object-top lift (the "blanket") was ripped out —
+	// grounded object tops no longer raise the field (that lift made seams
+	// against the landscape shell and 45-degree spikes at range). The raster
+	// now feeds just the floating-structure shelter mask; corpse mounds
+	// below are the field's only remaining lift.
 	float top = InA[dtid.xy];
 	[branch] if (top > -50000.0)
 	{
 		float bottom = InB[dtid.xy];
-		float clearance = bottom - terrain;
-		float lift = top - terrain;
-		// Grounded lift is CAPPED: the raster keeps one top and one bottom
-		// per cell, so a rock under a walkway (or posts under a roof) yields
-		// bottom = ground and top = deck/roof — without the cap the deck
-		// becomes "ground" and the blanket mounds up on top of it. Anything
-		// taller than the cap keeps the field at terrain; snow drifts against
-		// its base via the cone transform instead.
-		if (clearance < 40.0 && lift > 0.0 && lift <= 150.0)
-			field = max(field, top);  // grounded: object top becomes ground
-		else if (clearance >= 40.0 && lift > 60.0)
+		if (bottom - terrain >= 40.0 && top - terrain > 60.0)
 			suppress = 1.0;  // floating structure: bare ground beneath
 	}
 

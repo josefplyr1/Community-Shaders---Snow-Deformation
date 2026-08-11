@@ -91,7 +91,8 @@ cbuffer ShellCB : register(b0)
 
 	float BorderUntrampledFade;  // depth band: untrampled edge dissolve
 	float SnowSnowFade;          // object-skin <-> landscape-shell cross-fade band
-	float2 pad5;
+	float SkinFadeStart;         // statics-skin distance dissolve band (units)
+	float SkinFadeEnd;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -299,7 +300,7 @@ static const float kUndulationAmp = 3.5;
 // Minimum snow cover on carved trench floors (world units). Covers the
 // terrain window's bilinear approximation error so the real landscape mesh
 // never pokes through a floor.
-static const float kTrenchFloor = 3.0;
+static const float kTrenchFloor = 5.0;
 
 float Undulation(float2 worldXY)
 {
@@ -348,11 +349,11 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	float rampDepth = terrain.y;
 	coverage = saturate(terrain.z);
 
-	// S7 unified blanket: t4 holds the SLOPE-LIMITED height field (terrain +
-	// grounded object tops, run through the angle-of-repose cone transform —
-	// thin/tall features barely lift it, broad objects build natural
-	// mounds); t5 holds the shelter mask (floating structures 60+ units up
-	// ⇒ no snow beneath).
+	// S7 height field: t4 holds the SLOPE-LIMITED field — terrain lifted
+	// only by corpse burial mounds (the object-top blanket lift was removed),
+	// run through the angle-of-repose cone transform; t5 holds the shelter
+	// mask (floating structures 60+ units up ⇒ no snow beneath) plus the
+	// door/campfire clearings.
 	[branch] if (ObjectLiftCap > 0.0)
 	{
 		float2 worldXY = GridOrigin + gridLocal;
@@ -377,7 +378,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// Deformation carves only where the layer is actually raised. The carved
 	// floor never drops below kTrenchFloor units (or the un-carved depth when
 	// thinner) so trench bottoms are always shell snow and the landscape
-	// texture underneath never shows through — 3 units, not 1: the terrain
+	// texture underneath never shows through — 5 units, not 1: the terrain
 	// window is bilinear-approximate and can undershoot the real mesh by a
 	// couple of units, which poked bare landscape through wide trench
 	// floors. The negative-depth submerge at category edges is untouched.
