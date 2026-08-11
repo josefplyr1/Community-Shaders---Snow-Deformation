@@ -1490,6 +1490,24 @@ void SnowDeformation::DrawShell()
 	// only terrain + corpse mounds, with shelter/exclusions in the mask, so
 	// the shell branch stays permanently enabled.
 	cbData.ObjectLiftCap = kObjectLiftCap;
+
+	// Slice-2 LOD shadow cascade: the shared DirectionalShadowLights buffer
+	// carries only cascades 0/1, so distant LOD tree shadows reached bare
+	// ground but never the shell. Mirror Deferred::CopyShadowLightData's
+	// matrix convention (XMStoreFloat4x4 into a column_major HLSL field).
+	cbData.LodShadowActive = 0.0f;
+	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
+		if (auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight) {
+			auto& dirLightData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
+			auto& shadowDescriptors = sunShadowLight->GetRuntimeData().shadowmapDescriptors;
+			if (shadowDescriptors.size() >= 3) {
+				auto lodProj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&shadowDescriptors[2].lightTransform));
+				DirectX::XMStoreFloat4x4(&cbData.LodShadowProj, lodProj);
+				cbData.LodShadowEnd = dirLightData.endSplitDistances[2];
+				cbData.LodShadowActive = 1.0f;
+			}
+		}
+	}
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = heightHalfExtent;
 

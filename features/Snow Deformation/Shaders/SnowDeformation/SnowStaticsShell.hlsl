@@ -86,6 +86,11 @@ cbuffer ShellCB : register(b0)
 	float SnowSnowFade;  // object-skin <-> landscape-shell cross-fade band
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 	float SkinFadeEnd;
+
+	column_major float4x4 LodShadowProj;  // slice-2 LOD shadow cascade (see SnowShadow.hlsli)
+	float LodShadowEnd;
+	float LodShadowActive;
+	float2 padLod;
 }
 
 cbuffer StaticCB : register(b1)
@@ -575,7 +580,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF — same path as the terrain shell.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS);
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, LodShadowProj, LodShadowEnd, LodShadowActive);
 	}
 	else
 	{

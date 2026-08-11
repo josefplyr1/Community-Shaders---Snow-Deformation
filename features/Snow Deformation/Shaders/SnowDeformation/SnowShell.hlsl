@@ -93,6 +93,11 @@ cbuffer ShellCB : register(b0)
 	float SnowSnowFade;          // object-skin <-> landscape-shell cross-fade band
 	float SkinFadeStart;         // statics-skin distance dissolve band (units)
 	float SkinFadeEnd;
+
+	column_major float4x4 LodShadowProj;  // slice-2 LOD shadow cascade (see SnowShadow.hlsli)
+	float LodShadowEnd;
+	float LodShadowActive;
+	float2 padLod;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -857,7 +862,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), LodShadowProj, LodShadowEnd, LodShadowActive);
 	}
 	else
 	{

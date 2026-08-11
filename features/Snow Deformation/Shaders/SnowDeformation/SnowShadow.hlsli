@@ -48,19 +48,37 @@ namespace SnowShadow
 	// positionRel is camera-relative. The receiver is offset along the normal
 	// (instead of a large depth bias) so flat sunlit snow shows no acne while
 	// contact shadows stay attached.
-	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread = 1.0)
+	// The shared DirectionalShadowLights buffer carries only cascades 0/1;
+	// slice 2 is the game's LOD SHADOW cascade (distant LOD trees/objects
+	// render into it — bare ground samples it in the vanilla shadow mask).
+	// Its projection arrives via a_lodProj/a_lodEnd from ShellCB so distant
+	// shell snow receives the same LOD shadows the ground does.
+	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread,
+		column_major float4x4 a_lodProj, float a_lodEnd, float a_lodActive)
 	{
 		DirectionalShadowLightData sd = DirectionalShadowLights[0];
 
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionRel));
-		if (shadowMapDepth >= sd.EndSplitDistances.y)
-			return 1.0;
 
 		float3 positionWS = positionRel + FrameBuffer::CameraPosAdjust.xyz + normalWS * 3.0;
 
 		float atlasW, atlasH, atlasSlices;
 		SnowShadowAtlas.GetDimensions(atlasW, atlasH, atlasSlices);
 		float2 texel = 1.0 / float2(atlasW, atlasH);
+
+		[branch] if (shadowMapDepth >= sd.EndSplitDistances.y)
+		{
+			[branch] if (a_lodActive > 0.5 && atlasSlices >= 2.5 && shadowMapDepth < a_lodEnd)
+			{
+				float3 posLOD = mul(a_lodProj, float4(positionWS, 1)).xyz;
+				posLOD.xy = saturate(posLOD.xy);
+				posLOD.z -= 0.0024;  // bias pattern: 0.0008 * (cascade + 1)
+				float lodShadow = SampleCascadePCF(posLOD, 2, texel, a_spread);
+				float lodFade = saturate(shadowMapDepth / a_lodEnd);
+				return lerp(1.0, lodShadow, 1.0 - pow(lodFade * lodFade, 8));
+			}
+			return 1.0;
+		}
 
 		// Cascade selection and blend — identical to GetVSMShadow2D.
 		float cascadeSelect = saturate((shadowMapDepth - sd.StartSplitDistances.y) / (sd.EndSplitDistances.x - sd.StartSplitDistances.y));

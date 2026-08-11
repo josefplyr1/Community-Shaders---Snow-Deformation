@@ -274,6 +274,12 @@ public:
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material — start of the fade and the hard end (the skins capture range). */
 		float SkinFadeStart;
 		float SkinFadeEnd;
+
+		/** @brief Slice-2 LOD shadow cascade: distant LOD trees/objects render into it, but the shared 2-cascade DirectionalShadowLights buffer omits it — bare ground kept their shadows and the shell lost them. Stored column-major (XMStoreFloat4x4), matching Deferred's convention. */
+		DirectX::XMFLOAT4X4 LodShadowProj;
+		float LodShadowEnd;
+		float LodShadowActive;
+		float2 padLod;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
