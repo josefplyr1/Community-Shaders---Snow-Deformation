@@ -310,20 +310,21 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// notch triangles at rock rims).
 	bool rim = (top - minNeighborTop) > 100.0;
 
-	// Neighborhood trample test: the patch lives only around trails, but
-	// sampled with a 1.5-cell margin — INCLUDING DIAGONALS: a vertex
-	// diagonal to a trail cell shed its triangle when only the cardinal
-	// directions were checked (the small rim triangles). Every triangle
-	// touching a trench edge keeps ALL its vertices.
+	// Neighborhood trample test: the patch lives only around trails,
+	// sampled with a 1.5-cell margin as a 16-RAY star (Josef's design).
+	// At radius 12 the rays sit 22.5 degrees apart (~4.7-unit arc gaps),
+	// so even the thinnest trail we can produce — a small rolling prop —
+	// cannot slip between rays: every triangle touching a trench edge
+	// keeps ALL its vertices.
+	static const float2 kAliveRays[16] = {
+		{ 12.0, 0.0 }, { 11.09, 4.59 }, { 8.49, 8.49 }, { 4.59, 11.09 },
+		{ 0.0, 12.0 }, { -4.59, 11.09 }, { -8.49, 8.49 }, { -11.09, 4.59 },
+		{ -12.0, 0.0 }, { -11.09, -4.59 }, { -8.49, -8.49 }, { -4.59, -11.09 },
+		{ 0.0, -12.0 }, { 4.59, -11.09 }, { 8.49, -8.49 }, { 11.09, -4.59 }
+	};
 	float aliveDeform = SampleDeformation(gridLocal);
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(12.0, 0.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(12.0, 0.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(0.0, 12.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(0.0, 12.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(10.0, 10.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(10.0, 10.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(10.0, -10.0)));
-	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(-10.0, 10.0)));
+	[unroll] for (uint rayI = 0; rayI < 16; rayI++)
+		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
 
 	[branch] if (top < -50000.0 || skinDepth < 1.0 || rim || aliveDeform < 0.005)
 	{
