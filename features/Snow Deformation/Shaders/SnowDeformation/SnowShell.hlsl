@@ -916,11 +916,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	// Screen-Space Shadows (the integrated long-range depth march): these
-	// carry the distant LOD tree shadows far beyond the two cascades — bare
-	// ground multiplies them into its lighting (Lighting.hlsl), so the
-	// shell does the same or distant snow reads shadowless.
+	// carry the distant LOD tree shadows far beyond the two cascades. BUT
+	// the texture was marched on the PREPASS depth — the ground UNDER the
+	// shell — so applying it near painted barrel/object shadows straight
+	// through the snow ("transparent shell"). Near, our crisp cascades
+	// already shadow the shell correctly; SSS blends in only beyond them,
+	// where it is the ONLY shadow source and the shell hugs the very
+	// ground the march ran on.
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
-		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
+	{
+		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 

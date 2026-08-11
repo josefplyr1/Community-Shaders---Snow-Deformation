@@ -1515,12 +1515,11 @@ void SnowDeformation::DrawShell()
 			dbgLodEndSplits[0] = dirLightData.endSplitDistances[0];
 			dbgLodEndSplits[1] = dirLightData.endSplitDistances[1];
 			dbgLodEndSplits[2] = dirLightData.endSplitDistances[2];
-			if (shadowDescriptors.size() >= 3) {
-				auto lodProj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&shadowDescriptors[2].lightTransform));
-				DirectX::XMStoreFloat4x4(&cbData.LodShadowProj, lodProj);
-				cbData.LodShadowEnd = dirLightData.endSplitDistances[2];
-				cbData.LodShadowActive = 1.0f;
-			}
+			// The slice-2 cascade theory is DEAD (diagnostics: 2 atlas
+			// slices, third split 0, and the descriptor array can hold
+			// NON-SUN shadow maps — descriptor[2] may be a spotlight).
+			// LodShadowActive stays 0; the distant shadows come from
+			// Screen-Space Shadows below.
 		}
 	}
 	dbgLodActive = cbData.LodShadowActive;

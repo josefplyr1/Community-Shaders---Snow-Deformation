@@ -590,9 +590,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
-	// Screen-Space Shadows: same long-range term bare ground multiplies in.
+	// Screen-Space Shadows: same long-range term bare ground multiplies in,
+	// distance-blended past the cascades like the landscape shell (the SSS
+	// march ran on the PREPASS depth — near, it belongs to the surface
+	// UNDER the skin, and the crisp cascades already cover the skin).
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
-		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
+	{
+		float sssBlend = smoothstep(4000.0, 9000.0, pixelDist);
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
