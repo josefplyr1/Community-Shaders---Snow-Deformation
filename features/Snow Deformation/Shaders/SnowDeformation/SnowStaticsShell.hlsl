@@ -286,8 +286,6 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float top = PatchTop(worldXY);
 	float skinDepth = PatchSkinDepth(worldXY);
 	float2 gridLocal = worldXY - GridOrigin;
-	// Bicubic, like the landscape shell — rounded trench walls.
-	float deform = saturate(SampleDeformationSmooth(gridLocal));
 
 	VS_OUTPUT vsout;
 	vsout.CurrentClip = float4(0.0, 0.0, 0.0, 1.0);
@@ -297,17 +295,37 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	vsout.GridLocal = gridLocal;
 	vsout.Coverage = 1.0;
 	vsout.Flat = 0.0;
-	// NO trample-level cull: culling per VERTEX killed whole triangles
-	// wherever a trench edge crossed the grid — the triangular see-through
-	// holes. The patch now exists over every valid top; untrampled cells
-	// simply hide behind the skin (drawn first, slightly higher, so
-	// early-z rejects the covered pixels for free).
-	[branch] if (top < -50000.0 || skinDepth < 1.0)
+
+	// Rim test: a vertex whose column towers over ANY neighbor column is
+	// the top edge of a tall structure (roof or wall rim) — its triangles
+	// stretch down the facade as giant white sheets (the snow-slabbed
+	// house). Sentinel neighbors (off the footprint) count as rims too.
+	float topXP = PatchTop(worldXY + float2(8.0, 0.0));
+	float topXN = PatchTop(worldXY - float2(8.0, 0.0));
+	float topYP = PatchTop(worldXY + float2(0.0, 8.0));
+	float topYN = PatchTop(worldXY - float2(0.0, 8.0));
+	float minNeighborTop = min(min(topXP, topXN), min(topYP, topYN));
+	bool rim = (top - minNeighborTop) > 60.0;
+
+	// Neighborhood trample test: the patch lives only around trails, but
+	// sampled with a 1.5-cell margin so every triangle touching a trench
+	// edge keeps ALL its vertices — the per-vertex cull that produced
+	// triangular see-through holes cannot recur at trench boundaries.
+	float aliveDeform = SampleDeformation(gridLocal);
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(12.0, 0.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(12.0, 0.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(0.0, 12.0)));
+	aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(0.0, 12.0)));
+
+	[branch] if (top < -50000.0 || skinDepth < 1.0 || rim || aliveDeform < 0.01)
 	{
 		float nan = asfloat(0x7fc00000);
 		vsout.Position = float4(nan, nan, nan, nan);
 		return vsout;
 	}
+
+	// Bicubic, like the landscape shell — rounded trench walls.
+	float deform = saturate(SampleDeformationSmooth(gridLocal));
 
 	// The landscape shell's carve, verbatim: floored so the mesh beneath
 	// never shows, at any trample level. Sunk slightly below the skin's
