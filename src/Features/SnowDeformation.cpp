@@ -301,6 +301,9 @@ void SnowDeformation::DrawSettings()
 			(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
 		ImGui::Text("Shell data: %zu cells baked, %u in window, %u snow texels, height [%.0f, %.0f]",
 			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels, shellStatMinHeight, shellStatMaxHeight);
+		// TEMPORARY: LOD-shadow diagnostics (remove once distant LOD shadows work).
+		ImGui::Text("LOD shadow: descriptors=%u endSplits=%.0f/%.0f/%.0f active=%.0f atlasSlices=%u",
+			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodActive, dbgLodAtlasSlices);
 
 		ImGui::TreePop();
 	}
@@ -766,6 +769,12 @@ void SnowDeformation::CaptureShadowAtlas()
 	if (liveAtlasSRV && liveEsramSRV) {
 		SD_CopyShadowTarget(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
 		SD_CopyShadowTarget(liveEsramSRV, "SnowDeformation::ShadowEsramCopy", shadowEsramCopyTex, shadowEsramCopySRV);
+		// TEMPORARY LOD-shadow diagnostic: how many slices the copy carries.
+		if (shadowAtlasCopyTex) {
+			D3D11_TEXTURE2D_DESC atlasDesc;
+			shadowAtlasCopyTex->GetDesc(&atlasDesc);
+			dbgLodAtlasSlices = atlasDesc.ArraySize;
+		}
 
 		// With the receiver copies safely taken (pre-shell), render the shell
 		// INTO the live atlas so the world receives snow shadows: the game's
@@ -1496,10 +1505,15 @@ void SnowDeformation::DrawShell()
 	// ground but never the shell. Mirror Deferred::CopyShadowLightData's
 	// matrix convention (XMStoreFloat4x4 into a column_major HLSL field).
 	cbData.LodShadowActive = 0.0f;
+	dbgLodDescriptorCount = 0;
 	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
 		if (auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight) {
 			auto& dirLightData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
 			auto& shadowDescriptors = sunShadowLight->GetRuntimeData().shadowmapDescriptors;
+			dbgLodDescriptorCount = shadowDescriptors.size();
+			dbgLodEndSplits[0] = dirLightData.endSplitDistances[0];
+			dbgLodEndSplits[1] = dirLightData.endSplitDistances[1];
+			dbgLodEndSplits[2] = dirLightData.endSplitDistances[2];
 			if (shadowDescriptors.size() >= 3) {
 				auto lodProj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&shadowDescriptors[2].lightTransform));
 				DirectX::XMStoreFloat4x4(&cbData.LodShadowProj, lodProj);
@@ -1508,6 +1522,13 @@ void SnowDeformation::DrawShell()
 			}
 		}
 	}
+	dbgLodActive = cbData.LodShadowActive;
+	// TEMPORARY: throttled log so the whole chain is visible in
+	// CommunityShaders.log without menu screenshots.
+	static uint32_t dbgLodLogCounter = 0;
+	if (++dbgLodLogCounter % 600 == 1)
+		logger::info("[SNOW DEFORMATION] LOD shadow debug: descriptors={} endSplits={:.0f}/{:.0f}/{:.0f} active={:.0f} atlasSlices={}",
+			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodActive, dbgLodAtlasSlices);
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = heightHalfExtent;
 

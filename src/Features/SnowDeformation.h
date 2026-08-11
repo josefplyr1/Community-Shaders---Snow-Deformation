@@ -356,6 +356,13 @@ public:
 	std::unordered_set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
+	// ---- TEMPORARY: LOD-shadow diagnostics (remove once distant LOD shadows work) ----
+	/** @brief Cascade descriptor count the engine reports, the three end-split distances, whether the slice-2 path activated, and the copied atlas's slice count. */
+	uint32_t dbgLodDescriptorCount = 0;
+	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
+	float dbgLodActive = 0.0f;
+	uint32_t dbgLodAtlasSlices = 0;
+
 	// ---- Shell as shadow CASTER: injected into the live cascade atlas ----
 
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows — one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
