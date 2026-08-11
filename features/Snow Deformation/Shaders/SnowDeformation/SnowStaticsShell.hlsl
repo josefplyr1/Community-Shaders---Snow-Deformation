@@ -241,21 +241,13 @@ VS_OUTPUT main(VS_INPUT input)
 	// Flat meshes gate accumulation on the RAW normal (their straight-up
 	// inflate direction would paint the sides white).
 	float upFacing = smoothstep(0.4, 0.7, isFlat > 0.5 ? nrmWS.z : inflateWS.z);
-	// Widened max-kernel: shell vertices are sparse, and a point sample only
-	// ever catches a stamp's weak falloff edge — the full-strength trail
-	// center falls between vertices, so trenches barely dented (a 25-unit
-	// layer lost ~1 unit). Any vertex near the trail now carves fully.
-	float deform = SampleDeformation(gridLocal);
-	deform = max(deform, SampleDeformation(gridLocal + float2(10.0, 0.0)));
-	deform = max(deform, SampleDeformation(gridLocal - float2(10.0, 0.0)));
-	deform = max(deform, SampleDeformation(gridLocal + float2(0.0, 10.0)));
-	deform = max(deform, SampleDeformation(gridLocal - float2(0.0, 10.0)));
-	deform = saturate(deform);
-	float depth = depthBase * upFacing * (1.0 - deform);
-	// Trench floor: carved object snow keeps at least ~1 unit of cover, so
-	// trampling DENTS the layer but never strips it — the object's own
-	// bright projected-diffuse underneath must never show through.
-	depth = max(depth, upFacing * min(depthBase, 1.0));
+	// NO vertex carve: on low-poly meshes a carved vertex dragged whole
+	// 100+-unit triangles down with it — jagged sawtooth walls into the
+	// surrounding untrampled snow, and knife ridges between parallel
+	// trails. The layer stays geometrically UNCARVED; ALL trench relief is
+	// traced per pixel in the PS (parallax + real SV_Depth), floored like
+	// the landscape shell so the mesh beneath never shows.
+	float depth = depthBase * upFacing;
 
 	worldAbs += inflateWS * depth;
 
@@ -425,9 +417,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float trenchHitS = 0.0;
 	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
-		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
+		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
 		[branch] if (pomDepth > 0.5)
 		{
+			// Trench floor — the landscape shell's kTrenchFloor rule, ported:
+			// the carve can never reach the object mesh. Without the cap a
+			// full-depth carve pushed SV_Depth to (and past) the underlying
+			// surface, which both exposed its texture and z-fought it into
+			// floors that flickered with the camera angle.
+			float pomFloor = min(pomDepth, 5.0 * smoothstep(0.5, 8.0, pomDepth));
+			float carveCap = pomDepth - pomFloor;
 			// At depth t below the snow top the ray has drifted by
 			// view.xy/-view.z * t in world XY. In air while t < carve(xy);
 			// the hit is refined linearly between the straddling samples.
@@ -435,11 +434,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float invRayZ = 1.0 / max(-viewDirWS.z, 0.25);
 			float2 stepXY = viewDirWS.xy * invRayZ;
 			float tPrev = 0.0;
-			float carvePrev = pomDepth * pixelDeform;
+			float carvePrev = min(pomDepth * pixelDeform, carveCap);
 			[loop] for (uint pomI = 1; pomI <= 8; pomI++) {
-				float t = pomDepth * float(pomI) / 8.0;
+				float t = carveCap * float(pomI) / 8.0;
 				float2 xy = input.GridLocal + stepXY * t;
-				float carve = pomDepth * saturate(SampleDeformation(xy));
+				float carve = min(pomDepth * saturate(SampleDeformation(xy)), carveCap);
 				[branch] if (t >= carve)
 				{
 					float w = saturate((carvePrev - tPrev) / max((carvePrev - tPrev) + (t - carve), 1e-4));
@@ -450,6 +449,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 				tPrev = t;
 				carvePrev = carve;
+			}
+			// Fallback: ray stayed under the (capped) surface through every
+			// sample — land it on the floor.
+			[flatten] if (trenchHitS == 0.0 && carvePrev > 0.0)
+			{
+				trenchGridLocal = input.GridLocal + stepXY * carveCap;
+				trenchHitS = carveCap * invRayZ;
 			}
 			pixelDeform = saturate(SampleDeformation(trenchGridLocal));
 		}
