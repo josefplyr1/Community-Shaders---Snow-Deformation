@@ -293,14 +293,14 @@ VS_OUTPUT main(VS_INPUT input)
 		// divergent fraction and get COMPLETELY FLAT snow (straight-up
 		// offset, raw shading normal, separate depth slider). Organically
 		// smooth meshes keep the pillow.
-		// FLAT = split-normal box (high divergence: walkways, planks) OR a
-		// SLOPED planar sheet (aligned normals, tilted: roofs). HORIZONTAL
-		// sheets are roads/floors — they carve real trenches and stay
-		// ROUNDED; vertical sheets (walls) hold no snow either way. Rocks
-		// and logs score neither signal.
+		// FLAT = split-normal box (high divergence: walkways, planks) — the
+		// ORIGINAL divergence-only rule. Two rounds of alignment-based
+		// extensions (planar sheets, then sloped-only sheets) both
+		// misclassified real-world meshes worse than they helped and were
+		// reverted at Josef's call; roofs classifying rounded is the known,
+		// accepted cost.
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		float meanNz = abs(flatStats.y);
-		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || (flatStats.z > 0.9 && meanNz > 0.25 && meanNz < 0.85)))
+		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			isFlat = 1.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)

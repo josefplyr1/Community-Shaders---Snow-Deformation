@@ -59,11 +59,10 @@ VS_OUTPUT main(VS_INPUT input)
 	float skinDepth = RoundedDepth;
 	[branch] if (HasSmoothedNormals > 0.5)
 	{
-		// Same FLAT condition as the skin: split-normal box OR SLOPED
-		// aligned sheet (roofs). Horizontal sheets (roads) stay rounded.
+		// Same FLAT condition as the skin: the original divergence-only
+		// rule (alignment extensions were reverted — see SnowStaticsShell).
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		float meanNz = abs(flatStats.y);
-		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || (flatStats.z > 0.9 && meanNz > 0.25 && meanNz < 0.85)))
+		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			skinDepth = ObjectsDepth;
 	}
 
