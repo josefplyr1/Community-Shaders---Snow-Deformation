@@ -369,14 +369,34 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float3 n5 = SampleTerrain(gridLocal - float2(TerrainTexelSize, TerrainTexelSize));
 		float3 n6 = SampleTerrain(gridLocal + float2(TerrainTexelSize, -TerrainTexelSize));
 		float3 n7 = SampleTerrain(gridLocal + float2(-TerrainTexelSize, TerrainTexelSize));
-		float maxHeight = max(max(max(n0.x, n1.x), max(n2.x, n3.x)), max(max(n4.x, n5.x), max(n6.x, n7.x)));
-		float maxCoverage = saturate(max(max(max(n0.z, n1.z), max(n2.z, n3.z)), max(max(n4.z, n5.z), max(n6.z, n7.z))));
+		// Never-rasterized window texels at the data edge hold sentinel
+		// heights: ONE such neighbor tap exploded the ridge pad into a
+		// kilometer-tall white pillar. Trust only plausible taps (fall back
+		// to the center height) and cap the pad at a sane bound.
+		float h0 = n0.x > -50000.0 ? n0.x : terrainHeight;
+		float h1 = n1.x > -50000.0 ? n1.x : terrainHeight;
+		float h2 = n2.x > -50000.0 ? n2.x : terrainHeight;
+		float h3 = n3.x > -50000.0 ? n3.x : terrainHeight;
+		float h4 = n4.x > -50000.0 ? n4.x : terrainHeight;
+		float h5 = n5.x > -50000.0 ? n5.x : terrainHeight;
+		float h6 = n6.x > -50000.0 ? n6.x : terrainHeight;
+		float h7 = n7.x > -50000.0 ? n7.x : terrainHeight;
+		float maxHeight = max(max(max(h0, h1), max(h2, h3)), max(max(h4, h5), max(h6, h7)));
+		float c0 = n0.x > -50000.0 ? n0.z : 0.0;
+		float c1 = n1.x > -50000.0 ? n1.z : 0.0;
+		float c2 = n2.x > -50000.0 ? n2.z : 0.0;
+		float c3 = n3.x > -50000.0 ? n3.z : 0.0;
+		float c4 = n4.x > -50000.0 ? n4.z : 0.0;
+		float c5 = n5.x > -50000.0 ? n5.z : 0.0;
+		float c6 = n6.x > -50000.0 ? n6.z : 0.0;
+		float c7 = n7.x > -50000.0 ? n7.z : 0.0;
+		float maxCoverage = saturate(max(max(max(c0, c1), max(c2, c3)), max(max(c4, c5), max(c6, c7))));
 		// Within-texel ridge error: one height sample per 100+ world units
 		// cannot see a crest between texel centers — on a slope the real
 		// mesh can top the interpolated field by half the local gradient,
 		// which is exactly the crawling holes that survived the plain max.
 		// Pad by that bound so the shell always clears the mesh.
-		float ridgePad = 0.25 * max(abs(n0.x - n1.x), abs(n2.x - n3.x));
+		float ridgePad = min(0.25 * max(abs(h0 - h1), abs(h2 - h3)), 150.0);
 		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
 		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
 		// Decisive separation: wherever the pad still lands the far shell
@@ -827,23 +847,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
 	// Distant shadow softening: the far cascade's texels and the self-shadow
 	// march's terrain-window texels (100+ units out there) both quantize
-	// into hard blocky patches on distant snow. Fade the crisp per-texel
-	// terms toward the smooth world shadow with distance — smoother, not
-	// more detailed, so it costs nothing.
+	// into hard blocky patches on distant snow. The cascades must NOT be
+	// faded out — LOD trees cast into them and bare ground keeps their
+	// shadows at range — so the crisp path instead WIDENS its PCF ring
+	// with distance: same shadows, soft penumbra blobs instead of blocks.
 	float farShadowT = smoothstep(6000.0, 15000.0, length(input.WorldPos));
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * lerp(SnowShadow::GetCascadeShadow(input.WorldPos, normalWS), 1.0, farShadowT);
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT));
 	}
 	else
 	{
 		// Fallback: the Volumetric Shadows 512px VSM moments copy (blurry).
 		float detailedShadow;
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
-		sunShadow = worldShadow * lerp(min(dynamicShadow, detailedShadow), 1.0, farShadowT);
+		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 
 	// Heightfield self-shadowing: the shell IS a heightfield, so march it

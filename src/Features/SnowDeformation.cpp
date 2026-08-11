@@ -504,8 +504,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 			if (!a_ref->Is3DLoaded())
 				return RE::BSContainer::ForEachResult::kContinue;
+			auto root = a_ref->Get3D(false);
+			if (!root)
+				return RE::BSContainer::ForEachResult::kContinue;
 
-			const auto position = a_ref->GetPosition();
+			// Movement gate on the 3D root's WORLD transform — never the
+			// reference position: Havok-simulated clutter moves its scene
+			// graph every frame while the REFERENCE's stored position lags
+			// until the body settles (the rolled-Sigil-stone-left-no-tracks
+			// bug: the ref position sat frozen through the whole roll).
+			const auto position = root->world.translate;
 			const uint32_t formID = a_ref->formID;
 			auto prevIt = propPrevPositions.find(formID);
 			if (prevIt == propPrevPositions.end()) {
@@ -513,18 +521,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				return RE::BSContainer::ForEachResult::kContinue;  // first sight: baseline only
 			}
 			// FROZEN anchor: slow motion accumulates toward the gate instead
-			// of being reset every frame — a Sigil stone rolling at under 3
-			// units/frame never stamped with a per-frame anchor. Sleeping
-			// Havok props are truly frozen, so drift pulses cannot happen.
+			// of being reset every frame. Sleeping Havok props are truly
+			// frozen, so drift pulses cannot happen.
 			const bool propMoved = position.GetSquaredDistance(prevIt->second) >= 3.0f * 3.0f;
 			currentPropPositions[formID] = propMoved ? position : prevIt->second;
 			if (!propMoved)
 				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
 			if (stampCount >= kMaxStamps)
 				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors
-			auto root = a_ref->Get3D(false);
-			if (!root)
-				return RE::BSContainer::ForEachResult::kContinue;
 
 			// Ground reference is the LAND height, not the object's own
 			// origin — a thrown or carried item rides high above it, so the
@@ -570,6 +574,35 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
+
+			// Fallback for props whose collision shape type has no bound
+			// extractor (MOPP/list clutter): one stamp from the 3D root's
+			// bound sphere, so anything that rolls always carves SOMETHING.
+			if (shapeIndex == 0 && stampCount < kMaxStamps) {
+				const auto& bound = root->worldBound;
+				float radius = std::clamp(bound.radius, 4.0f, 128.0f);
+				if (bound.center.z - radius <= groundZ + 40.0f) {
+					float2 current = { bound.center.x, bound.center.y };
+					float2 previous = current;
+					const uint64_t key = (uint64_t(formID) << 16) | 0xFFFFull;
+					auto it = stampPrevPositions.find(key);
+					if (it != stampPrevPositions.end()) {
+						float2 delta = { current.x - it->second.x, current.y - it->second.y };
+						if (delta.x * delta.x + delta.y * delta.y < 256.0f * 256.0f)
+							previous = it->second;
+					}
+					currentPositions[key] = current;
+
+					float4 stamp{};
+					stamp.x = current.x;
+					stamp.y = current.y;
+					stamp.z = 1.0f;
+					stamp.w = radius * settings.StampRadius * 0.05f;
+					perFrameData.Stamps[stampCount] = stamp;
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					stampCount++;
+				}
+			}
 			return RE::BSContainer::ForEachResult::kContinue;
 		});
 	}

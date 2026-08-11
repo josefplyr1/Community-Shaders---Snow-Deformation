@@ -32,19 +32,23 @@ namespace SnowShadow
 
 	// Center + 4 rotated taps, each hardware-bilinear 2x2 comparison — a
 	// small soft edge like the vanilla receiver, nothing like the VSM blur.
-	float SampleCascadePCF(float3 posLS, uint cascade, float2 texel)
+	// a_spread widens the tap ring: >1 turns the far cascade's blocky
+	// texels into soft penumbra blobs WITHOUT dropping the shadows (LOD
+	// trees live in these cascades — fading them out erased their shadows
+	// from distant snow).
+	float SampleCascadePCF(float3 posLS, uint cascade, float2 texel, float a_spread)
 	{
 		float shadow = SampleCascadeCmp(posLS, cascade);
 		const float2 kTaps[4] = { { 1.4, 0.4 }, { -0.4, 1.4 }, { -1.4, -0.4 }, { 0.4, -1.4 } };
 		[unroll] for (uint tapI = 0; tapI < 4; tapI++)
-			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel, posLS.z), cascade);
+			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel * a_spread, posLS.z), cascade);
 		return shadow * 0.2;
 	}
 
 	// positionRel is camera-relative. The receiver is offset along the normal
 	// (instead of a large depth bias) so flat sunlit snow shows no acne while
 	// contact shadows stay attached.
-	float GetCascadeShadow(float3 positionRel, float3 normalWS)
+	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread = 1.0)
 	{
 		DirectionalShadowLightData sd = DirectionalShadowLights[0];
 
@@ -65,7 +69,7 @@ namespace SnowShadow
 		float3 posLS = mul(sd.ShadowProj[primaryCascade], float4(positionWS, 1)).xyz;
 		posLS.xy = saturate(posLS.xy);
 		posLS.z -= 0.0008 * (primaryCascade + 1.0);
-		float shadow = SampleCascadePCF(posLS, primaryCascade, texel);
+		float shadow = SampleCascadePCF(posLS, primaryCascade, texel, a_spread);
 
 		[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
 		{
@@ -73,7 +77,7 @@ namespace SnowShadow
 			posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
 			posLS.xy = saturate(posLS.xy);
 			posLS.z -= 0.0008 * (secondaryCascade + 1.0);
-			float shadowBlend = SampleCascadePCF(posLS, secondaryCascade, texel);
+			float shadowBlend = SampleCascadePCF(posLS, secondaryCascade, texel, a_spread);
 			shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
 		}
 
