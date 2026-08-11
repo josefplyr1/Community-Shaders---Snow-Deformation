@@ -427,8 +427,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// (vertex-stage carve, floored so cover always remains).
 	// RAW-normal gate (interpolated per-vertex): the pillow's shading normal
 	// is smoothed, but accumulation must follow the real surface facing.
-	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3);
+	// The noise only MODULATES existing coverage — it must never create
+	// snow from nothing, or undersides and walls pick up dithered dabs.
+	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3 * saturate(pixelCoverage * 4.0));
 	float coverageAlpha = smoothstep(0.05, 0.35, coverageGate);
+	// Hard down-facing kill: snow accumulates on TOPS only. The interpolated
+	// raw normal is negative on every underside pixel, whatever the noise,
+	// seam blends or floor-hold below decide.
+	coverageAlpha *= smoothstep(-0.05, 0.1, input.Coverage);
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells dither into

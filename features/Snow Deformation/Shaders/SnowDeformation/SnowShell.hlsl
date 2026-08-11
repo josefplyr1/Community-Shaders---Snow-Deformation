@@ -379,6 +379,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float ridgePad = 0.25 * max(abs(n0.x - n1.x), abs(n2.x - n3.x));
 		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
 		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
+		// Decisive separation: wherever the pad still lands the far shell
+		// within a few units of the landscape mesh, the two interleave at
+		// depth precision and the winner flips with the view angle — the
+		// holes that appear and vanish as the camera turns. A fixed
+		// covered-only margin makes the shell win at every angle.
+		terrainHeight += farBlend * 8.0 * saturate(coverage);
 	}
 
 	// S7 height field: t4 holds the SLOPE-LIMITED field — terrain lifted
