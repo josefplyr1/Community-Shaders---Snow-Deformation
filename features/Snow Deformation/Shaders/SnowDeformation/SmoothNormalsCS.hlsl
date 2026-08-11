@@ -149,13 +149,15 @@ groupshared float3 gsNormalSum[64];
 			sumNormal += gsNormalSum[i];
 		}
 		float flatFraction = sumTotal > 0 ? float(sumDivergent) / float(sumTotal) : 0.0;
-		// Alignment: 1 when every normal agrees (a planar SHEET — roofs,
-		// slabs), near 0 when they spread or cancel (rocks, boxes). The
-		// FLAT class needs BOTH signals: split-normal boxes score high
-		// divergence, planar sheets score high alignment; rocks score
-		// neither.
-		float alignRatio = sumTotal > 0 ? length(sumNormal) / float(sumTotal) : 0.0;
-		OutNormals[VertexCount] = float4(flatFraction, float(sumTotal), alignRatio, 1.0);
+		// Alignment: 1 when every normal agrees (a planar SHEET), near 0
+		// when they spread or cancel (rocks, boxes). y carries the MEAN
+		// direction's z so consumers can tell SLOPED sheets (roofs — FLAT)
+		// from horizontal ones (roads/floors — ROUNDED, they carve real
+		// trenches) and vertical ones (walls).
+		float sumLen = length(sumNormal);
+		float alignRatio = sumTotal > 0 ? sumLen / float(sumTotal) : 0.0;
+		float meanNz = sumLen > 1e-3 ? sumNormal.z / sumLen : 0.0;
+		OutNormals[VertexCount] = float4(flatFraction, meanNz, alignRatio, 1.0);
 	}
 }
 #endif

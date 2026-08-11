@@ -293,11 +293,14 @@ VS_OUTPUT main(VS_INPUT input)
 		// divergent fraction and get COMPLETELY FLAT snow (straight-up
 		// offset, raw shading normal, separate depth slider). Organically
 		// smooth meshes keep the pillow.
-		// FLAT = split-normal box (high divergence: walkways, planks) OR
-		// planar sheet (high normal alignment: roofs, slabs). Rocks and
-		// logs score neither and stay rounded.
+		// FLAT = split-normal box (high divergence: walkways, planks) OR a
+		// SLOPED planar sheet (aligned normals, tilted: roofs). HORIZONTAL
+		// sheets are roads/floors — they carve real trenches and stay
+		// ROUNDED; vertical sheets (walls) hold no snow either way. Rocks
+		// and logs score neither signal.
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || flatStats.z > 0.9))
+		float meanNz = abs(flatStats.y);
+		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || (flatStats.z > 0.9 && meanNz > 0.25 && meanNz < 0.85)))
 			isFlat = 1.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)
@@ -539,9 +542,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 #	endif
 	// PATCH pixels have REAL carved geometry and a VS gradient normal —
-	// neither the parallax march nor the pixel tilt applies.
+	// neither the parallax march nor the pixel tilt applies. FLAT-class
+	// pixels never parallax either (Josef's ruling: parallax trenches are
+	// banned — flat trails keep only the compression darkening).
 #	ifndef PATCH
-	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
+	[branch] if (input.Flat < 0.5 && pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
 		[branch] if (pomDepth > 0.5)
