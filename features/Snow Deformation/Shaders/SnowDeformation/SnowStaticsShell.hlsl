@@ -453,21 +453,12 @@ VS_OUTPUT main(VS_INPUT input)
 	// traced per pixel in the PS (parallax + real SV_Depth), floored like
 	// the landscape shell so the mesh beneath never shows.
 	float depth = depthBase * upFacing;
-
-	// ROAD plates: road chunks are flat sheets with no side geometry — a
-	// uniform deep lift hangs their edges mid-air as hovering paper
-	// sheets. Taper the lift where the road-depth raster ends, so plate
-	// edges dive back to the mesh like a natural drift edge.
-	[branch] if (IsRoad > 0.5)
-	{
-		float roadDepthHere = max(depthBase, 1.0);
-		float n0 = PatchSkinDepth(worldAbs.xy + float2(16.0, 0.0));
-		float n1 = PatchSkinDepth(worldAbs.xy - float2(16.0, 0.0));
-		float n2 = PatchSkinDepth(worldAbs.xy + float2(0.0, 16.0));
-		float n3 = PatchSkinDepth(worldAbs.xy - float2(0.0, 16.0));
-		float minNeighborDepth = min(min(n0, n1), min(n2, n3));
-		depth *= saturate(minNeighborDepth / roadDepthHere);
-	}
+	// (A raster-driven edge taper for road plates was tried here and
+	// reverted: a 16-unit skirt cannot be expressed on 60-80-unit road
+	// triangles — it rendered as sawtooth zig-zags along every edge.
+	// Roads lift uniformly, exactly as under the old shared setting; edge
+	// blending against the landscape shell is a CONFIG matter: bring the
+	// road land-texture class and Road Meshes depth toward each other.)
 
 	worldAbs += inflateWS * depth;
 
