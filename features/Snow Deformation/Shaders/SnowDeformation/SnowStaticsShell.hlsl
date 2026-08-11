@@ -403,21 +403,51 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// note on Coverage): smooth accumulation edges on low-poly meshes.
 	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
 
-	// Per-pixel trench APPEARANCE: the vertex carve is floored (cover never
-	// strips) and useless on low-poly meshes, so trenches on objects read
-	// through shading — normal tilt from the deformation gradient plus
-	// compressed-snow darkening. Works at any mesh density (drifts, logs).
-	// Gated to solidly covered pixels: on rim triangles (up-facing verts
-	// stretching to side-facing ones) the shading produced flat flake
-	// artifacts.
+	// Per-pixel trench RELIEF: the vertex carve cannot dent low-poly meshes
+	// (cliff edges measure 20-160 units — no vertex ever lands inside a
+	// trail), so the trench is traced per PIXEL instead: parallax-march the
+	// view ray down into the deformation heightfield and shade from where
+	// the ray actually hits the carved surface. Real depth from any angle,
+	// mesh density irrelevant, cost = a few bilinear taps in trench pixels
+	// only. Gated to solidly covered pixels: on rim triangles (up-facing
+	// verts stretching to side-facing ones) the shading produced flat
+	// flake artifacts.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
+	float2 trenchGridLocal = input.GridLocal;
 	[branch] if (pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
+		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
+		float3 viewDirWS = normalize(input.WorldPos);
+		[branch] if (pomDepth > 0.5)
+		{
+			// At depth t below the snow top the ray has drifted by
+			// view.xy/-view.z * t in world XY. In air while t < carve(xy);
+			// the hit is refined linearly between the straddling samples.
+			// The -view.z clamp keeps grazing rays from smearing.
+			float2 stepXY = viewDirWS.xy / max(-viewDirWS.z, 0.25);
+			float tPrev = 0.0;
+			float carvePrev = pomDepth * pixelDeform;
+			[loop] for (uint pomI = 1; pomI <= 8; pomI++) {
+				float t = pomDepth * float(pomI) / 8.0;
+				float2 xy = input.GridLocal + stepXY * t;
+				float carve = pomDepth * saturate(SampleDeformation(xy));
+				[branch] if (t >= carve)
+				{
+					float w = saturate((carvePrev - tPrev) / max((carvePrev - tPrev) + (t - carve), 1e-4));
+					trenchGridLocal = input.GridLocal + stepXY * lerp(tPrev, t, w);
+					break;
+				}
+				tPrev = t;
+				carvePrev = carve;
+			}
+			pixelDeform = saturate(SampleDeformation(trenchGridLocal));
+		}
+
 		const float step = 4.0;
-		float dXP = SampleDeformation(input.GridLocal + float2(step, 0.0));
-		float dXN = SampleDeformation(input.GridLocal - float2(step, 0.0));
-		float dYP = SampleDeformation(input.GridLocal + float2(0.0, step));
-		float dYN = SampleDeformation(input.GridLocal - float2(0.0, step));
+		float dXP = SampleDeformation(trenchGridLocal + float2(step, 0.0));
+		float dXN = SampleDeformation(trenchGridLocal - float2(step, 0.0));
+		float dYP = SampleDeformation(trenchGridLocal + float2(0.0, step));
+		float dYN = SampleDeformation(trenchGridLocal - float2(0.0, step));
 		float2 deformGradient = float2(dXP - dXN, dYP - dYN) / (2.0 * step);
 
 		// Surface drops by depth*deform toward the trench: tilt the normal
@@ -504,8 +534,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
 
-	// Snow texture taps — shared by albedo, normal and RMAOS.
-	float2 snowUV = (SnowUVOffset + input.GridLocal) / kSnowUVTile;
+	// Snow texture taps — shared by albedo, normal and RMAOS. Sampled at
+	// the parallax-corrected position so the texture rides the relief.
+	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
 
 	// Micro-relief — identical recipe to the terrain shell so ground and
