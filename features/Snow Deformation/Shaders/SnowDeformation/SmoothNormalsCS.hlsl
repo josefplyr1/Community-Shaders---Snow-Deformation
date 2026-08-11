@@ -117,32 +117,45 @@ uint FindSlot(uint h1, uint h2, bool claim)
 #ifdef FLATSTATS
 groupshared uint gsDivergent[64];
 groupshared uint gsTotal[64];
+groupshared float3 gsNormalSum[64];
 [numthreads(64, 1, 1)] void main(uint3 gtid
 								 : SV_GroupThreadID) {
 	uint divergent = 0;
 	uint total = 0;
+	float3 normalSum = float3(0.0, 0.0, 0.0);
 	for (uint v = gtid.x; v < VertexCount; v += 64) {
 		float4 smoothN = OutNormals[v];
 		[branch] if (smoothN.w > 0.5)
 		{
 			total++;
+			float3 rawN = normalize(LoadNormal(v));
+			normalSum += rawN;
 			// ~18-degree divergence marks a split-normal (edge/corner) vertex.
-			if (dot(smoothN.xyz, normalize(LoadNormal(v))) < 0.95)
+			if (dot(smoothN.xyz, rawN) < 0.95)
 				divergent++;
 		}
 	}
 	gsDivergent[gtid.x] = divergent;
 	gsTotal[gtid.x] = total;
+	gsNormalSum[gtid.x] = normalSum;
 	GroupMemoryBarrierWithGroupSync();
 	if (gtid.x == 0) {
 		uint sumDivergent = 0;
 		uint sumTotal = 0;
+		float3 sumNormal = float3(0.0, 0.0, 0.0);
 		for (uint i = 0; i < 64; i++) {
 			sumDivergent += gsDivergent[i];
 			sumTotal += gsTotal[i];
+			sumNormal += gsNormalSum[i];
 		}
 		float flatFraction = sumTotal > 0 ? float(sumDivergent) / float(sumTotal) : 0.0;
-		OutNormals[VertexCount] = float4(flatFraction, float(sumTotal), 0.0, 1.0);
+		// Alignment: 1 when every normal agrees (a planar SHEET — roofs,
+		// slabs), near 0 when they spread or cancel (rocks, boxes). The
+		// FLAT class needs BOTH signals: split-normal boxes score high
+		// divergence, planar sheets score high alignment; rocks score
+		// neither.
+		float alignRatio = sumTotal > 0 ? length(sumNormal) / float(sumTotal) : 0.0;
+		OutNormals[VertexCount] = float4(flatFraction, float(sumTotal), alignRatio, 1.0);
 	}
 }
 #endif

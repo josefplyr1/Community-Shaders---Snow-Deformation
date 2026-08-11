@@ -293,8 +293,11 @@ VS_OUTPUT main(VS_INPUT input)
 		// divergent fraction and get COMPLETELY FLAT snow (straight-up
 		// offset, raw shading normal, separate depth slider). Organically
 		// smooth meshes keep the pillow.
+		// FLAT = split-normal box (high divergence: walkways, planks) OR
+		// planar sheet (high normal alignment: roofs, slabs). Rocks and
+		// logs score neither and stay rounded.
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
+		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || flatStats.z > 0.9))
 			isFlat = 1.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)
@@ -521,11 +524,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	ifndef PATCH
 	// Hand-off to the trench patch: trampled ROUNDED pixels near the camera
 	// dissolve out so the patch's REAL carved geometry beneath shows
-	// through. Far trails (outside the patch span) and painted-flat trails
-	// keep the parallax relief instead.
-	[branch] if (input.Flat < 0.5 && pixelDeform > 0.02 && length(input.WorldPos.xy) < 950.0)
+	// through. Three gates keep the hand-off airtight:
+	// - RoundedDepth > 1: the patch culls sub-1-unit layers, so the skin
+	//   must not discard into nothing (the vanished floors at depth 1).
+	// - GEOMETRICALLY UP-FACING pixels only: the top-down patch can never
+	//   replace a flank — discarding the log's side pixels (whose map
+	//   column carries the trail) punched see-through holes.
+	// Far trails and painted-flat trails keep the parallax relief instead.
+	[branch] if (input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.02 && length(input.WorldPos.xy) < 950.0)
 	{
-		if (Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.03, 0.15, pixelDeform))
+		float3 geoUp = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
+		if (abs(geoUp.z) > 0.55 && Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.03, 0.15, pixelDeform))
 			discard;
 	}
 #	endif
@@ -651,13 +660,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
 
 #	ifndef PATCH
-	// Sliver cull, RELAXED for the drape: only truly degenerate vertical
-	// slivers die now — the sloped snow lips joining a draped shell to the
-	// mesh are legitimate geometry (the old 0.08-0.22 cull deleted them,
-	// which opened the windows onto the log mesh). The PATCH is exempt:
-	// its trench walls are steep real geometry.
+	// Vertical cull, MIDDLE strength: with the drape ramp the connective
+	// snow lips are SLOPED geometry (z well above 0.2) and survive, while
+	// truly vertical surfaces die — the interpolation-smeared white veils
+	// down house walls and pole sides that the widened coverage gate
+	// exposed. (Fully relaxing this cull was what let those through; the
+	// old harder cull was what cut gap windows into pre-drape skirts —
+	// the drape makes both safe.) The PATCH is exempt: its trench walls
+	// are steep real geometry.
 	float3 geoNormal = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
-	coverageAlpha *= smoothstep(0.02, 0.09, abs(geoNormal.z));
+	coverageAlpha *= smoothstep(0.06, 0.18, abs(geoNormal.z));
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins

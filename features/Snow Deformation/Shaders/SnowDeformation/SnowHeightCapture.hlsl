@@ -59,8 +59,9 @@ VS_OUTPUT main(VS_INPUT input)
 	float skinDepth = RoundedDepth;
 	[branch] if (HasSmoothedNormals > 0.5)
 	{
+		// Same FLAT condition as the skin: split-normal box OR planar sheet.
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
+		[flatten] if (flatStats.w > 0.5 && (flatStats.x > 0.5 || flatStats.z > 0.9))
 			skinDepth = ObjectsDepth;
 	}
 
