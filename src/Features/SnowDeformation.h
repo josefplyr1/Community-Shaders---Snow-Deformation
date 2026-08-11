@@ -442,7 +442,8 @@ public:
 		float RoundedDepth;
 		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
 		float VertexCountF;
-		float padStat;
+		/** @brief >0.5: road-texture capture — the skin VS tapers the plate lift where the road-depth raster ends (road chunks have no side geometry; without the taper their edges hang mid-air as paper sheets). */
+		float IsRoad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

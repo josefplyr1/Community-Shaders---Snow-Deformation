@@ -2595,6 +2595,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.IsRoad = cap.road ? 1.0f : 0.0f;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
@@ -2858,6 +2859,13 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
 
+	// Top/skin-depth rasters (VS t11/t12): the road plate edge-taper reads
+	// them during the SKIN draws, the trench patch drapes over them after.
+	if (heightSkinDepth) {
+		ID3D11ShaderResourceView* heightSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+		context->VSSetShaderResources(11, 2, heightSRVs);
+	}
+
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
 	// the "why is THIS rock bare" cases — name the reason in the log.
@@ -2999,6 +3007,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.IsRoad = cap.road ? 1.0f : 0.0f;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = heightHalfExtent;
@@ -3045,10 +3054,10 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
 		context->Draw(256 * 256 * 6, 0);
-		ID3D11ShaderResourceView* nullPatchSRVs[2] = { nullptr, nullptr };
-		context->VSSetShaderResources(11, 2, nullPatchSRVs);
 		globals::profiler->EndPass();
 	}
+	ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
+	context->VSSetShaderResources(11, 2, nullHeightSRVs);
 
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);

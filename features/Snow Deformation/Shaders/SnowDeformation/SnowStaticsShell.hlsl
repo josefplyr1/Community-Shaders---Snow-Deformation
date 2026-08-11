@@ -112,7 +112,7 @@ cbuffer StaticCB : register(b1)
 	float HasSmoothedNormals;
 	float RoundedDepth;   // ROUNDED-class depth (rocks, drifts, logs)
 	float VertexCountF;   // index of the flatness-stats element in SmoothedNormals
-	float padStat;
+	float IsRoad;         // road capture: skin VS tapers the plate lift at raster edges
 }
 
 #ifdef PSHADER
@@ -232,14 +232,8 @@ struct VS_OUTPUT
 };
 
 #ifdef VSHADER
-#	ifdef PATCH
-// TRENCH PATCH: the landscape shell's recipe applied to objects — a dense
-// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
-// the top-down object height raster and carved per VERTEX by the
-// deformation map. REAL geometry: real silhouettes, floors that hold at
-// every camera angle, no parallax. Grid cells with no object top, no
-// trampling, or a painted-flat (0-depth) class collapse to NaN and cull;
-// the skin dithers itself away over trails to hand off (see the PS).
+// Top-down object rasters, VS-stage: the PATCH drapes over them, and the
+// regular skin reads the depth raster for the ROAD edge-taper.
 Texture2D<float> ObjectTopRaw : register(t11);
 Texture2D<float> ObjectSkinDepth : register(t12);
 
@@ -275,6 +269,13 @@ float PatchSkinDepth(float2 worldXY)
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
 
+#	ifdef PATCH
+// TRENCH PATCH: the landscape shell's recipe applied to objects — a dense
+// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
+// the top-down object height raster and carved per VERTEX by the
+// deformation map. REAL geometry: real silhouettes, floors that hold at
+// every camera angle, no parallax. The skin dithers itself away over
+// trails to hand off (see the PS).
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
@@ -304,11 +305,25 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float topXN = PatchTop(worldXY - float2(8.0, 0.0));
 	float topYP = PatchTop(worldXY + float2(0.0, 8.0));
 	float topYN = PatchTop(worldXY - float2(0.0, 8.0));
-	float minNeighborTop = min(min(topXP, topXN), min(topYP, topYN));
+	// VALID neighbors only: a sentinel neighbor (off the footprint) must
+	// NOT count as a rim — that culled the patch's edge ring along every
+	// road chunk (the gaping trench holes at road edges). Facade sheets
+	// don't return: an off-footprint VERTEX still dies by its own sentinel
+	// top, killing outline-spanning triangles, and within-footprint
+	// roof-to-ground drops are caught by the height delta below.
+	float minNeighborTop = 1e9;
+	if (topXP > -50000.0)
+		minNeighborTop = min(minNeighborTop, topXP);
+	if (topXN > -50000.0)
+		minNeighborTop = min(minNeighborTop, topXN);
+	if (topYP > -50000.0)
+		minNeighborTop = min(minNeighborTop, topYP);
+	if (topYN > -50000.0)
+		minNeighborTop = min(minNeighborTop, topYN);
 	// 100 units: house facades still cull (wall drops are 300+), but steep
 	// boulder crests no longer lose their trench-edge vertices (the small
 	// notch triangles at rock rims).
-	bool rim = (top - minNeighborTop) > 100.0;
+	bool rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
 
 	// Neighborhood trample test: the patch lives only around trails,
 	// sampled with a 1.5-cell margin as a 16-RAY star (Josef's design).
@@ -438,6 +453,21 @@ VS_OUTPUT main(VS_INPUT input)
 	// traced per pixel in the PS (parallax + real SV_Depth), floored like
 	// the landscape shell so the mesh beneath never shows.
 	float depth = depthBase * upFacing;
+
+	// ROAD plates: road chunks are flat sheets with no side geometry — a
+	// uniform deep lift hangs their edges mid-air as hovering paper
+	// sheets. Taper the lift where the road-depth raster ends, so plate
+	// edges dive back to the mesh like a natural drift edge.
+	[branch] if (IsRoad > 0.5)
+	{
+		float roadDepthHere = max(depthBase, 1.0);
+		float n0 = PatchSkinDepth(worldAbs.xy + float2(16.0, 0.0));
+		float n1 = PatchSkinDepth(worldAbs.xy - float2(16.0, 0.0));
+		float n2 = PatchSkinDepth(worldAbs.xy + float2(0.0, 16.0));
+		float n3 = PatchSkinDepth(worldAbs.xy - float2(0.0, 16.0));
+		float minNeighborDepth = min(min(n0, n1), min(n2, n3));
+		depth *= saturate(minNeighborDepth / roadDepthHere);
+	}
 
 	worldAbs += inflateWS * depth;
 
