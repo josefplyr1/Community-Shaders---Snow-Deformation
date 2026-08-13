@@ -120,6 +120,12 @@ Texture2D<float> SceneDepth : register(t3);
 // no snow beneath walkways, roofs and bridges).
 Texture2D<float> ObjectHeights : register(t4);
 Texture2D<float> ObjectBottoms : register(t5);
+// Raw object tops (persistence-scrolled) and this frame's skin-depth raster,
+// shared with the trench patch: where the shell rides a captured object, its
+// layer wears the object's own skin depth instead of the landscape class
+// depth.
+Texture2D<float> ObjectTopsRaw : register(t11);
+Texture2D<float> ObjectSkinDepthMap : register(t12);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
@@ -286,6 +292,28 @@ float SampleObjectBottom(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+// The object-layer depth cap: the skin depth (max of 4 texels; the raster is
+// sentinel-free, 0 where nothing wrote) where a captured object covers the
+// texel, or a huge no-cap value where none does or the window does not reach.
+float SampleObjectDepthCap(float2 worldXY)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	if (!valid)
+		return 1e6;
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float4 tops = float4(
+		ObjectTopsRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t0.y, 0)),
+		ObjectTopsRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t1.y, 0)));
+	[flatten] if (all(tops < -50000.0))
+		return 1e6;
+	return max(
+		max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0))),
+		max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0))));
+}
+
 // World-anchored value noise, shared by the border domain warp (and any
 // other organic-edge shaping).
 float ShapeNoiseHash(float2 cell)
@@ -428,7 +456,18 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float2 worldXY = GridOrigin + gridLocal;
 		float field = SampleObjectHeight(worldXY);
 		[flatten] if (field > -50000.0)
+		{
+			// Where a captured object defines the surface, the layer wears
+			// the object's own skin depth instead of the landscape class
+			// depth (a thin-skinned rock must not carry a deep landscape
+			// layer). Blend by how far the object stands proud of the
+			// un-lifted base, so buried objects and the aprons around them
+			// keep landscape depth.
+			float lift = field - terrainHeight;
+			float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
+			rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
 			terrainHeight = max(terrainHeight, field);
+		}
 		// Suppression is smooth (0-1), so sheltered clearings fade at their
 		// edges instead of cutting.
 		coverage *= saturate(1.0 - SampleObjectBottom(worldXY));
@@ -663,7 +702,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// term can't blend) dissolves stochastically as the shell thins, instead
 	// of presenting a bare geometric plunge with a thin z-fight strip.
 	float pixelBare = saturate(1.0 - pixelCoverage);
-	float pixelRampDepth = pixelTerrain.y + (-8.0) * pixelBare;
+	// Mirror of the VS object-depth cap, so alpha and dither agree with the
+	// capped geometry over captured objects.
+	float pixelClassDepth = pixelTerrain.y;
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float2 capWorldXY = GridOrigin + gridLocal;
+		float capField = SampleObjectHeight(capWorldXY);
+		[flatten] if (capField > -50000.0)
+		{
+			float capLift = capField - pixelTerrain.x;
+			float capT = smoothstep(0.25, 1.0, capLift / max(pixelClassDepth, 1.0));
+			pixelClassDepth = lerp(pixelClassDepth, min(pixelClassDepth, SampleObjectDepthCap(capWorldXY)), capT);
+		}
+	}
+	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
 
 	// Depth reads shared by the edge dissolve and the proximity fade below.

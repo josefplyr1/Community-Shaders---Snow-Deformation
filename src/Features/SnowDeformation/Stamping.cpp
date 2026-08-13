@@ -17,6 +17,9 @@ static constexpr float kStampMovementGate = 3.0f;
 // Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
+// Per-frame speed below which an unsettled corpse shape counts as still for
+// the settle counter (ragdoll jitter sits below, real motion above).
+static constexpr float kCorpseStillSpeed = 0.5f;
 // Depth-scaled stamps: the nominal snow depth at the mover's position
 // scales its stamp radii (shallow snow takes narrower trenches). The clamp
 // keeps bare and unbaked ground recording readable trails.
@@ -49,9 +52,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 
 		const uint32_t formID = actor->formID;
-		// The dead carve only while moving; at rest the refill buries them.
-		// No first-sight waiver: decapitation swaps the 3D, and a waiver
-		// would re-trench under already-buried corpses.
+		// The dead carve every frame until they settle; once settled only a
+		// large displacement (dragging, explosions) wakes them and the
+		// refill buries their imprint. No first-sight waiver: decapitation
+		// swaps the 3D, and a waiver would re-trench under buried corpses.
 		const bool isDead = actor->IsDead();
 
 		CorpseRest* rest = nullptr;
@@ -104,32 +108,34 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float2 previous = current;
 				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
 				auto it = stampPrevPositions.find(key);
-				bool moved = true;
 				float sqDelta = 0.0f;
 				if (it != stampPrevPositions.end()) {
 					float2 delta = { current.x - it->second.x, current.y - it->second.y };
 					sqDelta = delta.x * delta.x + delta.y * delta.y;
 					if (sqDelta < kTrailBreakDistance * kTrailBreakDistance)
 						previous = it->second;
-					moved = sqDelta > kStampMovementGate * kStampMovementGate;
 				}
 				const bool firstSight = (it == stampPrevPositions.end());
 				// Against the frozen resting anchor: dragging accumulates
-				// past the gate, ragdoll jitter does not.
+				// past the wake distance, ragdoll jitter does not.
 				const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
 				if (isDead) {
-					anyShapeMoved |= !firstSight && moved;
+					// While unsettled the anchor follows every frame, so
+					// sqDelta is per-frame speed there; the epsilon separates
+					// real motion from jitter for the settle counter.
+					anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
 					anyShapeWoken |= woken;
 				}
-				if (isDead && (firstSight || !moved || (rest->settled && !woken))) {
-					// At rest: no stamp. Keep the old anchor so micro-jitter
-					// cannot hold the trench open. The resting shapes feed the
-					// burial mounds instead.
+				if (isDead && (firstSight || (rest->settled && !woken))) {
+					// First sight baselines only; settled corpses keep the
+					// frozen anchor and feed the burial mounds instead.
 					currentPositions[key] = firstSight ? current : it->second;
 					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
 						corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
+				// Unsettled dead stamp every frame, exactly like the living:
+				// the snow deforms as the body moves through it.
 				currentPositions[key] = current;
 
 				float4 stamp{};

@@ -388,6 +388,11 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* shellSRVs[8] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
 	context->PSSetShaderResources(0, 8, shellSRVs);
+	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
+	// patch): the object-depth cap on the shell's layer.
+	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+	context->VSSetShaderResources(11, 2, objectCapSRVs);
+	context->PSSetShaderResources(11, 2, objectCapSRVs);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
 	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {
@@ -470,9 +475,9 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
-	ID3D11ShaderResourceView* nullSRVs[10] = {};
-	context->VSSetShaderResources(0, 6, nullSRVs);
-	context->PSSetShaderResources(0, 10, nullSRVs);
+	ID3D11ShaderResourceView* nullSRVs[13] = {};
+	context->VSSetShaderResources(0, 13, nullSRVs);
+	context->PSSetShaderResources(0, 13, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
 	// D3D silently drops the binding with warning spam. t20 (glint noise) and
