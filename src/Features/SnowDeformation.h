@@ -136,6 +136,8 @@ public:
 		float SnowBorderUntrampledFade = 5.0f;
 		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
 		float SnowSnowFade = 10.0f;
+		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
+		float SnowMoundSteepness = 1.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
@@ -270,6 +272,11 @@ public:
 		float SkinFadeStart;
 
 		float SkinFadeEnd;
+		/** @brief Also the enable gate for the object height field in the shader (>0 = field bound). */
+		float ObjectLiftCap;
+		float2 ObjectHeightCenter;
+
+		float ObjectHeightHalfExtent;
 		float3 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -427,9 +434,16 @@ public:
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
 
+	/** @brief Raised snow more than this far above the terrain does not lift the height field (buildings must not become snow tents). Also doubles as the shader-side field-enable gate. */
+	static constexpr float kObjectLiftCap = 150.0f;
+
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
+	/** @brief Processed maps the shell samples (t4/t5): the slope-limited snow-height field and the smooth shelter/suppression mask, plus a cone-iteration scratch. */
+	Texture2D* heightTopFiltered = nullptr;
+	Texture2D* heightBottomFiltered = nullptr;
+	Texture2D* heightScratch = nullptr;
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
@@ -441,14 +455,30 @@ public:
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
+	ID3D11ComputeShader* heightCombineCS = nullptr;
+	ID3D11ComputeShader* heightConeCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
+		/** @brief Texel step for the current cone iteration. */
+		uint ConeStep;
+
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
+		/** @brief Max field rise per world unit (1.0 = 45 degrees), from SnowMoundSteepness. */
+		float SlopePerUnit;
+
+		/** @brief Terrain window addressing so the compute passes can sample ground heights. */
+		float2 TerrainWindowOrigin;
+		float TerrainTexelSize;
+		uint TerrainDim;
+
 		/** @brief Units/frame the accumulated tops/bottoms drift toward empty; stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
 		float GhostDecay;
+		float3 padH;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;

@@ -242,10 +242,15 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
 		}
 	}
+	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
-		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", {}, "cs_5_0", "ScrollCS"));
+		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
+	if (!heightCombineCS)
+		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
+	if (!heightConeCS)
+		heightConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeCS"));
 
-	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS) {
+	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
 		return false;
@@ -292,6 +297,9 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTopRaw[1] = makeHeightTexture("SnowDeformation::HeightTopRaw1");
 	heightBottomRaw[0] = makeHeightTexture("SnowDeformation::HeightBottomRaw0");
 	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
+	heightTopFiltered = makeHeightTexture("SnowDeformation::HeightFieldFiltered");
+	heightBottomFiltered = makeHeightTexture("SnowDeformation::HeightShelterMask");
+	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
 
 	// Skin-depth raster: R16F, SRV+RTV only (cleared and re-rasterized fresh
 	// every frame).
@@ -327,6 +335,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		-(int)std::lround((newCenter.y - heightWindowCenter.y) / texel)
 	};
 	processData.ClearAll = heightMapValid ? 0u : 1u;
+	processData.HeightWindowCenter = newCenter;
+	processData.HeightHalfExtent = kHeightMapHalfExtent;
+	processData.SlopePerUnit = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
+	constexpr float shellCellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	processData.TerrainWindowOrigin = { shellWindowCellX * shellCellSize, shellWindowCellY * shellCellSize };
+	processData.TerrainTexelSize = kShellVertexSpacing;
+	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
@@ -437,6 +452,49 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->VSSetConstantBuffers(1, 1, &nullCB1);
 	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
+
+	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
+	// (bottomFiltered) — bare ground under floating walkways/roofs/bridges.
+	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
+	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
+	context->CSSetConstantBuffers(0, 1, &processCB);
+	context->CSSetShaderResources(2, 1, &terrainSRV);
+	{
+		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
+		ID3D11UnorderedAccessView* combineUAVs[2] = { heightTopFiltered->uav.get(), heightBottomFiltered->uav.get() };
+		context->CSSetShaderResources(0, 2, combineSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, combineUAVs, nullptr);
+		context->CSSetShader(heightCombineCS, nullptr, 0);
+		context->Dispatch(dispatchDim, dispatchDim, 1);
+		context->CSSetShaderResources(0, 2, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+	}
+
+	// Angle of repose: multi-scale min-plus cone passes (large steps first),
+	// ping-ponging topFiltered <-> heightScratch and ENDING in topFiltered.
+	static constexpr uint kConeSteps[] = { 32, 16, 8, 4, 2, 1 };
+	// An even pass count is what lands the final result back in topFiltered.
+	static_assert(std::size(kConeSteps) % 2 == 0);
+	context->CSSetShader(heightConeCS, nullptr, 0);
+	Texture2D* coneIn = heightTopFiltered;
+	Texture2D* coneOut = heightScratch;
+	for (uint step : kConeSteps) {
+		processData.ConeStep = step;
+		heightProcessCB->Update(processData);
+		ID3D11ShaderResourceView* coneSRV = coneIn->srv.get();
+		ID3D11UnorderedAccessView* coneUAV = coneOut->uav.get();
+		context->CSSetShaderResources(0, 1, &coneSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &coneUAV, nullptr);
+		context->Dispatch(dispatchDim, dispatchDim, 1);
+		context->CSSetShaderResources(0, 1, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+		std::swap(coneIn, coneOut);
+	}
+
+	ID3D11ShaderResourceView* nullTerrainSRV = nullptr;
+	context->CSSetShaderResources(2, 1, &nullTerrainSRV);
+	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
+	context->CSSetShader(nullptr, nullptr, 0);
 }
 
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
