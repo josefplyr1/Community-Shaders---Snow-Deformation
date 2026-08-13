@@ -346,6 +346,64 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
 
+	// Exclusion zones: refresh on window scroll and periodically (doors and
+	// campfires never move, so a 60-frame cadence is plenty). Load doors
+	// (teleport data) are cave/building entrances — deeper recesses, bigger
+	// clears.
+	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
+	if (windowScrolled || (doorRefreshCounter++ % 60) == 0) {
+		ExclusionsCB exclusionData{};
+		uint32_t exclusionCount = 0;
+		if (auto player = RE::PlayerCharacter::GetSingleton()) {
+			if (auto tes = RE::TES::GetSingleton()) {
+				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
+					[&](RE::TESObjectREFR* a_ref) {
+						if (exclusionCount >= kMaxExclusions)
+							return RE::BSContainer::ForEachResult::kStop;
+						if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
+							return RE::BSContainer::ForEachResult::kContinue;
+						auto* base = a_ref->GetBaseObject();
+						if (!base)
+							return RE::BSContainer::ForEachResult::kContinue;
+
+						if (base->Is(RE::FormType::Door)) {
+							bool loadDoor = a_ref->extraList.HasType(RE::ExtraDataType::kTeleport);
+							auto pos = a_ref->GetPosition();
+							float angleZ = a_ref->GetAngleZ();
+							exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, loadDoor ? kLoadDoorClearRadius : kDoorClearRadius };
+							exclusionData.DirExtType[exclusionCount] = { std::sin(angleZ), std::cos(angleZ), loadDoor ? kLoadDoorForwardExtent : kDoorForwardExtent, 0.0f };
+							exclusionCount++;
+						} else {
+							// Explicit form-type chain: skyrim_cast to TESModel
+							// silently returns null for activator bases, which
+							// makes campfires invisible to the gather.
+							const char* modelPath = nullptr;
+							if (auto* acti = base->As<RE::TESObjectACTI>())
+								modelPath = acti->GetModel();
+							else if (auto* stat = base->As<RE::TESObjectSTAT>())
+								modelPath = stat->GetModel();
+							else if (auto* movable = base->As<RE::BGSMovableStatic>())
+								modelPath = movable->GetModel();
+							if (modelPath && modelPath[0]) {
+								std::string lowered(modelPath);
+								std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+									[](unsigned char c) { return (char)std::tolower(c); });
+								if (lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos) {
+									auto pos = a_ref->GetPosition();
+									exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, kFireClearRadius };
+									exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, 0.0f, 1.0f };
+									exclusionCount++;
+								}
+							}
+						}
+						return RE::BSContainer::ForEachResult::kContinue;
+					});
+			}
+		}
+		exclusionData.ExclusionCount = exclusionCount;
+		doorsCB->Update(exclusionData);
+	}
+
 	uint previous = heightCurrent;
 	heightCurrent ^= 1;
 
@@ -461,12 +519,16 @@ void SnowDeformation::RenderObjectHeightMap()
 	{
 		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
 		ID3D11UnorderedAccessView* combineUAVs[2] = { heightTopFiltered->uav.get(), heightBottomFiltered->uav.get() };
+		ID3D11Buffer* exclusionCB = doorsCB->CB();
+		context->CSSetConstantBuffers(1, 1, &exclusionCB);
 		context->CSSetShaderResources(0, 2, combineSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, combineUAVs, nullptr);
 		context->CSSetShader(heightCombineCS, nullptr, 0);
 		context->Dispatch(dispatchDim, dispatchDim, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+		ID3D11Buffer* nullExclusionCB = nullptr;
+		context->CSSetConstantBuffers(1, 1, &nullExclusionCB);
 	}
 
 	// Angle of repose: multi-scale min-plus cone passes (large steps first),

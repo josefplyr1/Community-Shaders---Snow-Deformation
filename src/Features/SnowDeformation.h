@@ -483,6 +483,28 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
 
+	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
+
+	/** @brief Doors get elliptical clears stretched along their facing (load doors — cave and building entrances — larger); campfires get noisy-edged full clears. Applied in CombineCS before the cone transform, so surrounding snow re-slopes into every clearing at the angle of repose. */
+	static constexpr uint kMaxExclusions = 96;
+	static constexpr float kDoorClearRadius = 110.0f;
+	static constexpr float kDoorForwardExtent = 70.0f;
+	static constexpr float kLoadDoorClearRadius = 150.0f;
+	static constexpr float kLoadDoorForwardExtent = 150.0f;
+	static constexpr float kFireClearRadius = 70.0f;
+
+	/** @brief Layout must match DoorCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) ExclusionsCB
+	{
+		float4 PosRadius[kMaxExclusions];   ///< xyz = position, w = radius
+		float4 DirExtType[kMaxExclusions];  ///< xy = facing dir, z = forward extent, w = type (0 door, 1 fire)
+		uint ExclusionCount;
+		float pad[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
+	ConstantBuffer* doorsCB = nullptr;
+	uint32_t doorRefreshCounter = 0;
+
 	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
 	void CreateHeightFieldResources();
 	/** @brief Scrolls the accumulated height maps to the new window position and rasterizes this frame's captured statics into them (MAX/MIN). Called from DrawShell before the screen-space passes. Implemented in SnowDeformation/Statics.cpp. */

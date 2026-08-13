@@ -9,6 +9,9 @@
 //             SHELTER mask: where the raw maps show a structure floating well
 //             above the ground (walkways, roofs, bridges), the ground beneath
 //             is sheltered from snowfall — dynamic "no snow under roofs".
+//             Exclusion zones (doors, campfires) clear the field and add to
+//             the mask, BEFORE the cone runs — so surrounding snow re-slopes
+//             into every clearing at the angle of repose, never a ravine.
 // ConeCS    — angle of repose: iterative min-plus cone transform. No point of
 //             the field may rise steeper than SlopePerUnit from its
 //             neighbors, so thin or tall features barely lift the field while
@@ -34,11 +37,36 @@ cbuffer HeightProcessCB : register(b0)
 	float3 padH;
 }
 
+#define MAX_EXCLUSIONS 96
+
+cbuffer DoorCB : register(b1)
+{
+	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius
+	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // xy = facing, z = forward extent, w = type (0 door, 1 fire)
+	uint ExclusionCount;
+	float3 exclusionPad;
+}
+
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
 Texture2D<float4> TerrainWindow : register(t2);
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
+
+// Cheap value noise for organic clearing edges.
+float ExclusionNoise(float2 worldXY)
+{
+	float2 c = worldXY / 24.0;
+	float2 i = floor(c);
+	float2 f = frac(c);
+	f = f * f * (3.0 - 2.0 * f);
+	float4 h;
+	h.x = frac(sin(dot(i, float2(127.1, 311.7))) * 43758.5453);
+	h.y = frac(sin(dot(i + float2(1, 0), float2(127.1, 311.7))) * 43758.5453);
+	h.z = frac(sin(dot(i + float2(0, 1), float2(127.1, 311.7))) * 43758.5453);
+	h.w = frac(sin(dot(i + float2(1, 1), float2(127.1, 311.7))) * 43758.5453);
+	return lerp(lerp(h.x, h.y, f.x), lerp(h.z, h.w, f.x), f.y);
+}
 
 // World XY of a height-map texel (v axis mirrors world +Y).
 float2 TexelWorldXY(uint2 p, uint2 dims)
@@ -116,6 +144,44 @@ float SampleTerrainHeight(float2 worldXY)
 		float bottom = InB[dtid.xy];
 		if (bottom - terrain >= 40.0 && top - terrain > 60.0)
 			suppress = 1.0;  // floating structure: bare ground beneath
+	}
+
+	// Exclusion zones: pull the field back to terrain and suppress snow.
+	// Doors use an ELLIPSE stretched along their facing axis (both ways —
+	// the recess and the doorstep); campfires use a noisy-edged circle for
+	// an organic melt ring. Z-gated (300) so upper-floor doors do not clear
+	// ground snow far below, while sunken cave entrances still qualify.
+	for (uint exclusionI = 0; exclusionI < ExclusionCount; exclusionI++) {
+		float3 center = ExclusionPosRadius[exclusionI].xyz;
+		float radius = ExclusionPosRadius[exclusionI].w;
+		float4 dirExtType = ExclusionDirExtType[exclusionI];
+		[branch] if (abs(center.z - terrain) < 300.0)
+		{
+			float2 d = worldXY - center.xy;
+			float influence;
+			[branch] if (dirExtType.w < 0.5)
+			{
+				// Door: symmetric ellipse, long axis along the facing, edge
+				// perturbed by the same noise as fire clearings so no two
+				// doorway hollows read as identical stamped shapes.
+				float u = dot(d, dirExtType.xy);
+				float v = dot(d, float2(-dirExtType.y, dirExtType.x));
+				float a = radius + dirExtType.z;
+				float b = radius * 0.85;
+				float e = sqrt((u * u) / (a * a) + (v * v) / (b * b));
+				e /= 0.8 + 0.4 * ExclusionNoise(worldXY);
+				influence = 1.0 - smoothstep(0.45, 1.0, e);
+			}
+			else
+			{
+				// Campfire: melt ring with a noise-perturbed edge.
+				float noisyRadius = radius * (0.8 + 0.5 * ExclusionNoise(worldXY));
+				float dist = length(d);
+				influence = 1.0 - smoothstep(noisyRadius * 0.4, noisyRadius, dist);
+			}
+			field = lerp(field, terrain, influence);
+			suppress = max(suppress, influence);
+		}
 	}
 
 	OutA[dtid.xy] = field;
