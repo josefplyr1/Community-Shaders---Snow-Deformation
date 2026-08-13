@@ -29,6 +29,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	uint stampCount = 0;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
+	corpseMoundSpheres.clear();
 
 	// Stamps come from the actors' actual Havok collision shapes — the same
 	// per-shape extraction Grass Collision uses (Util::GetShapeBound over
@@ -125,8 +126,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// Corpse at rest: no stamp. Keep the OLD anchor so
 					// ragdoll micro-jitter cannot hold the trench open, but
 					// real movement (dragging, explosions) re-triggers
-					// against it. First-seen corpses store a baseline.
+					// against it. First-seen corpses store a baseline. The
+					// resting shapes feed the burial mounds instead.
 					currentPositions[key] = firstSight ? current : it->second;
+					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
+						corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				currentPositions[key] = current;

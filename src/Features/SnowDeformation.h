@@ -436,6 +436,9 @@ public:
 
 	/** @brief Raised snow more than this far above the terrain does not lift the height field (buildings must not become snow tents). Also doubles as the shader-side field-enable gate. */
 	static constexpr float kObjectLiftCap = 150.0f;
+	/** @brief Corpse burial: mounds cap this far above the terrain (a mammoth makes a bump, not a hill), from at most this many resting collision spheres per frame. */
+	static constexpr float kCorpseMoundCap = 20.0f;
+	static constexpr uint kMaxCorpseSpheres = 32;
 
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters — the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
@@ -478,7 +481,15 @@ public:
 
 		/** @brief Units/frame the accumulated tops/bottoms drift toward empty — stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
 		float GhostDecay;
-		float3 padH;
+		/** @brief Deformation-map addressing for the corpse-mound refill gate (same mapping the shell's deformation samplers use). */
+		float2 DeformWindowOriginH;
+		float DeformInvWorldSizeH;
+
+		/** @brief Dead actors at rest, as collision spheres (xyz world center, w radius): CombineCS raises capped snow mounds over them, gated by local refill. */
+		uint32_t CorpseSphereCount;
+		float CorpseMoundCap;
+		float2 padH;
+		float4 CorpseSpheres[kMaxCorpseSpheres];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
@@ -566,6 +577,9 @@ protected:
 
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
+
+	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
+	std::vector<float4> corpseMoundSpheres;
 
 	/** @brief Stillness latch per corpse (formID). Ragdoll micro-drift accumulates against the FROZEN resting anchors and would eventually cross the movement gate, firing a one-frame trench pulse under an already-buried corpse. Once a corpse has been still long enough it settles: only a large accumulated displacement (real dragging, explosions) wakes it again. Erased when the actor is seen alive (reanimation). */
 	struct CorpseRest
