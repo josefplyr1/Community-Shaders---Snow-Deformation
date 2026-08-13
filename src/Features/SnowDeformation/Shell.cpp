@@ -10,6 +10,52 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
+/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. */
+static void SD_CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
+	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
+{
+	winrt::com_ptr<ID3D11Resource> srcRes;
+	a_srcSRV->GetResource(srcRes.put());
+	auto srcTex = srcRes.try_as<ID3D11Texture2D>();
+	if (!srcTex)
+		return;
+
+	D3D11_TEXTURE2D_DESC srcDesc;
+	srcTex->GetDesc(&srcDesc);
+
+	bool recreate = !a_tex || !a_srv;
+	if (a_tex) {
+		D3D11_TEXTURE2D_DESC haveDesc;
+		a_tex->GetDesc(&haveDesc);
+		recreate |= haveDesc.Width != srcDesc.Width || haveDesc.Height != srcDesc.Height ||
+		            haveDesc.ArraySize != srcDesc.ArraySize || haveDesc.Format != srcDesc.Format;
+	}
+	if (recreate) {
+		a_srv = nullptr;
+		a_tex = nullptr;
+
+		D3D11_TEXTURE2D_DESC copyDesc = srcDesc;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		copyDesc.MiscFlags = 0;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		copyDesc.CPUAccessFlags = 0;
+		if (FAILED(globals::d3d::device->CreateTexture2D(&copyDesc, nullptr, a_tex.put())))
+			return;
+		Util::SetResourceName(a_tex.get(), a_name);
+
+		// Reuse the source SRV's view description so typeless depth formats
+		// resolve to the same shader-readable format.
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		a_srcSRV->GetDesc(&srvDesc);
+		if (FAILED(globals::d3d::device->CreateShaderResourceView(a_tex.get(), &srvDesc, a_srv.put()))) {
+			a_tex = nullptr;
+			return;
+		}
+	}
+
+	globals::d3d::context->CopyResource(a_tex.get(), srcTex.get());
+}
+
 /**
  * @brief Lazy-loads the shell snow texture set from the user-configurable
  * path (through the MO2 VFS).
@@ -215,6 +261,9 @@ void SnowDeformation::DrawShell()
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
+	cbData.SnowSnowFade = settings.SnowSnowFade;
+	cbData.SkinFadeStart = kSkinFadeStart;
+	cbData.SkinFadeEnd = kStaticsCaptureRange;
 
 	shellCB->Update(cbData);
 
@@ -291,8 +340,36 @@ void SnowDeformation::DrawShell()
 	context->Draw(kShellGridDim * kShellGridDim * 6, 0);
 	globals::profiler->EndPass();
 
+	// Post-shell depth copy (Terrain Blending's technique adapted): the main
+	// depth now contains the landscape shell's surface. The statics skin
+	// samples this at t9 to measure its view-ray gap to the shell and cross-
+	// fade into it — fading toward what is ACTUALLY behind the pixel, which
+	// a height-based band cannot guarantee (it can expose the bare mesh
+	// beneath the skin instead). Targets must be unbound around CopyResource
+	// of a bound DSV.
+	{
+		auto& mainDepthDS = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		if (mainDepthDS.depthSRV) {
+			ID3D11RenderTargetView* boundRTVs[8] = {};
+			ID3D11DepthStencilView* boundDSV = nullptr;
+			context->OMGetRenderTargets(8, boundRTVs, &boundDSV);
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			SD_CopySRVResource(mainDepthDS.depthSRV, "SnowDeformation::ShellDepthCopy", shellDepthCopyTex, shellDepthCopySRV);
+			context->OMSetRenderTargets(8, boundRTVs, boundDSV);
+			for (auto* rtv : boundRTVs)
+				if (rtv)
+					rtv->Release();
+			if (boundDSV)
+				boundDSV->Release();
+		}
+		if (shellDepthCopySRV) {
+			ID3D11ShaderResourceView* copySRV = shellDepthCopySRV.get();
+			context->PSSetShaderResources(9, 1, &copySRV);
+		}
+	}
+
 	// Captured projected-snow statics, inflated with the same material.
-	// Inherits this pass's bindings (b0, t0-t7, s0, b4-b6, RTs, depth).
+	// Inherits this pass's bindings (b0, t0-t9, s0, b4-b6, RTs, depth).
 	DrawCapturedStatics();
 
 	// Restore everything we changed.
@@ -301,9 +378,9 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
-	ID3D11ShaderResourceView* nullSRVs[8] = {};
+	ID3D11ShaderResourceView* nullSRVs[10] = {};
 	context->VSSetShaderResources(0, 4, nullSRVs);
-	context->PSSetShaderResources(0, 8, nullSRVs);
+	context->PSSetShaderResources(0, 10, nullSRVs);
 	ID3D11ShaderResourceView* nullGlintSRV = nullptr;
 	context->PSSetShaderResources(20, 1, &nullGlintSRV);
 	ID3D11SamplerState* restoreSampler = prevSampler.get();

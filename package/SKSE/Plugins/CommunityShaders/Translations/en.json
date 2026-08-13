@@ -1360,6 +1360,8 @@
     "feature.snow_deformation.snow_deformation": "Snow Deformation",
     "feature.snow_deformation.snow_meshes_depth": "Round Objects",
     "feature.snow_deformation.snow_meshes_depth_tooltip": "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D.",
+    "feature.snow_deformation.snow_snow_fade": "Snow <-> Snow Fade",
+    "feature.snow_deformation.snow_snow_fade_tooltip": "Cross-fade between OBJECT snow and LANDSCAPE snow where their surfaces run close in height (road meshes, low platforms). Wider = the two snow kinds dither into each other instead of meeting at a hard seam.",
     "feature.snow_deformation.snow_texture_linear": "Linear (PBR) Texture",
     "feature.snow_deformation.snow_texture_linear_tooltip": "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored.",
     "feature.snow_deformation.snow_texture_path": "Shell Snow Texture",

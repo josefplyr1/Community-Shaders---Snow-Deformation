@@ -67,7 +67,11 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;
 	float BorderUntrampledFade;
-	float2 padShell;
+	float SnowSnowFade;   // object-skin <-> landscape-shell cross-fade band
+	float SkinFadeStart;  // statics-skin distance dissolve band (units)
+
+	float SkinFadeEnd;
+	float3 padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -93,9 +97,14 @@ cbuffer StaticCB : register(b1)
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float> DeformationMap : register(t1);
 Texture2D<float4> SnowDiffuse : register(t2);
+// Full-scene depth copy taken BEFORE the shell pass (see SnowShell.hlsl).
+Texture2D<float> SceneDepth : register(t3);
 // TruePBR snow companion maps (see SnowShell.hlsl) — inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
+// Depth AFTER the terrain shell drew (its surface included) — the skin's
+// view-ray reference for cross-fading into the landscape shell.
+Texture2D<float> ShellDepthCopy : register(t9);
 SamplerState SnowSampler : register(s0);
 #endif
 
@@ -177,16 +186,18 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 
-	// Snow accumulates on up-facing surfaces only (steep shingles and walls
-	// stay bare, matching the vanilla projection's extent). The gate uses
-	// the RAW normal: displacement direction may be the smoothed one (twins
-	// must move together to seal rims), but ACCUMULATION is physics — a
-	// vertical face does not collect snow just because its top edge is
-	// welded to a horizontal one. The layer stays geometrically UNCARVED:
-	// on low-poly meshes a carved vertex would drag whole 100+-unit
-	// triangles down with it — trench relief is traced per pixel in the PS
-	// instead.
-	float upFacing = smoothstep(0.4, 0.7, nrmWS.z);
+	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
+	// bare, matching the vanilla projection's extent). FLAT meshes gate on
+	// the RAW normal: their straight-up inflate direction would paint the
+	// sides white. ROUNDED meshes use the DRAPE ramp: with a hard 0.4-0.7
+	// gate a deep layer becomes a full-height cap hovering over bare sides,
+	// joined by near-vertical skirts. Ramping depth over almost the whole
+	// up-facing range pins the shell's edges to the mesh — it puffs at the
+	// top and meets the surface in a sloped snow lip.
+	// The layer stays geometrically UNCARVED: on low-poly meshes a carved
+	// vertex would drag whole 100+-unit triangles down with it — trench
+	// relief is traced per pixel in the PS instead.
+	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, inflateWS.z);
 	float depth = depthBase * upFacing;
 
 	worldAbs += inflateWS * depth;
@@ -349,9 +360,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 normalWS = normalize(input.NormalWS);
 	float2 worldXY = GridOrigin + input.GridLocal;
+	float pixelDist = length(input.WorldPos);
 	// Per-pixel up-facing gate from the interpolated RAW normal (see the VS
 	// note on Coverage): smooth accumulation edges on low-poly meshes.
+	// STRICT gate: nothing steeper than ~66 degrees wears snow. A wide gate
+	// matching the drape ramp smears translucent snow onto steep faces
+	// (wall fog, boulder-flank sheets, bark streaks — TAA resolves the
+	// partial dither into a wet-looking film). The drape's GEOMETRY still
+	// pins shell edges to the mesh; only the lip's visibility fades here.
 	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
+	// Geometric steepness gate — one fix for three symptoms (wall fog,
+	// boulder-flank sheets, trunk-bark streaks): on huge low-poly triangles
+	// the INTERPOLATED normal smears one top vertex's up-ness down the whole
+	// face, and sloped faces (30-60 degrees) sail over the vertical sliver
+	// cull below. The DERIVATIVE normal knows each pixel's true facing:
+	// snow sheds off anything steeper than ~65 degrees regardless of
+	// interpolation. The band sits BELOW the interpolated gate's range, so
+	// rounded snow edges (z 0.4+) stay interpolation-shaped and per-face
+	// blockiness cannot return.
+	float3 geoFacing = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
+	pixelCoverage *= smoothstep(0.22, 0.42, abs(geoFacing.z));
 
 	// Per-pixel trench SHADING: the geometry stays uncarved, but where actors
 	// have trampled, the surface reads as a dent — normal tilted up the
@@ -374,34 +402,90 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Per-pixel coverage: noisy up-facing gate (vanilla-projection-like
 	// extent). NO deformation carve in alpha: cutting holes would reveal the
 	// bright projected-diffuse beneath — trampling only dents the shading.
-	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3);
+	// The noise only MODULATES existing coverage — it must never create
+	// snow from nothing, or undersides and walls pick up dithered dabs.
+	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3 * saturate(pixelCoverage * 4.0));
 	float coverageAlpha = smoothstep(0.05, 0.35, coverageGate);
+	// Hard down-facing kill: snow accumulates on TOPS only. The interpolated
+	// raw normal is negative on every underside pixel, whatever the noise or
+	// seam blends below decide.
+	coverageAlpha *= smoothstep(-0.05, 0.1, input.Coverage);
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells dither into
-	// one blanket instead of meeting at a hard seam.
+	// one blanket instead of meeting at a hard seam. The SAME dials that
+	// shape class borders shape this hand-off: Border Smoothness widens the
+	// dissolve band (a taller, softer rise of ground snow up the object) and
+	// Border Noise jitters WHERE the meeting line sits, so the seam wanders
+	// organically around a rock's base instead of tracing a level line.
 	float3 groundData = SampleTerrainStatics(input.GridLocal);
 	[flatten] if (groundData.x > -50000.0)
 	{
 		float groundShellZ = groundData.x + max(groundData.y, 0.0);
 		float pixelAbsZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-		coverageAlpha *= smoothstep(-10.0, 4.0, pixelAbsZ - groundShellZ);
+		float seamNoise = (CoverageNoise(worldXY * 0.5) - 0.5) * BorderNoise * 0.5;
+		float bandLow = -(4.0 + BorderSmooth * 0.5);
+		float bandHigh = 2.0 + BorderSmooth * 0.125;
+		coverageAlpha *= smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
 	}
+
+	// Snow<->Snow Fade — Terrain Blending's technique adapted: the fade is
+	// measured along the VIEW RAY against the landscape shell's actually-
+	// rendered surface (post-shell depth copy), and ONLY where the thing
+	// behind this pixel IS the shell (pre-vs-post depth divergence). A
+	// height-based band could dissolve the skin over its own mesh and expose
+	// the bare road beneath; this construction can only ever fade white snow
+	// into white snow.
+	[branch] if (SnowSnowFade > 0.01)
+	{
+		float postShellZ = SharedData::GetScreenDepth(ShellDepthCopy.Load(int3(input.Position.xy, 0)));
+		float preShellZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		[flatten] if (preShellZ - postShellZ > 1.0)  // the landscape shell is behind this pixel
+		{
+			float skinZ = input.CurrentClip.w;
+			coverageAlpha *= smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
+		}
+	}
+
+	// Vertical cull, MIDDLE strength: with the drape ramp the connective
+	// snow lips are SLOPED geometry (z well above 0.2) and survive, while
+	// truly vertical surfaces die — the interpolation-smeared white veils
+	// down house walls and pole sides. (A harder cull cuts gap windows into
+	// the drape's skirts; full relaxation lets the veils through.)
+	coverageAlpha *= smoothstep(0.06, 0.18, abs(geoFacing.z));
+
+	// Distance dissolve: from SkinFadeStart the skin stochastically thins
+	// back into the object's own material, fully gone by SkinFadeEnd (the
+	// capture range) — distant objects keep their real look instead of
+	// turning blank white.
+	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
 
-	// Snow texture taps — shared by albedo, normal and RMAOS.
+	// Snow texture taps — shared by albedo, normal and RMAOS. Steep drape
+	// sides re-project along the facing wall plane: the top-down projection
+	// stretches down a puffed shell's flanks, and the stochastic cells
+	// follow the same plane so the anti-tiling stays coherent instead of
+	// smearing.
 	float2 snowUV = (SnowUVOffset + input.GridLocal) / kSnowUVTile;
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
+	float2 snowCellXY = worldXY;
+	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+	[branch] if (snowSteepness > 0.001)
+	{
+		float worldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float2 sidePlane = abs(normalWS.x) > abs(normalWS.y) ? float2(worldXY.y, worldZAbs) : float2(worldXY.x, worldZAbs);
+		snowUV = lerp(snowUV, (SnowUVOffset + sidePlane) / kSnowUVTile, snowSteepness);
+		snowCellXY = lerp(worldXY, sidePlane, snowSteepness);
+	}
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
 
 	// Micro-relief — identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
 	// gate: bending the normal first would jitter the up-facing test into
 	// speckled edges.
-	float pixelDist = length(input.WorldPos);
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
