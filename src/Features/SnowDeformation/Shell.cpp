@@ -262,8 +262,11 @@ void SnowDeformation::DrawShell()
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
-	cbData.SkinFadeStart = kSkinFadeStart;
-	cbData.SkinFadeEnd = kStaticsCaptureRange;
+	// Statics-skin distance dissolve: starts at the blend slider, fully gone
+	// at the Object Snow capture range (floored one meter past the start so
+	// the smoothstep never degenerates when the sliders cross).
+	cbData.SkinFadeStart = settings.RangeSkinsFadeM * kUnitsPerMeter;
+	cbData.SkinFadeEnd = std::max(settings.RangeSkinsM * kUnitsPerMeter, cbData.SkinFadeStart + kUnitsPerMeter);
 
 	shellCB->Update(cbData);
 

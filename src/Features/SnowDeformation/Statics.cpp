@@ -53,13 +53,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			return;
 	}
 
-	// Range cap: distant mountains are snow-projected everywhere in Skyrim;
-	// the skin only matters where deformation can happen.
+	// Range cap (Object Snow slider): distant mountains are snow-projected
+	// everywhere in Skyrim; the skin only matters within the chosen range.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
-	if (dx * dx + dy * dy > kStaticsCaptureRange * kStaticsCaptureRange)
+	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
+	if (dx * dx + dy * dy > captureRange * captureRange)
 		return;
 
 	// The same geometry renders through multiple passes; capture once.

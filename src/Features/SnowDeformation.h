@@ -139,6 +139,9 @@ public:
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
+		float RangeSkinsM = 750.0f;
+		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
+		float RangeSkinsFadeM = 100.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -357,11 +360,6 @@ public:
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
-
-	/** @brief Only statics within this XY range of the camera are captured — distant mountains are snow-projected everywhere in Skyrim, but the skin only matters where deformation can happen. */
-	static constexpr float kStaticsCaptureRange = 12288.0f;
-	/** @brief Distance where the skin starts dissolving back into the object's own material (fully gone at the capture range) — distant objects keep their real look instead of turning blank white. */
-	static constexpr float kSkinFadeStart = 7000.0f;
 
 	/** @brief Depth copy taken AFTER the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell — Terrain Blending's technique adapted to the two snow kinds. */
 	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;

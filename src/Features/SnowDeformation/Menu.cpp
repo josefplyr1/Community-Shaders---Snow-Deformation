@@ -94,6 +94,12 @@ void SnowDeformation::DrawSettings()
 				trenchRangeDirty = true;
 			if (auto _ttRt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+			ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRk = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+			ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRkf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
 			ImGui::TreePop();
 		}
 
