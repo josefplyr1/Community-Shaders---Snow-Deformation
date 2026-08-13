@@ -205,6 +205,25 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
+	// Trench patch (PATCH define): SV_VertexID grid, no input layout. The
+	// draw guards on the pointers, so a compile failure just skips the pass.
+	if (!patchVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchVS)))
+				Util::SetResourceName(patchVS, "SnowDeformation::TrenchPatchVS");
+		}
+	}
+	if (!patchPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
+				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
+		}
+	}
+
 	constexpr auto heightPath = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
 	if (!heightVS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -737,6 +756,36 @@ void SnowDeformation::DrawCapturedStatics()
 	context->IASetInputLayout(nullptr);
 	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
+
+	// TRENCH PATCH: the landscape shell's dense-grid carve applied to object
+	// tops — real carved geometry drawn after the skins so it shows through
+	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
+	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 1.0f || settings.RoadMeshesDepth > 1.0f)) {
+		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
+		context->VSSetShader(patchVS, nullptr, 0);
+		context->PSSetShader(patchPS, nullptr, 0);
+
+		StaticsCB scb{};
+		// WorldRow0.xy = snapped patch origin (256 quads x 8 units = +-1024
+		// around the height-window center, which tracks the camera).
+		scb.WorldRow0 = {
+			std::floor((heightWindowCenter.x - 1024.0f) / 8.0f) * 8.0f,
+			std::floor((heightWindowCenter.y - 1024.0f) / 8.0f) * 8.0f, 0.0f, 0.0f
+		};
+		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		staticsCB->Update(scb);
+
+		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+		context->VSSetShaderResources(11, 2, patchSRVs);
+		context->Draw(256 * 256 * 6, 0);
+
+		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
+		context->VSSetShaderResources(11, 2, nullHeightSRVs);
+		globals::profiler->EndPass();
+	}
 
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);

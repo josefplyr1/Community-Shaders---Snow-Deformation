@@ -460,6 +460,9 @@ public:
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
+	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops — real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
+	ID3D11VertexShader* patchVS = nullptr;
+	ID3D11PixelShader* patchPS = nullptr;
 	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */
 	winrt::com_ptr<ID3DBlob> staticsVSBlob;
 	bool staticsShadersFailed = false;
