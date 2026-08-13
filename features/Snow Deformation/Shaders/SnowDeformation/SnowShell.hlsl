@@ -260,8 +260,12 @@ float SampleObjectBottom(float2 worldXY)
 	float2 dims;
 	bool valid;
 	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	// t5 is a 0-1 suppression MASK: outside the window there is no shelter
+	// knowledge, so nothing is suppressed. (A raw-height sentinel here
+	// zeroed the VS coverage on every out-of-window vertex, flipping the
+	// bare-submerge term on all distant shell geometry.)
 	if (!valid)
-		return 100000.0;  // raw bottom-map sentinel (out-of-window)
+		return 0.0;
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
