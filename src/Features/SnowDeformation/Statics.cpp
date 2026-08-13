@@ -343,6 +343,12 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
+	processData.DeformWindowOriginH = windowOrigin;
+	processData.DeformInvWorldSizeH = 1.0f / deformWorldSize;
+	processData.CorpseSphereCount = (uint32_t)corpseMoundSpheres.size();
+	processData.CorpseMoundCap = kCorpseMoundCap;
+	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
+		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -517,6 +523,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
+	// Deformation map (t3): CombineCS gates corpse mounds on local refill.
+	ID3D11ShaderResourceView* deformSRV = GetDeformationSRV();
+	context->CSSetShaderResources(3, 1, &deformSRV);
 	{
 		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
 		ID3D11UnorderedAccessView* combineUAVs[2] = { heightTopFiltered->uav.get(), heightBottomFiltered->uav.get() };
@@ -553,8 +562,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		std::swap(coneIn, coneOut);
 	}
 
-	ID3D11ShaderResourceView* nullTerrainSRV = nullptr;
-	context->CSSetShaderResources(2, 1, &nullTerrainSRV);
+	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
+	context->CSSetShaderResources(2, 2, nullTailSRVs);
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 }
