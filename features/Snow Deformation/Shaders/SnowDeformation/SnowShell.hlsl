@@ -208,6 +208,20 @@ float ShapeNoise(float2 p)
 		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
+// ---- Surface undulation: wind-settled dunes ----
+// Deep snow is never a mathematically smooth sheet: wind works it into broad,
+// gentle waves. Two octaves of world-anchored value noise, added as REAL
+// geometry (via ShellSurfaceZ, so the VS displaces by it) and shaded
+// per-pixel through its gradient. Amplitude scales with local depth so thin
+// snow, class boundaries and carved floors stay flat.
+static const float kUndulationAmp = 3.5;
+
+float Undulation(float2 worldXY)
+{
+	float n = ShapeNoise(worldXY / 340.0) * 0.72 + ShapeNoise(worldXY / 110.0) * 0.28;
+	return (n - 0.5) * 2.0 * kUndulationAmp;
+}
+
 // Class-border shaping. Landscape texture borders are hard edges in the
 // baked depth/coverage data, so a +30 snow class meeting a -5 mud class
 // produces a ravine wall exactly along the texture seam. Two live controls:
@@ -323,11 +337,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	depth = lerp(-8.0, depth, edgeFade);
 
 	// Deformation carves only where the layer is actually raised; the
-	// negative-depth submerge at class edges is untouched.
+	// negative-depth submerge at class edges is untouched. The dune
+	// undulation rides on top, scaled by the remaining depth so carved
+	// floors and thin edges stay flat (3.5/8 < 1 keeps it non-negative).
 	[flatten] if (depth > 0.0)
 	{
 		float deformation = saturate(SampleDeformation(gridLocal));
 		depth *= 1.0 - deformation;
+		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 	}
 
 	return terrainHeight + depth;
@@ -586,11 +603,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelDepth = max(pixelRampDepth, 0.0);
 	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) - pixelDepth * deformGradient;
 
+	// Undulation gradient (same field the VS displaced by) shades the dunes.
+	float2 worldXYPS = GridOrigin + gridLocal;
+	float undScale = saturate(pixelDepth / 8.0);
+	[branch] if (undScale > 0.001)
+	{
+		const float uStep = 12.0;
+		float uXP = Undulation(worldXYPS + float2(uStep, 0.0));
+		float uXN = Undulation(worldXYPS - float2(uStep, 0.0));
+		float uYP = Undulation(worldXYPS + float2(0.0, uStep));
+		float uYN = Undulation(worldXYPS - float2(0.0, uStep));
+		gradZ += float2(uXP - uXN, uYP - uYN) / (2.0 * uStep) * undScale;
+	}
+
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
 
 	// Snow texture taps — shared by albedo, normal and RMAOS so every map
 	// agrees on the same anti-tiling offsets.
-	float2 worldXYPS = GridOrigin + gridLocal;
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 
