@@ -78,9 +78,15 @@ cbuffer StaticCB : register(b1)
 	float4 WorldRow1;
 	float4 WorldRow2;
 
-	// Snow layer height for this object, model-class resolved on the CPU.
-	float ObjectsDepth;
+	float ObjectsDepth;  // FLAT-class depth (walkways, roofs, planks)
 	float3 padStat;
+
+	// >0.5: SmoothedNormals (VS t10) holds position-averaged normals for
+	// this object — pillow inflation for flat split-normal meshes.
+	float HasSmoothedNormals;
+	float RoundedDepth;  // ROUNDED-class depth (rocks, drifts, logs)
+	float VertexCountF;  // index of the flatness-stats element in SmoothedNormals
+	float padStat2;
 }
 
 #ifdef PSHADER
@@ -99,7 +105,14 @@ struct VS_INPUT
 {
 	float4 Position : POSITION0;
 	float4 Normal : NORMAL0;
+	uint VertexID : SV_VertexID;
 };
+
+#ifdef VSHADER
+// Position-averaged normals (model space) built by SmoothNormalsCS, indexed
+// by vertex id. w=0 entries are unresolved — fall back to the raw normal.
+StructuredBuffer<float4> SmoothedNormals : register(t10);
+#endif
 
 struct VS_OUTPUT
 {
@@ -110,6 +123,7 @@ struct VS_OUTPUT
 	float3 NormalWS : TEXCOORD3;
 	float2 GridLocal : TEXCOORD4;
 	float Coverage : TEXCOORD5;
+	float Flat : TEXCOORD6;
 };
 
 #ifdef VSHADER
@@ -117,6 +131,30 @@ VS_OUTPUT main(VS_INPUT input)
 {
 	float3 posMS = input.Position.xyz;
 	float3 nrmMS = input.Normal.xyz * 2.0 - 1.0;
+
+	// Pillow inflation: displace along POSITION-AVERAGED normals where
+	// available. Split-normal flat meshes (planks, roofs, pole caps) get the
+	// smooth normals they lack — shared-position twins displace identically
+	// (rim cracks sealed by construction), plank edges mushroom outward like
+	// pole caps. Already-smooth meshes are unchanged (average == raw).
+	float3 inflateMS = nrmMS;
+	float isFlat = 0.0;
+	[branch] if (HasSmoothedNormals > 0.5)
+	{
+		// Mesh-level flatness stats (element appended past the last vertex):
+		// split-normal plates — walkways, roofs, planks — score a high
+		// divergent fraction and get COMPLETELY FLAT snow (straight-up
+		// offset, raw shading normal, separate depth slider). Organically
+		// smooth meshes keep the pillow. Divergence-only on purpose:
+		// alignment-based extensions misclassify real compound meshes (see
+		// FlatStatsCS); roofs classifying rounded is the accepted cost.
+		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
+		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
+			isFlat = 1.0;
+		float4 smoothEntry = SmoothedNormals[input.VertexID];
+		[flatten] if (smoothEntry.w > 0.5)
+			inflateMS = smoothEntry.xyz;
+	}
 
 	float3 worldAbs = float3(
 		dot(WorldRow0.xyz, posMS) + WorldRow0.w,
@@ -126,18 +164,32 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow0.xyz, nrmMS),
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS)));
+	float3 inflateWS = normalize(float3(
+		dot(WorldRow0.xyz, inflateMS),
+		dot(WorldRow1.xyz, inflateMS),
+		dot(WorldRow2.xyz, inflateMS)));
+	// FLAT class: displacement goes straight up — no pillow, no mushroom
+	// rims, no per-plank shading gradient. The snow on a walkway is a
+	// featureless flat sheet.
+	[flatten] if (isFlat > 0.5)
+		inflateWS = float3(0.0, 0.0, 1.0);
+	float depthBase = lerp(RoundedDepth, ObjectsDepth, isFlat);
 
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 
 	// Snow accumulates on up-facing surfaces only (steep shingles and walls
-	// stay bare, matching the vanilla projection's extent). The layer stays
-	// geometrically UNCARVED: on low-poly meshes a carved vertex would drag
-	// whole 100+-unit triangles down with it — trench relief is traced per
-	// pixel in the PS instead.
+	// stay bare, matching the vanilla projection's extent). The gate uses
+	// the RAW normal: displacement direction may be the smoothed one (twins
+	// must move together to seal rims), but ACCUMULATION is physics — a
+	// vertical face does not collect snow just because its top edge is
+	// welded to a horizontal one. The layer stays geometrically UNCARVED:
+	// on low-poly meshes a carved vertex would drag whole 100+-unit
+	// triangles down with it — trench relief is traced per pixel in the PS
+	// instead.
 	float upFacing = smoothstep(0.4, 0.7, nrmWS.z);
-	float depth = ObjectsDepth * upFacing;
+	float depth = depthBase * upFacing;
 
-	worldAbs += nrmWS * depth;
+	worldAbs += inflateWS * depth;
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
@@ -147,13 +199,18 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	vsout.NormalWS = nrmWS;
+	// Displaced snow shades by the smooth surface it forms, not the flat
+	// face beneath; undisplaced vertices keep the raw normal. FLAT meshes
+	// always shade by the raw normal — the smoothed-normal lerp stamps an
+	// identical shading gradient onto every plank instance.
+	vsout.NormalWS = isFlat > 0.5 ? nrmWS : normalize(lerp(nrmWS, inflateWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
 	// RAW normal Z, interpolated — the PS runs the up-facing smoothstep PER
 	// PIXEL. Thresholding in the VS makes low-poly rocks flip whole FACES
 	// between snowed and bare (blocky patches); thresholding the interpolated
 	// normal instead varies smoothly across faces.
 	vsout.Coverage = nrmWS.z;
 	vsout.GridLocal = gridLocal;
+	vsout.Flat = isFlat;
 	return vsout;
 }
 #endif
@@ -310,7 +367,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dYN = SampleDeformation(input.GridLocal - float2(0.0, step));
 		float2 deformGradient = float2(dXP - dXN, dYP - dYN) / (2.0 * step);
 
-		float pixelDepth = min(ObjectsDepth, 12.0) * pixelCoverage;
+		float pixelDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0) * pixelCoverage;
 		normalWS = normalize(normalWS + float3(deformGradient * pixelDepth * 0.6, 0.0));
 	}
 
