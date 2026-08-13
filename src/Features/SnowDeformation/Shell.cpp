@@ -10,8 +10,7 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
-/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. */
-static void SD_CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
+void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
 	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
 {
 	winrt::com_ptr<ID3D11Resource> srcRes;
@@ -166,6 +165,15 @@ ID3D11VertexShader* SnowDeformation::GetShellVS()
 	return shellVS;
 }
 
+ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
+{
+	if (!shellShadowVS) {
+		logger::debug("Compiling SnowShell shadow-cast VS");
+		shellShadowVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" } }, "vs_5_0"));
+	}
+	return shellShadowVS;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPS()
 {
 	if (!shellPS) {
@@ -268,6 +276,23 @@ void SnowDeformation::DrawShell()
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = kHeightMapHalfExtent;
 
+	// Crisp shadows: full-resolution comparison PCF against the cascade-atlas
+	// copies taken at the shadow-mask pass. When the copies are missing this
+	// frame, the shader falls back to the blurred VSM path.
+	cbData.CrispShadows = (shadowAtlasCopySRV && shadowEsramCopySRV) ? 1.0f : 0.0f;
+
+	// Shadow-source diagnostics for the settings UI.
+	dbgLodDescriptorCount = 0;
+	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
+		if (auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight) {
+			auto& dirLightData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
+			dbgLodDescriptorCount = (uint32_t)sunShadowLight->GetRuntimeData().shadowmapDescriptors.size();
+			dbgLodEndSplits[0] = dirLightData.endSplitDistances[0];
+			dbgLodEndSplits[1] = dirLightData.endSplitDistances[1];
+			dbgLodEndSplits[2] = dirLightData.endSplitDistances[2];
+		}
+	}
+
 	shellCB->Update(cbData);
 
 	// Back up the pipeline state we touch so the composite and later game
@@ -301,6 +326,12 @@ void SnowDeformation::DrawShell()
 	// and a same-frame-scrolled texture must be uploaded after the scroll.)
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	shellCB->Update(cbData);
+
+	// Snapshot for next frame's shadow-caster injection (it runs at the
+	// shadow-mask pass, before DrawShell recomputes these values).
+	if (!lastShellCBData)
+		lastShellCBData = std::make_unique<ShellCB>();
+	*lastShellCBData = cbData;
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
@@ -348,11 +379,31 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
 		context->PSSetShaderResources(20, 1, &glintSRV);
 	}
+	// Raw shadow-atlas copies (t22/t23) + comparison sampler (s2) for crisp
+	// cascade shadows; the statics skin inherits these too.
+	if (cbData.CrispShadows > 0.5f) {
+		if (!shadowCmpSampler) {
+			D3D11_SAMPLER_DESC cmpDesc{};
+			cmpDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+			cmpDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+			cmpDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			cmpDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			cmpDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+			cmpDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			globals::d3d::device->CreateSamplerState(&cmpDesc, shadowCmpSampler.put());
+			Util::SetResourceName(shadowCmpSampler.get(), "SnowDeformation::ShadowCmpSampler");
+		}
+		ID3D11ShaderResourceView* shadowSRVs[2] = { shadowAtlasCopySRV.get(), shadowEsramCopySRV.get() };
+		context->PSSetShaderResources(22, 2, shadowSRVs);
+		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
+		context->PSSetSamplers(2, 1, &cmpSampler);
+	}
 
-	winrt::com_ptr<ID3D11SamplerState> prevSampler;
-	context->PSGetSamplers(0, 1, prevSampler.put());
-	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
-	context->PSSetSamplers(0, 1, &snowSampler);
+	winrt::com_ptr<ID3D11SamplerState> prevSamplers[2];
+	context->PSGetSamplers(0, 1, prevSamplers[0].put());
+	context->PSGetSamplers(1, 1, prevSamplers[1].put());
+	ID3D11SamplerState* shellSamplers[2] = { shellSnowSampler.get(), shellLinearSampler.get() };
+	context->PSSetSamplers(0, 2, shellSamplers);
 
 	context->VSSetShader(vs, nullptr, 0);
 	context->PSSetShader(ps, nullptr, 0);
@@ -375,7 +426,7 @@ void SnowDeformation::DrawShell()
 			ID3D11DepthStencilView* boundDSV = nullptr;
 			context->OMGetRenderTargets(8, boundRTVs, &boundDSV);
 			context->OMSetRenderTargets(0, nullptr, nullptr);
-			SD_CopySRVResource(mainDepthDS.depthSRV, "SnowDeformation::ShellDepthCopy", shellDepthCopyTex, shellDepthCopySRV);
+			CopySRVResource(mainDepthDS.depthSRV, "SnowDeformation::ShellDepthCopy", shellDepthCopyTex, shellDepthCopySRV);
 			context->OMSetRenderTargets(8, boundRTVs, boundDSV);
 			for (auto* rtv : boundRTVs)
 				if (rtv)
@@ -402,10 +453,16 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* nullSRVs[10] = {};
 	context->VSSetShaderResources(0, 6, nullSRVs);
 	context->PSSetShaderResources(0, 10, nullSRVs);
-	ID3D11ShaderResourceView* nullGlintSRV = nullptr;
-	context->PSSetShaderResources(20, 1, &nullGlintSRV);
-	ID3D11SamplerState* restoreSampler = prevSampler.get();
-	context->PSSetSamplers(0, 1, &restoreSampler);
+	// t22/t23 hold SRVs of the game's shadow depth targets — they MUST be
+	// unbound before the next shadow render binds those targets as DSVs, or
+	// D3D silently drops the binding with warning spam. t20 (glint noise) and
+	// t21 are cleared alongside.
+	ID3D11ShaderResourceView* nullShadowSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
+	context->PSSetShaderResources(20, 4, nullShadowSRVs);
+	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
+	context->PSSetSamplers(0, 2, restoreSamplers);
+	ID3D11SamplerState* nullCmpSampler = nullptr;
+	context->PSSetSamplers(2, 1, &nullCmpSampler);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->RSSetState(prevRaster.get());
 	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);

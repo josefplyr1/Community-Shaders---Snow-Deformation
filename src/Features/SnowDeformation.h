@@ -272,7 +272,9 @@ public:
 		float2 ObjectHeightCenter;
 
 		float ObjectHeightHalfExtent;
-		float3 padShell;
+		/** @brief Raw cascade-atlas copies are bound at t22/t23 this frame (else the shader falls back to the blurred VSM path). */
+		float CrispShadows;
+		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -371,6 +373,46 @@ public:
 	/** @brief Depth copy taken AFTER the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell — Terrain Blending's technique adapted to the two snow kinds. */
 	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
+
+	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
+	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
+		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
+
+	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
+
+	/** @brief Full-resolution COPIES of the game's raw sun-shadow cascade atlas and its ESRAM partner, taken during the shadow-mask pass. Copies are mandatory: by deferred time the engine has reused the live targets (ESRAM is aliased scratch memory), and sampling them live produces garbage flicker. Taken BEFORE the shell is injected as a caster, so the shell's receiver path never sees itself (no self-shadow acne). */
+	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
+	winrt::com_ptr<ID3D11Texture2D> shadowEsramCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowEsramCopySRV;
+	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
+	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
+	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */
+	winrt::com_ptr<ID3D11SamplerState> shellLinearSampler;
+
+	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask) — the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
+	void CaptureShadowAtlas();
+
+	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height — mounds, drifts — casts. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11VertexShader* GetShellShadowVS();
+	ID3D11VertexShader* shellShadowVS = nullptr;
+
+	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows — one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
+	std::unique_ptr<ShellCB> lastShellCBData;
+
+	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned — key only). */
+	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[2];
+	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
+	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
+
+	/** @brief Depth-renders the terrain shell into both live cascade slices so the world receives snow-mound shadows. The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
+	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
+
+	/** @brief Shadow-source diagnostics for the settings UI (kept permanently — they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
+	uint32_t dbgLodDescriptorCount = 0;
+	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t dbgLodAtlasSlices = 0;
 
 	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
 	struct alignas(16) StaticsCB

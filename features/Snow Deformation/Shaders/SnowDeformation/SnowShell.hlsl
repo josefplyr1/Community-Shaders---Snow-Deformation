@@ -22,6 +22,19 @@
 // Needs only the shared 128px noise texture at t20, which the CPU side binds
 // for this pass (EnableGlints gates the path when it is unavailable).
 #	include "Common/Glints/Glints2023.hlsli"
+// Shadow sampling for the shell surface: terrain/cloud shadows via
+// GetWorldShadow, dynamic (actor) shadows via the raw cascade atlas copies
+// (SnowShadow.hlsli) with the VolumetricShadows shared VSM as the fallback
+// when the copies are unavailable. (The screen-space shadow mask was tried
+// and rejected: it holds values for the terrain BEHIND the shell along the
+// view ray, so shadows slide with camera movement.)
+#	define TERRAIN_SHADOWS
+#	define CLOUD_SHADOWS
+#	define VOLUMETRIC_SHADOWS
+SamplerState ShellLinearSampler : register(s1);
+#	define LinearSampler ShellLinearSampler
+#	include "Common/ShadowSampling.hlsli"
+#	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -77,7 +90,10 @@ cbuffer ShellCB : register(b0)
 	float2 ObjectHeightCenter;
 
 	float ObjectHeightHalfExtent;
-	float3 padShell;
+	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
+	// shader falls back to the blurred VSM path).
+	float CrispShadows;
+	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -483,6 +499,27 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 
+#ifdef SNOW_SHADOW_CAST
+	// Shadow-caster variant: only the EXCESS height above the ambient snow
+	// depth casts. Casting the full shell shadows every receiver inside or
+	// beneath the layer — the terrain it visually replaces, actor legs
+	// wading in it, grass — which reads as the whole landscape darkening.
+	//
+	// The base is not merely flattened but SUNK far below the terrain: our
+	// terrain window is bilinear-approximate, and writing it at ground level
+	// out-depths the game's true terrain mesh wherever the approximation
+	// overshoots by a few units — false shadow blotches on open ground. The
+	// caster also requires solid snow coverage, so field raises whose
+	// visible snow is dithered away never cast from invisible snow. Only
+	// clearly raised, clearly covered mounds and drifts emerge above ground
+	// as casters.
+	float3 rawTerrainCast = SampleTerrain(gridLocal);
+	float castBase = rawTerrainCast.x + max(rawTerrainCast.y, 0.0);
+	float castExcess = max(0.0, z - castBase);
+	float castGate = smoothstep(3.0, 8.0, castExcess) * smoothstep(0.2, 0.5, coverage);
+	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
+#endif
+
 	// Smooth terrain normal per-vertex (wide 32-unit differences bridge the
 	// 128-unit data texels — interpolation then removes the faceting the
 	// per-pixel piecewise-constant gradient produced).
@@ -799,9 +836,29 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satNdotH = saturate(dot(normalWS, H));
 	float satVdotH = saturate(dot(V, H));
 
-	// Unshadowed sun for now: shadow sampling on the shell lands with the
-	// shadow layers.
-	float3 sunLight = SharedData::DirLightColor.xyz;
+	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	// Distant shadow softening: the far cascade's texels quantize into hard
+	// blocky patches on distant snow. The cascades must NOT be faded out —
+	// LOD trees cast into them and bare ground keeps their shadows at range —
+	// so the crisp path instead WIDENS its PCF ring with distance: same
+	// shadows, soft penumbra blobs instead of blocks.
+	float farShadowT = smoothstep(6000.0, 15000.0, length(input.WorldPos));
+	float sunShadow;
+	[branch] if (CrispShadows > 0.5)
+	{
+		// Full-resolution comparison PCF against the game's raw cascade
+		// atlas: the same crisp tree/actor shadows bare ground receives.
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT));
+	}
+	else
+	{
+		// Fallback: the Volumetric Shadows 512px VSM moments copy (blurry).
+		float detailedShadow;
+		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+
+	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
 	float specD = BRDF::D_GGX(snowRoughness, satNdotH);

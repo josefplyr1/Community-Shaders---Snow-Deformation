@@ -118,6 +118,8 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
 			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
 			shellStatMinHeight, shellStatMaxHeight);
+		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
+			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 
 		ImGui::TreePop();
 	}
