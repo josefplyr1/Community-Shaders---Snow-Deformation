@@ -357,12 +357,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// Bicubic, like the landscape shell; rounded trench walls.
 	float deform = saturate(SampleDeformationSmooth(gridLocal));
 
-	// The landscape shell's carve, verbatim: floored so the mesh beneath
-	// never shows, at any trample level. Sunk slightly below the skin's
-	// nominal surface so the untrampled rim tucks UNDER the skin instead
-	// of z-fighting it.
-	float floorDepth = min(skinDepth, 5.0 * smoothstep(0.5, 8.0, skinDepth));
-	float depth = max(skinDepth * (1.0 - deform), floorDepth);
+	// Full carve: unlike the landscape shell, object trenches keep no
+	// minimum snow floor (no terrain-window approximation holes to cover
+	// here), so the patch sinks to the object's own surface at full
+	// trample. Sunk slightly below the skin's nominal surface so the
+	// untrampled rim tucks under the skin instead of z-fighting it.
+	float depth = skinDepth * (1.0 - deform);
 	float3 worldAbs = float3(worldXY, top + depth - 0.4);
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
@@ -657,13 +657,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
 		[branch] if (pomDepth > 0.5)
 		{
-			// Trench floor; the landscape shell's rule, ported: the carve
-			// can never reach the object mesh. Without the cap a full-depth
-			// carve pushes SV_Depth to (and past) the underlying surface,
-			// which both exposes its texture and z-fights it into floors
-			// that flicker with the camera angle.
-			float pomFloor = min(pomDepth, 5.0 * smoothstep(0.5, 8.0, pomDepth));
-			float carveCap = pomDepth - pomFloor;
+			// No minimum floor on object trenches: at full trample the march
+			// lands on the object's own surface (the patch sinks there too).
+			float carveCap = pomDepth;
 			// At depth t below the snow top the ray has drifted by
 			// view.xy/-view.z * t in world XY. In air while t < carve(xy);
 			// the hit is refined linearly between the straddling samples.

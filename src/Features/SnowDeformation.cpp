@@ -170,11 +170,12 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 {
 	// Advance the window once per frame and only from the in-world upload:
 	// reflection/early uploads carry probe cameras that must not steer it.
-	// Not while disabled either: the disabled Prepass never scrolls the
-	// texture, so a walking origin would desync the constant buffer from the
-	// frozen map (visible as trails sliding with the camera in the overlay).
+	// Advance only while the map is actually updated (feature enabled, or
+	// the overlay keeping the simulation alive for debugging); otherwise a
+	// walking origin desyncs the constant buffer from the frozen texture,
+	// visible as trails sliding with the camera.
 	static Util::FrameChecker frameChecker;
-	if (a_inWorld && settings.EnableSnowDeformation && frameChecker.IsNewFrame()) {
+	if (a_inWorld && (settings.EnableSnowDeformation || debugTerrainOverlay) && frameChecker.IsNewFrame()) {
 		// Snap to whole texels so scrolling never resamples the map. The
 		// cached FrameBuffer camera position is what the lighting pixel
 		// shader sees as CameraPosAdjust, so map and terrain agree.
@@ -245,7 +246,10 @@ void SnowDeformation::Prepass()
 	if (settings.EnableSnowDeformation && globals::state->inWorld)
 		UpdateShellTerrainWindow();
 
-	if (!settings.EnableSnowDeformation)
+	// The overlay keeps the map simulation (stamps, scroll, refill) running
+	// while the feature is disabled, so path tracking can be debugged with
+	// every visual effect off.
+	if (!settings.EnableSnowDeformation && !debugTerrainOverlay)
 		return;
 
 	auto ui = globals::game::ui;
