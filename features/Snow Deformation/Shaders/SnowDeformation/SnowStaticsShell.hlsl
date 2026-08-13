@@ -32,6 +32,7 @@
 SamplerState ShellLinearSampler : register(s1);
 #	define LinearSampler ShellLinearSampler
 #	include "Common/ShadowSampling.hlsli"
+#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
@@ -87,7 +88,11 @@ cbuffer ShellCB : register(b0)
 	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
 	// shader falls back to the blurred VSM path).
 	float CrispShadows;
-	float2 padShell;
+	// Screen-Space Shadows output is bound at t45: the long-range
+	// depth-marched shadows that carry distant LOD tree shadows beyond the
+	// two cascades.
+	float ScreenSpaceShadowsActive;
+	float padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -871,6 +876,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float detailedShadow;
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+	// Screen-Space Shadows: same long-range term bare ground multiplies in,
+	// distance-blended past the cascades like the landscape shell (the SSS
+	// march ran on the PREPASS depth — near, it belongs to the surface
+	// UNDER the skin, and the crisp cascades already cover the skin).
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	{
+		float sssBlend = smoothstep(4000.0, 9000.0, pixelDist);
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
