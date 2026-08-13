@@ -1013,8 +1013,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float visibleZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(maskPx, 0)));
 		[flatten] if (visibleZ < groundClip.w - 24.0)
 			maskUV = clusterUV;
+		// The mask holds shadows computed for the buried ground. Low lights
+		// (fires) cast shadows whose length is very sensitive to receiver
+		// height, so ground shadows on a raised surface stretch into long
+		// streaks; trust the mask only where the shell hugs the ground
+		// (trench floors, thin cover) and fade it out on deep snow.
+		float surfaceRaise = (input.WorldPos.z + ShellCameraPosAdjust.z) - pixelTerrain.x;
+		float maskInfluence = 1.0 - smoothstep(8.0, 32.0, surfaceRaise);
 		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
-			clusterUV, maskUV, DynResScale, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+			clusterUV, maskUV, DynResScale, maskInfluence, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;

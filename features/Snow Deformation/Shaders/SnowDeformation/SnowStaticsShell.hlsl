@@ -975,8 +975,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		// Full mask influence: the skin and patch stay within a few units of
+		// the pre-shell surface, so ground shadows read correctly here.
 		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
-			screenUV, screenUV, DynResScale, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+			screenUV, screenUV, DynResScale, 1.0, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;

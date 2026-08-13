@@ -56,9 +56,14 @@ namespace SnowLights
 	// with camera motion). Room/portal culling is skipped: the shell only
 	// exists in exteriors. GetAttenuation self-selects inverse-square vs
 	// vanilla falloff per light flags, so ISL parity is automatic.
+	// maskInfluence: how much the shadow mask applies (0..1). The mask holds
+	// shadows computed for the pre-shell ground; a low light's shadow length
+	// is very sensitive to receiver height, so ground shadows painted onto a
+	// raised snow surface stretch into long streaks. The caller fades the
+	// mask out with the surface's height above the sampled ground.
 	void AccumulatePointLights(
 		float3 worldPos, float3 normalWS, float3 V, float viewZ,
-		float2 clusterUV, float2 maskUV, float2 dynResScale,
+		float2 clusterUV, float2 maskUV, float2 dynResScale, float maskInfluence,
 		float3 albedo, float3 F0, float roughness,
 		inout float3 diffuse, inout float3 specular)
 	{
@@ -85,7 +90,7 @@ namespace SnowLights
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * attenuation * light.fade;
 
 			float lightShadow = 1.0;
-			[branch] if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
+			[branch] if ((light.lightFlags & LightLimitFix::LightFlags::Shadow) && maskInfluence > 0.001)
 			{
 				[branch] if (!maskLoaded)
 				{
@@ -101,7 +106,7 @@ namespace SnowLights
 					shadowMask = ShadowMask.Load(int3(maskPixel, 0));
 					maskLoaded = true;
 				}
-				lightShadow = shadowMask[light.shadowLightIndex];
+				lightShadow = lerp(1.0, shadowMask[light.shadowLightIndex], maskInfluence);
 			}
 
 			float3 L = normalize(lightDirection);
