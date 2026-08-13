@@ -768,8 +768,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
 
 	// Floor wear: TrenchFloorFade dissolves heavily trampled floors back to
-	// the object's own surface (rock, log, planks). Applied MULTIPLICATIVELY
-	// after the floor guarantee — the coverage gates hold alpha at 1 on
+	// the object's own surface (rock, log, planks). Applied multiplicatively
+	// after the floor guarantee; the coverage gates hold alpha at 1 on
 	// floors, so relaxing the guarantee alone changes nothing. Up-facing
 	// pixels only: the top-down map column carries the trail on flanks too,
 	// and wearing those punches see-through holes in trench walls.

@@ -211,7 +211,7 @@ void SnowDeformation::ApplyRangeSettings()
 	}
 
 	// Trench detail: the resolution change recreates the ping-pong pair (and
-	// clears it — texel content is resolution-relative).
+	// clears it; texel content is resolution-relative).
 	if (trenchDetailDirty || !rangeInitApplied) {
 		const uint desiredDim = settings.HighDetailTrenches ? kTextureDim * 2 : kTextureDim;
 		if (desiredDim != deformMapDim) {

@@ -17,10 +17,9 @@ static constexpr float kStampMovementGate = 3.0f;
 // Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
-// Depth-scaled stamps: the nominal snow depth at the mover's position scales
-// its stamp radii, so shallow grass-snow takes narrower trenches than
-// hip-deep drifts. Reference = the deep snow classes' default depth; the
-// clamp keeps bare and unbaked ground recording readable trails.
+// Depth-scaled stamps: the nominal snow depth at the mover's position
+// scales its stamp radii (shallow snow takes narrower trenches). The clamp
+// keeps bare and unbaked ground recording readable trails.
 static constexpr float kStampDepthReference = 30.0f;
 static constexpr float kStampDepthScaleMin = 0.65f;
 static constexpr float kStampDepthScaleMax = 1.2f;
@@ -73,11 +72,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
 				return;
 
-		// The living stand on whatever supports them, so their own position IS
-		// the ground reference. Dead ragdolls are exempt from the airborne gate
-		// above (their controllers freeze in stale states), so they get the
-		// prop rule instead: ground = LAND height, which keeps a corpse flung
-		// off a ledge from carving the snow beneath its whole flight arc.
+		// Living actors use their own position as the ground reference. Dead
+		// ragdolls are exempt from the airborne gate above, so their ground
+		// is the land height: a corpse flung off a ledge must not carve the
+		// snow beneath its flight arc.
 		float groundZ = position.z;
 		if (isDead)
 			if (const auto tesGround = RE::TES::GetSingleton())
