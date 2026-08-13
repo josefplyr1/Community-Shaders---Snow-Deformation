@@ -25,6 +25,14 @@
 // TruePBR's procedural glint NDF for snow sparkle (noise texture at t20,
 // bound by the CPU side for the whole shell pass; EnableGlints gates it).
 #	include "Common/Glints/Glints2023.hlsli"
+// Same shadow stack as the terrain shell (see SnowShell.hlsl).
+#	define TERRAIN_SHADOWS
+#	define CLOUD_SHADOWS
+#	define VOLUMETRIC_SHADOWS
+SamplerState ShellLinearSampler : register(s1);
+#	define LinearSampler ShellLinearSampler
+#	include "Common/ShadowSampling.hlsli"
+#	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -76,7 +84,10 @@ cbuffer ShellCB : register(b0)
 	float2 ObjectHeightCenter;
 
 	float ObjectHeightHalfExtent;
-	float3 padShell;
+	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
+	// shader falls back to the blurred VSM path).
+	float CrispShadows;
+	float2 padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -848,9 +859,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satNdotH = saturate(dot(normalWS, H));
 	float satVdotH = saturate(dot(V, H));
 
-	// Unshadowed sun, matching the terrain shell: shadow sampling on the
-	// shells lands with the shadow layers.
-	float3 sunLight = SharedData::DirLightColor.xyz;
+	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	float sunShadow;
+	[branch] if (CrispShadows > 0.5)
+	{
+		// Full-resolution comparison PCF — same path as the terrain shell.
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0);
+	}
+	else
+	{
+		float detailedShadow;
+		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
 	float specD = BRDF::D_GGX(snowRoughness, satNdotH);

@@ -139,6 +139,15 @@ void SnowDeformation::SetupResources()
 	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, shellSnowSampler.put()));
 	Util::SetResourceName(shellSnowSampler.get(), "SnowDeformation::ShellSnowSampler");
+
+	D3D11_SAMPLER_DESC linearDesc{};
+	linearDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	linearDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	DX::ThrowIfFailed(device->CreateSamplerState(&linearDesc, shellLinearSampler.put()));
+	Util::SetResourceName(shellLinearSampler.get(), "SnowDeformation::ShellLinearSampler");
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -291,6 +300,9 @@ void SnowDeformation::ClearShaderCache()
 	if (shellVS)
 		shellVS->Release();
 	shellVS = nullptr;
+	if (shellShadowVS)
+		shellShadowVS->Release();
+	shellShadowVS = nullptr;
 	if (shellPS)
 		shellPS->Release();
 	shellPS = nullptr;
