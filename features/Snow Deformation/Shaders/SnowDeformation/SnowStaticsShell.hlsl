@@ -782,6 +782,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the drape's skirts; full relaxation lets the veils through.) The
 	// PATCH is exempt: its trench walls are steep real geometry.
 	coverageAlpha *= smoothstep(0.06, 0.18, abs(geoFacing.z));
+#	else
+	// Overhang clip: the top-down raster extends object tops up to a texel
+	// past the silhouette, so rim triangles drape into the air as blankets
+	// stretching beyond the model. A pixel hovering far in front of the
+	// pre-shell geometry behind it is overhang and dissolves; on-object
+	// floors and trench walls hug their surface and keep alpha.
+	{
+		float patchSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		coverageAlpha *= 1.0 - smoothstep(16.0, 40.0, patchSceneZ - input.CurrentClip.w);
+	}
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
