@@ -9,7 +9,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowDeformation::Settings,
 	EnableSnowDeformation,
 	StampRadius,
-	RefillTime)
+	RefillTime,
+	SnowClassDepths)
 
 void SnowDeformation::SetupResources()
 {
@@ -52,7 +53,7 @@ void SnowDeformation::SetupResources()
 			.Height = kShellWindowDim,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32G32_FLOAT,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE

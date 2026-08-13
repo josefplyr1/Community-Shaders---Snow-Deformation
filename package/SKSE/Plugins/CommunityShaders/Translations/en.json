@@ -1321,6 +1321,8 @@
     "feature.skylighting.rebuild": "Rebuild Skylighting",
     "feature.skylighting.rebuild_tooltip": "Changes below require rebuilding, a loading screen, or moving away from the current location to apply.",
     "feature.skylighting.specular_min_visibility": "Specular Min Visibility",
+    "feature.snow_deformation.class_depths": "Snow Depth by Texture Class",
+    "feature.snow_deformation.class_depths_tooltip": "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data.",
     "feature.snow_deformation.clear": "Clear Deformation Map",
     "feature.snow_deformation.debug_hint": "White = compressed snow. The map follows the camera.",
     "feature.snow_deformation.debug_options": "Debugging Options",
