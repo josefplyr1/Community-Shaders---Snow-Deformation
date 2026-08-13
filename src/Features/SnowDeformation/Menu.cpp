@@ -114,9 +114,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
 			if (auto _ttUsp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
-			ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 40.0f, "%.0f units");
-			if (auto _ttPd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Relief depth of the snow texture's displacement map (parallax occlusion), like the PBR ground's. Multiplied by the texture set's own displacementScale; 0 disables."));
 			ImGui::TreePop();
 		}
 

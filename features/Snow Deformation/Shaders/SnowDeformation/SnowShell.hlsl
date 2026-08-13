@@ -688,26 +688,18 @@ float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
 	float3 pomT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 pomB = cross(normalWS, pomT);
 	float3 viewTS = float3(dot(V, pomT), dot(V, pomB), dot(V, normalWS));
-	// Grazing clamp plus an absolute cap on the total march: unbounded
-	// per-pixel UV shear breaks sampling derivatives into marbling (the M3
-	// lesson) and smears texels at grazing angles.
-	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.35) * (SnowParallaxAmp * fade);
-	float maxOffsetLen = length(maxOffset);
-	[flatten] if (maxOffsetLen > 0.06)
-		maxOffset *= 0.06 / maxOffsetLen;
+	// Grazing clamp: bounds the total march so relief cannot smear.
+	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.25) * (SnowParallaxAmp * fade);
 	float2 dx = ddx(uv);
 	float2 dy = ddy(uv);
 
-	const uint kPomSteps = 20;
+	const uint kPomSteps = 12;
 	const float stepH = 1.0 / kPomSteps;
 	float2 uvStep = maxOffset * stepH;
+	float rayH = 1.0;
 	float2 uvCur = uv;
+	float hPrev = 1.0;
 	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
-	// Displacement content is mostly mid-gray; entering at 1.0 would burn
-	// most steps crossing empty air. Start just above the local surface so
-	// the step resolution concentrates where the relief actually is.
-	float rayH = min(1.0, hSample + 4.0 * stepH);
-	float hPrev = hSample;
 	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
 	{
 		if (rayH <= hSample)

@@ -149,8 +149,6 @@ public:
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
-		/** @brief Parallax occlusion relief depth in world units (multiplied by the PBR set's displacementScale); 0 disables. */
-		float ParallaxDepth = 12.0f;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -486,9 +484,9 @@ public:
 
 	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
 	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
-	/** @brief Frame index incremented in Prepass; per-slice latches so each light's slice is copied once per frame. */
+	/** @brief Frame latch for the once-per-frame atlas copy; index incremented in Prepass. */
 	uint64_t pointShadowFrameIndex = 0;
-	uint64_t pointShadowSliceFrame[kPointShadowMaxLights] = {};
+	uint64_t pointShadowCaptureFrame = 0;
 
 	/** @brief Called from State::Draw while the game renders a LOCAL light's shadow mask (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live (renderTarget reads -1 once the engine returns the maps) and PS t4 genuinely holds the local atlas. Copies the atlas once per frame and snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
 	void CapturePointShadowMask();

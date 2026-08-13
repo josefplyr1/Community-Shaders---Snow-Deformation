@@ -1353,8 +1353,6 @@
     "feature.snow_deformation.name": "Snow Deformation",
     "feature.snow_deformation.objects_snow_depth": "Flat Objects",
     "feature.snow_deformation.objects_snow_depth_tooltip": "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh.",
-    "feature.snow_deformation.parallax_depth": "Parallax Depth",
-    "feature.snow_deformation.parallax_depth_tooltip": "Relief depth of the snow texture's displacement map (parallax occlusion), like the PBR ground's. Multiplied by the texture set's own displacementScale; 0 disables.",
     "feature.snow_deformation.range_shell": "Snow Shell",
     "feature.snow_deformation.range_shell_tooltip": "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m).",
     "feature.snow_deformation.range_skins": "Object Snow",
