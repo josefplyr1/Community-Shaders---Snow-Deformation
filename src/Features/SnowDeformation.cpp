@@ -18,6 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowBorderSmoothness,
 	SnowBorderTrampledFade,
 	SnowBorderUntrampledFade,
+	RangeShellM,
 	RangeTrenchesM)
 
 void SnowDeformation::SetupResources()

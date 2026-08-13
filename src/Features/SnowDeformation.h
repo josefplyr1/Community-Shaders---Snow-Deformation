@@ -132,7 +132,8 @@ public:
 		float SnowBorderTrampledFade = 20.0f;
 		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
 		float SnowBorderUntrampledFade = 5.0f;
-		/** @brief Trenches render range in meters (converted via kUnitsPerMeter). Applying a change clears the map: content is scale-relative. */
+		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
+		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
 	};
 

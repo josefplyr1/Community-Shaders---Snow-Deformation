@@ -47,17 +47,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttRd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
-			ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
-			if (ImGui::IsItemDeactivatedAfterEdit())
-				trenchRangeDirty = true;
-			if (auto _ttRt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
-			ImGui::TreePop();
-		}
-
 		if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttBorders = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
@@ -73,6 +62,20 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttUf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttRd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
+			ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
+			if (auto _ttRs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
+			ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				trenchRangeDirty = true;
+			if (auto _ttRt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
 			ImGui::TreePop();
 		}
 
