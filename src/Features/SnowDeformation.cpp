@@ -20,7 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowBorderSmoothness,
 	SnowBorderTrampledFade,
 	SnowBorderUntrampledFade,
-	SnowSnowFade)
+	SnowSnowFade,
+	SnowMoundSteepness)
 
 void SnowDeformation::SetupResources()
 {
@@ -301,6 +302,12 @@ void SnowDeformation::ClearShaderCache()
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;
+	if (heightCombineCS)
+		heightCombineCS->Release();
+	heightCombineCS = nullptr;
+	if (heightConeCS)
+		heightConeCS->Release();
+	heightConeCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

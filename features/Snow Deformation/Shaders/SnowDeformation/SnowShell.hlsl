@@ -72,6 +72,11 @@ cbuffer ShellCB : register(b0)
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
+	// Also the enable gate for the object height field (>0 = field bound).
+	float ObjectLiftCap;
+	float2 ObjectHeightCenter;
+
+	float ObjectHeightHalfExtent;
 	float3 padShell;
 }
 
@@ -81,6 +86,11 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available) —
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
+// Processed top-down object maps: the slope-limited snow-height FIELD (world
+// Z, empty -100000) and the SUPPRESSION mask (1 under floating structures —
+// no snow beneath walkways, roofs and bridges).
+Texture2D<float> ObjectHeights : register(t4);
+Texture2D<float> ObjectBottoms : register(t5);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
@@ -192,6 +202,55 @@ float SampleDeformation(float2 gridLocal)
 	float v11 = SampleDeformationBilinear(float2(h1.x, h1.y), dims);
 
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
+}
+
+// Bilinear samples of the object field maps at absolute world XY. The raster
+// pass maps +worldY to +ndcY = texture v0 (top), so v mirrors.
+float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
+{
+	float2 local = (worldXY - ObjectHeightCenter) / ObjectHeightHalfExtent;
+	valid = all(abs(local) < 0.98);
+	ObjectHeights.GetDimensions(dims.x, dims.y);
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+float SampleObjectHeight(float2 worldXY)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	if (!valid)
+		return -100000.0;
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = ObjectHeights.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectHeights.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectHeights.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectHeights.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float SampleObjectBottom(float2 worldXY)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	if (!valid)
+		return 100000.0;  // raw bottom-map sentinel (out-of-window)
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = ObjectBottoms.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectBottoms.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectBottoms.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectBottoms.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 // World-anchored value noise, shared by the border domain warp (and any
@@ -332,6 +391,21 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// that appear and vanish as the camera turns. A fixed covered-only
 		// margin makes the shell win at every angle.
 		terrainHeight += farBlend * 8.0 * saturate(coverage);
+	}
+
+	// Object height field: t4 holds the SLOPE-LIMITED snow-height field
+	// (terrain run through the angle-of-repose cone transform), t5 the
+	// shelter mask — 1 under floating structures, so walkways, roofs and
+	// bridges keep the ground beneath them bare.
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float2 worldXY = GridOrigin + gridLocal;
+		float field = SampleObjectHeight(worldXY);
+		[flatten] if (field > -50000.0)
+			terrainHeight = max(terrainHeight, field);
+		// Suppression is smooth (0-1), so sheltered clearings fade at their
+		// edges instead of cutting.
+		coverage *= saturate(1.0 - SampleObjectBottom(worldXY));
 	}
 
 	// Fade toward the grid boundary so the shell melts into the terrain.
@@ -580,19 +654,28 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// blend wobble with camera tilt even up close.
 	float objectFadeBand = 10.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
-	// Carved trench floors DELIBERATELY hug the geometry behind them
-	// (terrain, actor feet standing in the trench) and must override the
-	// fade — without the override they get view-dependently dithered away,
-	// which reads as "snow moving with the camera".
-	// But the carve override near class borders is what makes trenches END
+	// Two situations DELIBERATELY hug the geometry behind them and must
+	// override the fade: carved trench floors (terrain, actor feet standing
+	// in the trench) and the shell riding a raised height field a few units
+	// above the surface beneath. Without the override they get
+	// view-dependently dithered away, which reads as "snow moving with the
+	// camera" and partially-covered raises.
+	// The carve override near class borders is what makes trenches END
 	// HARD while untrampled snow dissolves softly: the proximity dissolve is
 	// a large part of the border blend, and carved pixels were exempt from
 	// it. Trampled Border Fade scales the override away as the uncarved ramp
 	// thins, so walked snow rejoins the same soft dissolve at borders while
 	// deep-field trench floors keep their guaranteed visibility.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
+	float pixelLift = 0.0;
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
+		[flatten] if (fieldHeight > -50000.0)
+			pixelLift = fieldHeight - pixelTerrain.x;
+	}
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
-	coverageAlpha *= max(proximityFade, carveOverride);
+	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift)));
 
 	// Stochastic discard dither: proven to blend in this pipeline (the wide
 	// distance fade). Writing alpha without discarding blends nothing in our

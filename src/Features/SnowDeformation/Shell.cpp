@@ -262,6 +262,11 @@ void SnowDeformation::DrawShell()
 	cbData.SnowSnowFade = settings.SnowSnowFade;
 	cbData.SkinFadeStart = kSkinFadeStart;
 	cbData.SkinFadeEnd = kStaticsCaptureRange;
+	// Field enable gate + window addressing for the t4/t5 samplers; the
+	// center is re-uploaded below once the height pass has recentered.
+	cbData.ObjectLiftCap = kObjectLiftCap;
+	cbData.ObjectHeightCenter = heightWindowCenter;
+	cbData.ObjectHeightHalfExtent = kHeightMapHalfExtent;
 
 	shellCB->Update(cbData);
 
@@ -288,6 +293,14 @@ void SnowDeformation::DrawShell()
 		RenderObjectHeightMap();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
+
+	// The height pass recentered its window AFTER the shell CB was filled —
+	// sampling the freshly scrolled maps with last frame's center makes the
+	// whole field trail the camera by one frame of movement. Re-upload with
+	// the current center. (Any CPU value consumed by both a constant buffer
+	// and a same-frame-scrolled texture must be uploaded after the scroll.)
+	cbData.ObjectHeightCenter = heightWindowCenter;
+	shellCB->Update(cbData);
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
@@ -326,8 +339,8 @@ void SnowDeformation::DrawShell()
 	// sampling it here is legal; the PS fades the shell where it hovers close
 	// in front of any geometry so it dissolves into statics (walkways, mesh
 	// roads, rocks).
-	ID3D11ShaderResourceView* shellSRVs[8] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), nullptr, nullptr, shellSnowNormalSRV.get(), shellSnowRmaosSRV.get() };
-	context->VSSetShaderResources(0, 4, shellSRVs);
+	ID3D11ShaderResourceView* shellSRVs[8] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get() };
+	context->VSSetShaderResources(0, 6, shellSRVs);
 	context->PSSetShaderResources(0, 8, shellSRVs);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
 	// at deferred time is not guaranteed — bind explicitly for this pass.
@@ -387,7 +400,7 @@ void SnowDeformation::DrawShell()
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
 	ID3D11ShaderResourceView* nullSRVs[10] = {};
-	context->VSSetShaderResources(0, 4, nullSRVs);
+	context->VSSetShaderResources(0, 6, nullSRVs);
 	context->PSSetShaderResources(0, 10, nullSRVs);
 	ID3D11ShaderResourceView* nullGlintSRV = nullptr;
 	context->PSSetShaderResources(20, 1, &nullGlintSRV);

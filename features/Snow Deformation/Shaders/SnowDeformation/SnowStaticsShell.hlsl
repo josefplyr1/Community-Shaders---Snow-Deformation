@@ -71,6 +71,11 @@ cbuffer ShellCB : register(b0)
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;
+	// Also the enable gate for the object height field (>0 = field bound).
+	float ObjectLiftCap;
+	float2 ObjectHeightCenter;
+
+	float ObjectHeightHalfExtent;
 	float3 padShell;
 }
 
