@@ -116,6 +116,10 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		/** @brief Snow skin layer height on captured object meshes (rocks, drifts, logs). */
+		float SnowMeshesDepth = 3.0f;
+		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately BELOW the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
+		float RoadMeshesDepth = 10.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
@@ -322,6 +326,55 @@ public:
 	uint32_t shellStatSnowTexels = 0;
 	float shellStatMinHeight = 0.0f;
 	float shellStatMaxHeight = 0.0f;
+
+	// ---- Statics snow skin: capture & redraw ----
+
+	/** @brief One snow-flagged draw captured this frame, for re-rendering inflated in DrawShell. NiPointer keeps the geometry alive across the frame even if its cell detaches mid-frame. */
+	struct CapturedSnowStatic
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiTransform world;
+		/** @brief Road/bridge match: this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
+		bool road;
+	};
+
+	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
+	std::vector<CapturedSnowStatic> capturedStatics;
+	std::unordered_set<void*> capturedStaticsSet;
+	std::atomic<uint32_t> statCapturedStatics{ 0 };
+
+	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
+	void InstallStaticsCaptureHook();
+
+	/** @brief Only statics within this XY range of the camera are captured — distant mountains are snow-projected everywhere in Skyrim, but the skin only matters where deformation can happen. */
+	static constexpr float kStaticsCaptureRange = 12288.0f;
+
+	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
+	struct alignas(16) StaticsCB
+	{
+		float4 WorldRow0;
+		float4 WorldRow1;
+		float4 WorldRow2;
+		/** @brief Snow layer height for this object, model-class resolved on the CPU (road vs regular). */
+		float ObjectsDepth;
+		float3 padStat;
+	};
+	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
+
+	ID3D11VertexShader* staticsVS = nullptr;
+	ID3D11PixelShader* staticsPS = nullptr;
+	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */
+	winrt::com_ptr<ID3DBlob> staticsVSBlob;
+	bool staticsShadersFailed = false;
+	ConstantBuffer* staticsCB = nullptr;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
+
+	/** @brief Compiles the statics skin VS (keeping bytecode) and PS on first use. Implemented in SnowDeformation/Statics.cpp. */
+	bool EnsureStaticsShaders();
+	/** @brief Re-draws this frame's captured projected-snow statics inflated, inside DrawShell's bound state. Implemented in SnowDeformation/Statics.cpp. */
+	void DrawCapturedStatics();
 
 	/** @brief Caches a "tile is snow material" bitmask per landscape quad material, for the terrain shader's per-tile snow detection. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);

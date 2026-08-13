@@ -12,6 +12,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillTime,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
+	SnowMeshesDepth,
+	RoadMeshesDepth,
 	SnowTexturePath,
 	SnowTextureLinear,
 	SnowBorderNoise,
@@ -81,6 +83,7 @@ void SnowDeformation::SetupResources()
 	}
 
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
+	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 
 	auto device = globals::d3d::device;
 
@@ -163,6 +166,12 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+
+	// New frame: publish last frame's statics-capture count and reset the
+	// list before this frame's opaque rendering fills it again.
+	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
+	capturedStatics.clear();
+	capturedStaticsSet.clear();
 
 	if (settings.EnableSnowDeformation && globals::state->inWorld)
 		UpdateShellTerrainWindow();
@@ -259,6 +268,15 @@ void SnowDeformation::ClearShaderCache()
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (staticsVS)
+		staticsVS->Release();
+	staticsVS = nullptr;
+	if (staticsPS)
+		staticsPS->Release();
+	staticsPS = nullptr;
+	staticsVSBlob = nullptr;
+	staticsILCache.clear();
+	staticsShadersFailed = false;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
