@@ -46,11 +46,41 @@ public:
 	/** @brief Height sentinel for window texels with no baked cell data. */
 	static constexpr float kShellMissingHeight = -100000.0f;
 
-	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-vertex snow coverage (0-255). */
+	// Per-texture-class depth: landscape mods retexture the same vanilla LTEX
+	// files, so classes match on diffuse filename substrings — FIRST match
+	// wins, so more specific names must precede their substrings (grasssnow
+	// before snow01: "grasssnow01" contains both). EVERY texture classifies:
+	// unmatched snow-material textures fall to the "Snow 01" class, anything
+	// else to "Other" (default -5 = submerged, giving users full control).
+	static constexpr uint kSnowClassCount = 12;
+	// Classes below this index count as snow for the terrain-shader mask bits.
+	static constexpr uint kSnowOnlyClassCount = 5;
+	struct SnowClassDef
+	{
+		const char* label;
+		const char* match;
+		float defaultDepth;
+	};
+	static constexpr SnowClassDef kSnowClasses[kSnowClassCount] = {
+		{ "Grass Snow", "grasssnow", 14.0f },
+		{ "Trodden Path", "snowpath", 18.0f },
+		{ "Snowy Rocks", "snowrocks", 26.0f },
+		{ "Snow 01", "snow01", 30.0f },
+		{ "Snow 02", "snow02", 30.0f },
+		{ "Roads", "road", -5.0f },
+		{ "Dirt", "dirt", -5.0f },
+		{ "Grass & Fields", "grass", -5.0f },
+		{ "Rocks & Cliffs", "rock", -5.0f },
+		{ "Coast & Beach", "coast", -5.0f },
+		{ "Mud & Rivers", "mud", -5.0f },
+		{ "Other", "", -5.0f },
+	};
+
+	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-class coverage weights (0-255). Depths are applied at window-rebuild time so class sliders retune without a game re-bake. */
 	struct ShellCellData
 	{
 		std::array<float, 33 * 33> height;
-		std::array<uint8_t, 33 * 33> snowness;
+		std::array<std::array<uint8_t, 33 * 33>, kSnowClassCount> classWeights;
 	};
 
 	struct Settings
@@ -63,6 +93,8 @@ public:
 		float RefillTime = 700.0f;
 		/** @brief Only refill while the current weather is snowing, so trails persist through clear spells and interiors. */
 		bool RefillOnlyWhenSnowing = true;
+		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
+		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Trenches render range in meters (converted via kUnitsPerMeter). Applying a change clears the map: content is scale-relative. */
 		float RangeTrenchesM = 100.0f;
 	};
@@ -140,7 +172,7 @@ public:
 	/** @brief Installs both landscape hooks; the TESObjectLAND detour attaches after TruePBR's so it sees the final quad materials. Implemented in SnowDeformation/TerrainData.cpp. */
 	virtual void PostPostLoad() override;
 
-	/** @brief The terrain data window texture (R32G32: absolute height, snow coverage). */
+	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
 
 	/** @brief Bakes one cell's heights and per-vertex snow coverage from LoadedLandData. Called from the TESObjectLAND hook. Implemented in SnowDeformation/TerrainData.cpp. */
