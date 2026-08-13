@@ -6,14 +6,14 @@
 
 void SnowDeformation::CaptureShadowAtlas()
 {
-	// Called mid-frame while the game renders the shadow MASK: PS t4 holds
-	// the sun cascade atlas RIGHT NOW (at any other time it holds whatever
-	// material texture the last draw bound — an earlier EarlyPrepass grab
-	// captured a 128px BC7 diffuse). COPY the atlas and its ESRAM partner
+	// Called mid-frame while the game renders the shadow mask: PS t4 holds
+	// the sun cascade atlas right now (at any other time it holds whatever
+	// material texture the last draw bound; an earlier EarlyPrepass grab
+	// captured a 128px BC7 diffuse). Copy the atlas and its ESRAM partner
 	// immediately: by deferred time the engine has reused the live targets
 	// (ESRAM is aliased scratch).
 	//
-	// When a frame skips this pass, the previous copies are KEPT — one-frame-
+	// When a frame skips this pass, the previous copies are kept; one-frame-
 	// stale cascades are invisible, but flapping between the crisp and VSM
 	// paths reads as full-surface flicker.
 	if (!globals::state->HasDirectionalShadows()) {
@@ -46,7 +46,7 @@ void SnowDeformation::CaptureShadowAtlas()
 		InjectShellShadowCasters(liveAtlasSRV.get());
 	}
 
-	// One-shot + transition diagnostics: what IS the shadow source? Logged on
+	// One-shot + transition diagnostics: what is the shadow source? Logged on
 	// the first few frames and whenever validity flips, so user reports of
 	// missing/flickering shell shadows come with the answer attached.
 	static uint32_t shadowLogCount = 0;
@@ -179,7 +179,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	}
 	logOnce("injecting: shell grid into both cascades");
 
-	// ---- Save every piece of state we touch: we are INSIDE the game's setup
+	// ---- Save every piece of state we touch: we are inside the game's setup
 	// for the shadow-mask draw and must hand it back byte-identical.
 	winrt::com_ptr<ID3D11RenderTargetView> prevRTVs[8];
 	winrt::com_ptr<ID3D11DepthStencilView> prevDSV;

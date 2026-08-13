@@ -355,7 +355,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Exclusion zones: refresh on window scroll and periodically (doors and
 	// campfires never move, so a 60-frame cadence is plenty). Load doors
-	// (teleport data) are cave/building entrances — deeper recesses, bigger
+	// (teleport data) are cave/building entrances; deeper recesses, bigger
 	// clears.
 	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
 	if (windowScrolled || (doorRefreshCounter++ % 60) == 0) {
@@ -518,7 +518,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
 
 	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
-	// (bottomFiltered) — bare ground under floating walkways/roofs/bridges.
+	// (bottomFiltered); bare ground under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);

@@ -97,7 +97,7 @@ void SnowDeformation::SetupResources()
 
 	{
 		// RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth): the
-		// extreme surfaces win per texel in any draw order — no depth buffer.
+		// extreme surfaces win per texel in any draw order; no depth buffer.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 3; i++) {

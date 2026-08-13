@@ -141,7 +141,7 @@ float SampleTerrainHeight(float2 worldXY)
 	float suppress = 0.0;
 
 	// Shelter only: grounded object tops deliberately do NOT raise the field
-	// (an object-top "blanket" lift was tried and removed — it produced seams
+	// (an object-top "blanket" lift was tried and removed; it produced seams
 	// against the landscape shell and 45-degree spike cones at range). The
 	// raster feeds just the floating-structure test: a bottom well clear of
 	// the ground with a top high above it is a walkway/roof/bridge, and the
@@ -155,7 +155,7 @@ float SampleTerrainHeight(float2 worldXY)
 	}
 
 	// Exclusion zones: pull the field back to terrain and suppress snow.
-	// Doors use an ELLIPSE stretched along their facing axis (both ways —
+	// Doors use an ELLIPSE stretched along their facing axis (both ways;
 	// the recess and the doorstep); campfires use a noisy-edged circle for
 	// an organic melt ring. Z-gated (300) so upper-floor doors do not clear
 	// ground snow far below, while sunken cave entrances still qualify.
@@ -193,8 +193,8 @@ float SampleTerrainHeight(float2 worldXY)
 	}
 
 	// Corpse burial mounds: resting dead actors inject their collision-
-	// sphere caps as field tops — CAPPED above terrain so a mammoth makes a
-	// bump, not a hill — gated by the LOCAL REFILL state so the story reads
+	// sphere caps as field tops; CAPPED above terrain so a mammoth makes a
+	// bump, not a hill; gated by the LOCAL REFILL state so the story reads
 	// fall -> imprint -> snow closes -> mound swells over the buried body.
 	// Stateless: loot or move the corpse and the mound is gone next frame.
 	// The cone transform downstream rounds every mound into a natural lump.

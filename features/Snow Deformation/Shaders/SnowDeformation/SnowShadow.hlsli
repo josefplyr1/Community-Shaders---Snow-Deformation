@@ -1,21 +1,21 @@
 // Crisp cascaded shadows for the snow shell.
 //
 // The Volumetric Shadows feature exposes the sun cascades only as a 512px
-// blurred VSM moments copy — fine for volumetrics, but on the shell it turns
+// blurred VSM moments copy; fine for volumetrics, but on the shell it turns
 // tree branches and actor silhouettes into smudges while the bare ground next
 // to it (vanilla forward path) shows crisp cascade shadows. This samples the
-// game's RAW shadow atlas instead: cascade = array slice, per-slice [0,1] UVs
+// game's raw shadow atlas instead: cascade = array slice, per-slice [0,1] UVs
 // matching the ShadowProj matrices from DirectionalShadowLights (t98), with
 // hardware comparison PCF at full atlas resolution.
 //
 // Two source textures, min'd like VolumetricShadows' downsample does: the
-// main atlas and its ESRAM partner target, both captured as COPIES during
+// main atlas and its ESRAM partner target, both captured as copies during
 // the game's shadow-mask pass (see SnowDeformation::CaptureShadowAtlas).
 // Cascade selection, blend and distance fade mirror
 // VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
 // about where shadows exist.
 //
-// Include AFTER Common/ShadowSampling.hlsli — needs DirectionalShadowLights,
+// Include after Common/ShadowSampling.hlsli; needs DirectionalShadowLights,
 // SharedData and FrameBuffer from it.
 
 Texture2DArray<float> SnowShadowAtlas : register(t22);
@@ -31,11 +31,11 @@ namespace SnowShadow
 		return min(lit, litEsram);
 	}
 
-	// Center + 4 rotated taps, each hardware-bilinear 2x2 comparison — a
+	// Center + 4 rotated taps, each hardware-bilinear 2x2 comparison; a
 	// small soft edge like the vanilla receiver, nothing like the VSM blur.
 	// a_spread widens the tap ring: >1 turns the far cascade's blocky texels
-	// into soft penumbra blobs WITHOUT dropping the shadows (LOD trees cast
-	// into these cascades — fading them out erases their shadows from
+	// into soft penumbra blobs without dropping the shadows (LOD trees cast
+	// into these cascades; fading them out erases their shadows from
 	// distant snow).
 	float SampleCascadePCF(float3 posLS, uint cascade, float2 texel, float a_spread)
 	{
@@ -67,7 +67,7 @@ namespace SnowShadow
 			SnowShadowAtlas.GetDimensions(atlasW, atlasH, atlasSlices);
 			float2 texel = 1.0 / float2(atlasW, atlasH);
 
-			// Cascade selection and blend — identical to GetVSMShadow2D.
+			// Cascade selection and blend; identical to GetVSMShadow2D.
 			float cascadeSelect = saturate((shadowMapDepth - sd.StartSplitDistances.y) / (sd.EndSplitDistances.x - sd.StartSplitDistances.y));
 			uint primaryCascade = uint(cascadeSelect);
 

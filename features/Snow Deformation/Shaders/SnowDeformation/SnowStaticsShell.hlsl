@@ -868,7 +868,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
-		// Full-resolution comparison PCF — same path as the terrain shell.
+		// Full-resolution comparison PCF; same path as the terrain shell.
 		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0);
 	}
 	else
@@ -879,7 +879,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// Screen-Space Shadows: same long-range term bare ground multiplies in,
 	// distance-blended past the cascades like the landscape shell (the SSS
-	// march ran on the PREPASS depth — near, it belongs to the surface
+	// march ran on the PREPASS depth; near, it belongs to the surface
 	// UNDER the skin, and the crisp cascades already cover the skin).
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{

@@ -108,7 +108,7 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
-// Z, empty -100000) and the SUPPRESSION mask (1 under floating structures —
+// Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
 Texture2D<float> ObjectHeights : register(t4);
 Texture2D<float> ObjectBottoms : register(t5);
@@ -411,7 +411,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 
 	// Object height field: t4 holds the SLOPE-LIMITED snow-height field
 	// (terrain run through the angle-of-repose cone transform), t5 the
-	// shelter mask — 1 under floating structures, so walkways, roofs and
+	// shelter mask; 1 under floating structures, so walkways, roofs and
 	// bridges keep the ground beneath them bare.
 	[branch] if (ObjectLiftCap > 0.0)
 	{
@@ -634,7 +634,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Same convention as MotionBlur::GetSSMotionVector.
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
-	// Coverage alpha recomputed PER PIXEL from the terrain field (Terrain
+	// Coverage alpha recomputed per PIXEL from the terrain field (Terrain
 	// Blending-style): smooth at texture resolution, independent of vertex
 	// interpolation. The temporally-varying stochastic test then dithers the
 	// boundary and TAA resolves it into a true cross-fade.
@@ -814,8 +814,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
 	// Distant shadow softening: the far cascade's texels quantize into hard
-	// blocky patches on distant snow. The cascades must NOT be faded out —
-	// LOD trees cast into them and bare ground keeps their shadows at range —
+	// blocky patches on distant snow. The cascades must NOT be faded out;
+	// LOD trees cast into them and bare ground keeps their shadows at range;
 	// so the crisp path instead WIDENS its PCF ring with distance: same
 	// shadows, soft penumbra blobs instead of blocks.
 	float farShadowT = smoothstep(6000.0, 15000.0, length(input.WorldPos));
@@ -834,10 +834,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 
-	// Heightfield self-shadowing: the shell IS a heightfield, so march it
+	// Heightfield self-shadowing: the shell is a heightfield, so march it
 	// toward the sun and find the horizon this pixel must clear. Hills,
 	// mounds, field raises and the dune undulation all cast soft shadows
-	// onto the snow behind them — contact detail the game's cascades cannot
+	// onto the snow behind them; contact detail the game's cascades cannot
 	// hold. Geometric growth in the tap distances gives sharp close shadows
 	// and long soft ones at low sun angles.
 	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
@@ -870,20 +870,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
 		// Near: a crisp penumbra band. Far: a much wider penumbra plus
-		// attenuated strength — the march's per-texel horizon steps stop
+		// attenuated strength; the march's per-texel horizon steps stop
 		// reading as hard-edged blocks on distant snow.
 		float soft = lerp(0.06, 0.35, farShadowT);
 		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
 
 	// Screen-Space Shadows (the integrated long-range depth march): these
-	// carry the distant LOD tree shadows far beyond the two cascades. BUT
-	// the texture was marched on the PREPASS depth — the ground UNDER the
-	// shell — so applying it near paints barrel/object shadows straight
-	// through the snow ("transparent shell"). Near, the crisp cascades
-	// already shadow the shell correctly; SSS blends in only beyond them,
-	// where it is the ONLY shadow source and the shell hugs the very
-	// ground the march ran on.
+	// carry the distant LOD tree shadows far beyond the two cascades. The
+	// texture was marched on the prepass depth (the ground under the
+	// shell), so applying it near paints barrel/object shadows straight
+	// through the snow. Near, the crisp cascades already shadow the shell
+	// correctly; SSS blends in only beyond them, where it is the only
+	// shadow source and the shell hugs the very ground the march ran on.
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
 		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));

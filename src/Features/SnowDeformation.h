@@ -382,7 +382,7 @@ public:
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
-	/** @brief Full-resolution COPIES of the game's raw sun-shadow cascade atlas and its ESRAM partner, taken during the shadow-mask pass. Copies are mandatory: by deferred time the engine has reused the live targets (ESRAM is aliased scratch memory), and sampling them live produces garbage flicker. Taken BEFORE the shell is injected as a caster, so the shell's receiver path never sees itself (no self-shadow acne). */
+	/** @brief Full-resolution COPIES of the game's raw sun-shadow cascade atlas and its ESRAM partner, taken during the shadow-mask pass. Copies are mandatory: by deferred time the engine has reused the live targets (ESRAM is aliased scratch memory), and sampling them live produces garbage flicker. Taken before the shell is injected as a caster, so the shell's receiver path never sees itself (no self-shadow acne). */
 	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
 	winrt::com_ptr<ID3D11Texture2D> shadowEsramCopyTex;
@@ -392,17 +392,17 @@ public:
 	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */
 	winrt::com_ptr<ID3D11SamplerState> shellLinearSampler;
 
-	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask) — the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
 	void CaptureShadowAtlas();
 
-	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height — mounds, drifts — casts. Implemented in SnowDeformation/Shell.cpp. */
+	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height; mounds, drifts; casts. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellShadowVS();
 	ID3D11VertexShader* shellShadowVS = nullptr;
 
-	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows — one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
+	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
 
-	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned — key only). */
+	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only). */
 	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[2];
 	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
@@ -411,7 +411,7 @@ public:
 	/** @brief Depth-renders the terrain shell into both live cascade slices so the world receives snow-mound shadows. The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
 	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
 
-	/** @brief Shadow-source diagnostics for the settings UI (kept permanently — they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
+	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
 	uint32_t dbgLodDescriptorCount = 0;
 	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
 	uint32_t dbgLodAtlasSlices = 0;
@@ -540,7 +540,7 @@ public:
 
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
 
-	/** @brief Doors get elliptical clears stretched along their facing (load doors — cave and building entrances — larger); campfires get noisy-edged full clears. Applied in CombineCS before the cone transform, so surrounding snow re-slopes into every clearing at the angle of repose. */
+	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger); campfires get noisy-edged full clears. Applied in CombineCS before the cone transform, so surrounding snow re-slopes into every clearing at the angle of repose. */
 	static constexpr uint kMaxExclusions = 96;
 	static constexpr float kDoorClearRadius = 110.0f;
 	static constexpr float kDoorForwardExtent = 70.0f;

@@ -330,7 +330,7 @@ void SnowDeformation::DrawShell()
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 
-	// The height pass recentered its window AFTER the shell CB was filled —
+	// The height pass recentered its window after the shell CB was filled;
 	// sampling the freshly scrolled maps with last frame's center makes the
 	// whole field trail the camera by one frame of movement. Re-upload with
 	// the current center. (Any CPU value consumed by both a constant buffer
@@ -469,7 +469,7 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* nullSRVs[10] = {};
 	context->VSSetShaderResources(0, 6, nullSRVs);
 	context->PSSetShaderResources(0, 10, nullSRVs);
-	// t22/t23 hold SRVs of the game's shadow depth targets — they MUST be
+	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
 	// D3D silently drops the binding with warning spam. t20 (glint noise) and
 	// t21 are cleared alongside.
