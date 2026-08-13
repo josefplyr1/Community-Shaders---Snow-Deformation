@@ -84,6 +84,28 @@ void SnowDeformation::SetupResources()
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
+	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
+
+	CreateHeightFieldResources();
+
+	{
+		// RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth): the
+		// extreme surfaces win per texel in any draw order — no depth buffer.
+		D3D11_BLEND_DESC minmaxBlendDesc{};
+		minmaxBlendDesc.IndependentBlendEnable = TRUE;
+		for (int i = 0; i < 3; i++) {
+			minmaxBlendDesc.RenderTarget[i].BlendEnable = TRUE;
+			minmaxBlendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].BlendOp = i == 1 ? D3D11_BLEND_OP_MIN : D3D11_BLEND_OP_MAX;
+			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
+			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
+		}
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&minmaxBlendDesc, heightMaxBlendState.put()));
+		Util::SetResourceName(heightMaxBlendState.get(), "SnowDeformation::HeightMinMaxBlend");
+	}
 
 	auto device = globals::d3d::device;
 
@@ -264,6 +286,15 @@ void SnowDeformation::ClearShaderCache()
 	if (smoothFlatStatsCS)
 		smoothFlatStatsCS->Release();
 	smoothFlatStatsCS = nullptr;
+	if (heightVS)
+		heightVS->Release();
+	heightVS = nullptr;
+	if (heightPS)
+		heightPS->Release();
+	heightPS = nullptr;
+	if (heightScrollCS)
+		heightScrollCS->Release();
+	heightScrollCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

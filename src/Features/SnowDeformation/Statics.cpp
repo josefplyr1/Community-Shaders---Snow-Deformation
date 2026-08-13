@@ -205,12 +205,218 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	if (!staticsVS || !staticsPS) {
+	constexpr auto heightPath = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
+	if (!heightVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "vs_5_0", "VSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightVS)))
+				Util::SetResourceName(heightVS, "SnowDeformation::HeightCaptureVS");
+		}
+	}
+	if (!heightPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPS)))
+				Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
+		}
+	}
+	if (!heightScrollCS)
+		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", {}, "cs_5_0", "ScrollCS"));
+
+	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS) {
 		staticsShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
 		return false;
 	}
 	return true;
+}
+
+void SnowDeformation::CreateHeightFieldResources()
+{
+	D3D11_TEXTURE2D_DESC heightDesc = {
+		.Width = kHeightMapDim,
+		.Height = kHeightMapDim,
+		.MipLevels = 1,
+		.ArraySize = 1,
+		.Format = DXGI_FORMAT_R32_FLOAT,
+		.SampleDesc = { .Count = 1 },
+		.Usage = D3D11_USAGE_DEFAULT,
+		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS
+	};
+	D3D11_SHADER_RESOURCE_VIEW_DESC heightSrvDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+	};
+	D3D11_RENDER_TARGET_VIEW_DESC heightRtvDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC heightUavDesc = {
+		.Format = heightDesc.Format,
+		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+
+	auto makeHeightTexture = [&](const char* a_name) {
+		auto* texture = new Texture2D(heightDesc, a_name);
+		texture->CreateSRV(heightSrvDesc);
+		texture->CreateRTV(heightRtvDesc);
+		texture->CreateUAV(heightUavDesc);
+		return texture;
+	};
+	heightTopRaw[0] = makeHeightTexture("SnowDeformation::HeightTopRaw0");
+	heightTopRaw[1] = makeHeightTexture("SnowDeformation::HeightTopRaw1");
+	heightBottomRaw[0] = makeHeightTexture("SnowDeformation::HeightBottomRaw0");
+	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
+
+	// Skin-depth raster: R16F, SRV+RTV only (cleared and re-rasterized fresh
+	// every frame).
+	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
+	skinDepthDesc.Format = DXGI_FORMAT_R16_FLOAT;
+	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+	D3D11_SHADER_RESOURCE_VIEW_DESC skinDepthSrvDesc = heightSrvDesc;
+	skinDepthSrvDesc.Format = skinDepthDesc.Format;
+	D3D11_RENDER_TARGET_VIEW_DESC skinDepthRtvDesc = heightRtvDesc;
+	skinDepthRtvDesc.Format = skinDepthDesc.Format;
+	heightSkinDepth = new Texture2D(skinDepthDesc, "SnowDeformation::HeightSkinDepth");
+	heightSkinDepth->CreateSRV(skinDepthSrvDesc);
+	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
+}
+
+void SnowDeformation::RenderObjectHeightMap()
+{
+	auto context = globals::d3d::context;
+
+	// Camera-following window, snapped to texel size for stability.
+	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+	constexpr float texel = kHeightMapHalfExtent * 2.0f / kHeightMapDim;
+	float2 newCenter = {
+		std::floor(eye.x / texel) * texel,
+		std::floor(eye.y / texel) * texel
+	};
+
+	// Scroll the ACCUMULATED maps into the new window position.
+	// +worldY maps to texture -v, so the v-axis delta is negated.
+	HeightProcessCB processData{};
+	processData.ScrollDelta = {
+		(int)std::lround((newCenter.x - heightWindowCenter.x) / texel),
+		-(int)std::lround((newCenter.y - heightWindowCenter.y) / texel)
+	};
+	processData.ClearAll = heightMapValid ? 0u : 1u;
+	processData.GhostDecay = 0.5f;
+	heightProcessCB->Update(processData);
+	heightWindowCenter = newCenter;
+	heightMapValid = true;
+
+	uint previous = heightCurrent;
+	heightCurrent ^= 1;
+
+	ID3D11Buffer* processCB = heightProcessCB->CB();
+	context->CSSetConstantBuffers(0, 1, &processCB);
+	ID3D11ShaderResourceView* scrollSRVs[2] = { heightTopRaw[previous]->srv.get(), heightBottomRaw[previous]->srv.get() };
+	ID3D11UnorderedAccessView* scrollUAVs[2] = { heightTopRaw[heightCurrent]->uav.get(), heightBottomRaw[heightCurrent]->uav.get() };
+	context->CSSetShaderResources(0, 2, scrollSRVs);
+	context->CSSetUnorderedAccessViews(0, 2, scrollUAVs, nullptr);
+	context->CSSetShader(heightScrollCS, nullptr, 0);
+	context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
+
+	ID3D11ShaderResourceView* nullCsSRVs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
+	context->CSSetShaderResources(0, 2, nullCsSRVs);
+	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+	ID3D11Buffer* nullProcessCB = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	// Rasterize this frame's captures on top of the scrolled maps.
+	const float skinDepthClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
+	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
+	context->OMSetRenderTargets(3, heightRTVs, nullptr);
+	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
+
+	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
+	context->RSSetViewports(1, &heightViewport);
+
+	context->VSSetShader(heightVS, nullptr, 0);
+	context->PSSetShader(heightPS, nullptr, 0);
+	ID3D11Buffer* cb1 = staticsCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+
+	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
+	for (const auto& cap : capturedStatics) {
+		auto* geometry = cap.geometry.get();
+		if (!geometry)
+			continue;
+		auto triShape = geometry->AsTriShape();
+		if (!triShape)
+			continue;
+		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+			continue;
+		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0)
+			continue;
+
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+			continue;
+
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto layoutIt = staticsILCache.find(descKey);
+		if (layoutIt == staticsILCache.end() || !layoutIt->second)
+			continue;  // layouts are created by the skin pass; reuse only
+		context->IASetInputLayout(layoutIt->second.get());
+
+		UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0)
+			continue;
+		UINT offset = 0;
+		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+		StaticsCB scb{};
+		const auto& rot = cap.world.rotate;
+		const float scale = cap.world.scale;
+		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
+		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
+		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
+		// reads the same classification the skin uses.
+		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
+		context->VSSetShaderResources(10, 1, &rasterSmoothSRV);
+		scb.HasSmoothedNormals = rasterSmoothSRV ? 1.0f : 0.0f;
+		staticsCB->Update(scb);
+
+		context->DrawIndexed(indexCount, 0, 0);
+	}
+	globals::profiler->EndPass();
+
+	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
+	context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	ID3D11Buffer* nullVB = nullptr;
+	UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
+	context->IASetInputLayout(nullptr);
+	context->VSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(nullptr, nullptr, 0);
+	ID3D11Buffer* nullCB1 = nullptr;
+	context->VSSetConstantBuffers(1, 1, &nullCB1);
+	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
+	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
 }
 
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
@@ -509,6 +715,8 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation
 		// for flat split-normal surfaces — planks, roofs, pole caps.
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
