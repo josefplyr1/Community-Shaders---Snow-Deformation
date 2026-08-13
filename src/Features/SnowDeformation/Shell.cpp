@@ -280,6 +280,16 @@ void SnowDeformation::DrawShell()
 	context->OMGetDepthStencilState(prevDepth.put(), &prevStencilRef);
 	context->OMGetBlendState(prevBlend.put(), prevBlendFactor, &prevSampleMask);
 	context->IAGetPrimitiveTopology(&prevTopology);
+	D3D11_VIEWPORT prevViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	UINT prevViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	context->RSGetViewports(&prevViewportCount, prevViewports);
+
+	// Rasterize this frame's captured statics top-down into the object
+	// height windows, then restore the viewport for the screen-space passes.
+	if (EnsureStaticsShaders())
+		RenderObjectHeightMap();
+	if (prevViewportCount)
+		context->RSSetViewports(prevViewportCount, prevViewports);
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.

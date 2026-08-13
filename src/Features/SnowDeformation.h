@@ -375,7 +375,9 @@ public:
 		float4 WorldRow2;
 		/** @brief FLAT-class depth (walkways, roofs, planks); road captures use RoadMeshesDepth for BOTH classes so the GPU pick cannot override it. */
 		float ObjectsDepth;
-		float3 padStat;
+		/** @brief The top-down height window (center-anchored, camera-following). */
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
 		/** @brief >0.5: a smoothed-normal buffer is bound at VS t10 for this object (pillow inflation for flat meshes). */
 		float HasSmoothedNormals;
 		/** @brief ROUNDED-class depth (rocks, drifts, logs); the VS picks per mesh from the GPU flatness stats. */
@@ -416,6 +418,47 @@ public:
 
 	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
 	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
+
+	// ---- Top-down object height windows ----
+
+	// 4096 units at 8-unit texels, following the camera — matches the
+	// shell's inner grid density.
+	static constexpr uint kHeightMapDim = 512;
+	static constexpr float kHeightMapHalfExtent = 2048.0f;
+	/** @brief Height sentinels for texels no object covers. */
+	static constexpr float kHeightMapEmptyTop = -100000.0f;
+	static constexpr float kHeightMapEmptyBottom = 100000.0f;
+
+	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters — the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
+	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
+	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
+	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence — a missed frame is invisible for one frame. */
+	Texture2D* heightSkinDepth = nullptr;
+	uint heightCurrent = 0;
+	bool heightMapValid = false;
+	float2 heightWindowCenter = { 0, 0 };
+
+	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order — no depth buffer needed. */
+	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
+	ID3D11VertexShader* heightVS = nullptr;
+	ID3D11PixelShader* heightPS = nullptr;
+	ID3D11ComputeShader* heightScrollCS = nullptr;
+
+	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) HeightProcessCB
+	{
+		DirectX::XMINT2 ScrollDelta;
+		uint ClearAll;
+		/** @brief Units/frame the accumulated tops/bottoms drift toward empty — stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
+		float GhostDecay;
+	};
+	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
+	ConstantBuffer* heightProcessCB = nullptr;
+
+	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
+	void CreateHeightFieldResources();
+	/** @brief Scrolls the accumulated height maps to the new window position and rasterizes this frame's captured statics into them (MAX/MIN). Called from DrawShell before the screen-space passes. Implemented in SnowDeformation/Statics.cpp. */
+	void RenderObjectHeightMap();
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;

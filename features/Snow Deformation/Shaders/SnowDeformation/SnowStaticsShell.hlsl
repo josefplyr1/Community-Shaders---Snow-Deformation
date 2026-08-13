@@ -83,7 +83,8 @@ cbuffer StaticCB : register(b1)
 	float4 WorldRow2;
 
 	float ObjectsDepth;  // FLAT-class depth (walkways, roofs, planks)
-	float3 padStat;
+	float2 HeightWindowCenter;  // top-down height window (see SnowHeightCapture)
+	float HeightHalfExtent;
 
 	// >0.5: SmoothedNormals (VS t10) holds position-averaged normals for
 	// this object — pillow inflation for flat split-normal meshes.
