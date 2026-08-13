@@ -134,6 +134,8 @@ public:
 		float SnowBorderTrampledFade = 20.0f;
 		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
 		float SnowBorderUntrampledFade = 5.0f;
+		/** @brief View-ray band (units) over which the OBJECT snow skin cross-fades into the LANDSCAPE shell behind it — kills the hard seam between the two snow kinds where their surfaces run close in height (road meshes, low platforms). */
+		float SnowSnowFade = 10.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -257,7 +259,13 @@ public:
 
 		float BorderTrampledFade;
 		float BorderUntrampledFade;
-		float2 padShell;
+		/** @brief View-ray band over which the statics skin cross-fades into the landscape shell behind it. */
+		float SnowSnowFade;
+		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material — start of the fade and the hard end (the capture range). */
+		float SkinFadeStart;
+
+		float SkinFadeEnd;
+		float3 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -350,6 +358,12 @@ public:
 
 	/** @brief Only statics within this XY range of the camera are captured — distant mountains are snow-projected everywhere in Skyrim, but the skin only matters where deformation can happen. */
 	static constexpr float kStaticsCaptureRange = 12288.0f;
+	/** @brief Distance where the skin starts dissolving back into the object's own material (fully gone at the capture range) — distant objects keep their real look instead of turning blank white. */
+	static constexpr float kSkinFadeStart = 7000.0f;
+
+	/** @brief Depth copy taken AFTER the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell — Terrain Blending's technique adapted to the two snow kinds. */
+	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
 
 	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
 	struct alignas(16) StaticsCB
