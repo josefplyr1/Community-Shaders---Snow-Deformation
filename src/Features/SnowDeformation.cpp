@@ -11,6 +11,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	StampRadius,
 	RefillTime,
 	SnowClassDepths,
+	ObjectsSnowDepth,
 	SnowMeshesDepth,
 	RoadMeshesDepth,
 	SnowTexturePath,
@@ -81,6 +82,7 @@ void SnowDeformation::SetupResources()
 
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
+	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 
 	auto device = globals::d3d::device;
 
@@ -252,6 +254,15 @@ void SnowDeformation::ClearShaderCache()
 	staticsVSBlob = nullptr;
 	staticsILCache.clear();
 	staticsShadersFailed = false;
+	if (smoothAccumulateCS)
+		smoothAccumulateCS->Release();
+	smoothAccumulateCS = nullptr;
+	if (smoothResolveCS)
+		smoothResolveCS->Release();
+	smoothResolveCS = nullptr;
+	if (smoothFlatStatsCS)
+		smoothFlatStatsCS->Release();
+	smoothFlatStatsCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

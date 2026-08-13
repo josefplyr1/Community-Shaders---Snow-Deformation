@@ -116,7 +116,9 @@ public:
 		float RefillTime = 700.0f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
-		/** @brief Snow skin layer height on captured object meshes (rocks, drifts, logs). */
+		/** @brief Statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface — even 1 unit reads as a tiny hover. */
+		float ObjectsSnowDepth = 0.0f;
+		/** @brief Statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
 		float SnowMeshesDepth = 3.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately BELOW the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
@@ -355,11 +357,49 @@ public:
 		float4 WorldRow0;
 		float4 WorldRow1;
 		float4 WorldRow2;
-		/** @brief Snow layer height for this object, model-class resolved on the CPU (road vs regular). */
+		/** @brief FLAT-class depth (walkways, roofs, planks); road captures use RoadMeshesDepth for BOTH classes so the GPU pick cannot override it. */
 		float ObjectsDepth;
 		float3 padStat;
+		/** @brief >0.5: a smoothed-normal buffer is bound at VS t10 for this object (pillow inflation for flat meshes). */
+		float HasSmoothedNormals;
+		/** @brief ROUNDED-class depth (rocks, drifts, logs); the VS picks per mesh from the GPU flatness stats. */
+		float RoundedDepth;
+		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
+		float VertexCountF;
+		float padStat2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
+
+	// ---- Smoothed normals for the statics skin (pillow inflation) ----
+
+	/** @brief GPU-side per-mesh CB for SmoothNormalsCS. Layout must match SmoothCB in SmoothNormalsCS.hlsl. */
+	struct alignas(16) SmoothCB
+	{
+		uint32_t VertexCount;
+		uint32_t StrideBytes;
+		uint32_t NormalOffsetBytes;
+		uint32_t PosIsFloat32;
+		uint32_t TableMask;
+		uint32_t padSm[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
+
+	/** @brief Per unique geometry (keyed by vertex buffer pointer): position-averaged normals, built once by SmoothNormalsCS. Split-normal flat meshes (planks, roofs, pole caps) inflate along these so their snow drapes as a sealed pillow instead of a hovering parallel sheet. */
+	struct SmoothedNormalsEntry
+	{
+		winrt::com_ptr<ID3D11Buffer> buffer;
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		bool ready = false;
+	};
+	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
+	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
+	ID3D11ComputeShader* smoothResolveCS = nullptr;
+	/** @brief Third pass: one-group reduction writing the mesh's flat/rounded classification (fraction of smoothed-vs-raw divergent vertices) into the stats element appended at SmoothedNormals[vertexCount]. */
+	ID3D11ComputeShader* smoothFlatStatsCS = nullptr;
+	ConstantBuffer* smoothCB = nullptr;
+
+	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
+	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;

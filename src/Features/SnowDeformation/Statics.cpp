@@ -10,7 +10,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	if (!settings.EnableSnowDeformation || (settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+	if (!settings.EnableSnowDeformation || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
 		return;
 	// Main world view only: probe/reflection passes must not fill the list.
 	if (!globals::state->inWorld)
@@ -213,9 +213,187 @@ bool SnowDeformation::EnsureStaticsShaders()
 	return true;
 }
 
+ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
+{
+	auto triShape = a_geometry->AsTriShape();
+	if (!triShape)
+		return nullptr;
+	auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+	if (!rendererData || !rendererData->vertexBuffer)
+		return nullptr;
+
+	// Pointer reuse after cell unloads could serve stale normals to a new
+	// mesh; the cap flushes the cache before that becomes likely.
+	if (smoothedNormalsCache.size() > 1024)
+		smoothedNormalsCache.clear();
+
+	auto [it, inserted] = smoothedNormalsCache.try_emplace(rendererData->vertexBuffer);
+	auto& entry = it->second;
+	if (!inserted)
+		return entry.ready ? entry.srv.get() : nullptr;
+
+	// First sight of this geometry: build now (a buffer copy + two small
+	// dispatches, once per unique mesh). Failures leave the permanent null
+	// entry — no per-frame retries; the VS falls back to raw normals.
+	if (!smoothAccumulateCS)
+		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
+	if (!smoothResolveCS)
+		smoothResolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
+	if (!smoothFlatStatsCS)
+		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+	if (!smoothAccumulateCS || !smoothResolveCS || !smoothFlatStatsCS || !smoothCB)
+		return nullptr;
+
+	auto desc = rendererData->vertexDesc;
+	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+		return nullptr;
+	uint64_t descKey;
+	memcpy(&descKey, &desc, sizeof(descKey));
+	const uint32_t stride = uint32_t(descKey & 0xF) * 4;
+	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
+	if (stride == 0 || vertexCount == 0)
+		return nullptr;
+
+	// Position size = distance to the first following attribute (same
+	// offset-table logic the input layouts use; VF_FULLPREC is unreliable).
+	uint32_t positionBytes = stride;
+	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kSmoothAttrs[] = {
+		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
+		{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
+		{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
+		{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
+		{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
+		{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
+		{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
+		{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
+	};
+	for (auto [flag, attr] : kSmoothAttrs) {
+		if (desc.HasFlag(flag)) {
+			uint32_t attrOffset = desc.GetAttributeOffset(attr);
+			if (attrOffset > 0 && attrOffset < positionBytes)
+				positionBytes = attrOffset;
+		}
+	}
+	const uint32_t normalOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
+
+	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
+	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+
+	// SRV-capable copy of the game's vertex buffer (raw view) — the game's
+	// own buffers carry no shader-resource bind flag.
+	D3D11_BUFFER_DESC srcDesc{};
+	gameVB->GetDesc(&srcDesc);
+	D3D11_BUFFER_DESC copyDesc{};
+	copyDesc.ByteWidth = srcDesc.ByteWidth;
+	copyDesc.Usage = D3D11_USAGE_DEFAULT;
+	copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	copyDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+	winrt::com_ptr<ID3D11Buffer> vbCopy;
+	if (FAILED(device->CreateBuffer(&copyDesc, nullptr, vbCopy.put())))
+		return nullptr;
+	context->CopyResource(vbCopy.get(), gameVB);
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC rawSrvDesc{};
+	rawSrvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	rawSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+	rawSrvDesc.BufferEx.NumElements = copyDesc.ByteWidth / 4;
+	rawSrvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+	winrt::com_ptr<ID3D11ShaderResourceView> vbCopySRV;
+	if (FAILED(device->CreateShaderResourceView(vbCopy.get(), &rawSrvDesc, vbCopySRV.put())))
+		return nullptr;
+
+	// Hash table (transient) and the persistent output buffer.
+	uint32_t tableSlots = 64;
+	while (tableSlots < vertexCount * 2)
+		tableSlots <<= 1;
+	D3D11_BUFFER_DESC tableDesc{};
+	tableDesc.ByteWidth = tableSlots * 16;
+	tableDesc.Usage = D3D11_USAGE_DEFAULT;
+	tableDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	tableDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+	winrt::com_ptr<ID3D11Buffer> tableBuffer;
+	if (FAILED(device->CreateBuffer(&tableDesc, nullptr, tableBuffer.put())))
+		return nullptr;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC rawUavDesc{};
+	rawUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	rawUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	rawUavDesc.Buffer.NumElements = tableSlots * 4;
+	rawUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+	winrt::com_ptr<ID3D11UnorderedAccessView> tableUAV;
+	if (FAILED(device->CreateUnorderedAccessView(tableBuffer.get(), &rawUavDesc, tableUAV.put())))
+		return nullptr;
+
+	// One extra element past the vertices: the mesh's flatness stats, read by
+	// the VS to pick the flat or rounded snow behavior without any CPU
+	// readback.
+	D3D11_BUFFER_DESC outDesc{};
+	outDesc.ByteWidth = (vertexCount + 1) * 16;
+	outDesc.Usage = D3D11_USAGE_DEFAULT;
+	outDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	outDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+	outDesc.StructureByteStride = 16;
+	winrt::com_ptr<ID3D11Buffer> outBuffer;
+	if (FAILED(device->CreateBuffer(&outDesc, nullptr, outBuffer.put())))
+		return nullptr;
+	Util::SetResourceName(outBuffer.get(), "SnowDeformation::SmoothedNormals");
+	D3D11_SHADER_RESOURCE_VIEW_DESC outSrvDesc{};
+	outSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	outSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+	outSrvDesc.Buffer.NumElements = vertexCount + 1;
+	winrt::com_ptr<ID3D11ShaderResourceView> outSRV;
+	if (FAILED(device->CreateShaderResourceView(outBuffer.get(), &outSrvDesc, outSRV.put())))
+		return nullptr;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC outUavDesc{};
+	outUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+	outUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	outUavDesc.Buffer.NumElements = vertexCount + 1;
+	winrt::com_ptr<ID3D11UnorderedAccessView> outUAV;
+	if (FAILED(device->CreateUnorderedAccessView(outBuffer.get(), &outUavDesc, outUAV.put())))
+		return nullptr;
+
+	const UINT clearZero[4] = { 0, 0, 0, 0 };
+	context->ClearUnorderedAccessViewUint(tableUAV.get(), clearZero);
+
+	SmoothCB cb{};
+	cb.VertexCount = vertexCount;
+	cb.StrideBytes = stride;
+	cb.NormalOffsetBytes = normalOffset;
+	cb.PosIsFloat32 = positionBytes >= 16 ? 1u : 0u;
+	cb.TableMask = tableSlots - 1;
+	smoothCB->Update(cb);
+
+	// Compute-only state: does not disturb the surrounding draw pipeline.
+	ID3D11Buffer* cscb = smoothCB->CB();
+	context->CSSetConstantBuffers(0, 1, &cscb);
+	ID3D11ShaderResourceView* csSRV = vbCopySRV.get();
+	context->CSSetShaderResources(0, 1, &csSRV);
+	ID3D11UnorderedAccessView* csUAVs[2] = { tableUAV.get(), outUAV.get() };
+	context->CSSetUnorderedAccessViews(0, 2, csUAVs, nullptr);
+	const uint32_t groups = (vertexCount + 63) / 64;
+	context->CSSetShader(smoothAccumulateCS, nullptr, 0);
+	context->Dispatch(groups, 1, 1);
+	context->CSSetShader(smoothResolveCS, nullptr, 0);
+	context->Dispatch(groups, 1, 1);
+	// Flatness stats: one group strided over the resolved normals.
+	context->CSSetShader(smoothFlatStatsCS, nullptr, 0);
+	context->Dispatch(1, 1, 1);
+
+	ID3D11ShaderResourceView* nullCsSRV = nullptr;
+	context->CSSetShaderResources(0, 1, &nullCsSRV);
+	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
+	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	entry.buffer = outBuffer;
+	entry.srv = outSRV;
+	entry.ready = true;
+	return entry.srv.get();
+}
+
 void SnowDeformation::DrawCapturedStatics()
 {
-	if (capturedStatics.empty() || (settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+	if (capturedStatics.empty() || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
 		return;
 	if (!EnsureStaticsShaders())
 		return;
@@ -328,7 +506,14 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+		// Smoothed normals (built once per unique mesh): pillow inflation
+		// for flat split-normal surfaces — planks, roofs, pole caps.
+		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
+		context->VSSetShaderResources(10, 1, &smoothSRV);
+		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);
@@ -342,6 +527,8 @@ void SnowDeformation::DrawCapturedStatics()
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
 	context->IASetInputLayout(nullptr);
+	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
+	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
 
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);
