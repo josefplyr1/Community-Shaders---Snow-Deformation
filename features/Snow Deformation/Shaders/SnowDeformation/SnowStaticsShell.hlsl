@@ -554,7 +554,10 @@ float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
 	float3 pomT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 pomB = cross(normalWS, pomT);
 	float3 viewTS = float3(dot(V, pomT), dot(V, pomB), dot(V, normalWS));
-	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.25) * (SnowParallaxAmp * fade);
+	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.35) * (SnowParallaxAmp * fade);
+	float maxOffsetLen = length(maxOffset);
+	[flatten] if (maxOffsetLen > 0.06)
+		maxOffset *= 0.06 / maxOffsetLen;
 	float2 dx = ddx(uv);
 	float2 dy = ddy(uv);
 

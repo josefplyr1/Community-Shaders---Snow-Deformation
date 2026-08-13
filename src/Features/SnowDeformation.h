@@ -486,9 +486,9 @@ public:
 
 	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
 	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
-	/** @brief Frame latch for the once-per-frame atlas copy; index incremented in Prepass. */
+	/** @brief Frame index incremented in Prepass; per-slice latches so each light's slice is copied once per frame. */
 	uint64_t pointShadowFrameIndex = 0;
-	uint64_t pointShadowCaptureFrame = 0;
+	uint64_t pointShadowSliceFrame[kPointShadowMaxLights] = {};
 
 	/** @brief Called from State::Draw while the game renders a LOCAL light's shadow mask (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live (renderTarget reads -1 once the engine returns the maps) and PS t4 genuinely holds the local atlas. Copies the atlas once per frame and snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
 	void CapturePointShadowMask();
