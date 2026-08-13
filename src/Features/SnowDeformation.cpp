@@ -1,6 +1,7 @@
 #include "SnowDeformation.h"
 
 #include "Globals.h"
+#include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
@@ -44,6 +45,30 @@ void SnowDeformation::SetupResources()
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
 	}
+
+	{
+		D3D11_TEXTURE2D_DESC terrainDesc = {
+			.Width = kShellWindowDim,
+			.Height = kShellWindowDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R32G32_FLOAT,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE
+		};
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC terrainSrvDesc = {
+			.Format = terrainDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+
+		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
+		shellTerrainTexture->CreateSRV(terrainSrvDesc);
+	}
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -84,6 +109,9 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData before using it).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+
+	if (settings.EnableSnowDeformation && globals::state->inWorld)
+		UpdateShellTerrainWindow();
 
 	if (!settings.EnableSnowDeformation)
 		return;
