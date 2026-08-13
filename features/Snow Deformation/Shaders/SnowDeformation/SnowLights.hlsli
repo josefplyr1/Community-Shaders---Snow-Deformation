@@ -5,8 +5,9 @@
 // visible-light list. The shells draw in the deferred pass, outside the
 // game's per-geometry light plumbing, so the strict-light cbuffer (b3) is
 // not available; the cluster list carries every visible placed light and
-// is the sole source here. Shadow-casting lights multiply in their channel
-// of the game's screen-space shadow mask.
+// is the sole source here. Shadow-casting lights sample their own shadow
+// maps via SnowShadow::GetPointLightShadow, so include SnowShadow.hlsli
+// first.
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
@@ -27,11 +28,6 @@ namespace LightLimitFix
 
 namespace SnowLights
 {
-	// The game's deferred shadow mask (one channel per shadow-casting
-	// light), valid for the depth-prepass surface under the shell. Same
-	// register Lighting.hlsl uses; free in the shell pass.
-	Texture2D<float4> ShadowMask : register(t14);
-
 	// LightLimitFix::GetClusterIndex reads FrameBuffer (b12) for its
 	// first-person fix; b12 is not bound in this pass and the shell is
 	// never first person, so the cluster math is local.
@@ -48,22 +44,17 @@ namespace SnowLights
 		return true;
 	}
 
-	// Adds the clustered point lights to the shell's direct lobes. All
-	// positions camera-relative. clusterUV/maskUV are projection-space
-	// screen UVs: clusterUV for the shell pixel itself, maskUV for the
-	// ground point beneath it (the mask was rendered against the prepass
-	// depth; sampling at the under-point keeps fire shadows from sliding
-	// with camera motion). Room/portal culling is skipped: the shell only
-	// exists in exteriors. GetAttenuation self-selects inverse-square vs
-	// vanilla falloff per light flags, so ISL parity is automatic.
-	// maskInfluence: how much the shadow mask applies (0..1). The mask holds
-	// shadows computed for the pre-shell ground; a low light's shadow length
-	// is very sensitive to receiver height, so ground shadows painted onto a
-	// raised snow surface stretch into long streaks. The caller fades the
-	// mask out with the surface's height above the sampled ground.
+	// Adds the clustered point lights to the shell's direct lobes.
+	// worldPos camera-relative, worldPosAbs absolute; clusterUV is the
+	// pixel's projection-space screen UV. Shadow-casting lights sample
+	// their own shadow map at the shell surface, so shadow length is
+	// correct for the raised snow. Room/portal culling is skipped: the
+	// shell only exists in exteriors. GetAttenuation self-selects
+	// inverse-square vs vanilla falloff per light flags, so ISL parity is
+	// automatic.
 	void AccumulatePointLights(
-		float3 worldPos, float3 normalWS, float3 V, float viewZ,
-		float2 clusterUV, float2 maskUV, float2 dynResScale, float maskInfluence,
+		float3 worldPos, float3 worldPosAbs, float3 normalWS, float3 V, float viewZ,
+		float2 clusterUV,
 		float3 albedo, float3 F0, float roughness,
 		inout float3 diffuse, inout float3 specular)
 	{
@@ -72,9 +63,6 @@ namespace SnowLights
 			return;
 
 		LightLimitFix::LightGrid grid = LightLimitFix::lightGrid[clusterIndex];
-
-		float4 shadowMask = 1.0;
-		bool maskLoaded = false;
 
 		[loop] for (uint i = 0; i < grid.lightCount; i++)
 		{
@@ -90,24 +78,8 @@ namespace SnowLights
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * attenuation * light.fade;
 
 			float lightShadow = 1.0;
-			[branch] if ((light.lightFlags & LightLimitFix::LightFlags::Shadow) && maskInfluence > 0.001)
-			{
-				[branch] if (!maskLoaded)
-				{
-					// Upscaling renders into the top-left sub-rect of the
-					// full-size target; full-screen UV must be scaled by the
-					// dynamic-resolution ratio (Lighting.hlsl's
-					// GetDynamicResolutionAdjustedScreenPosition, b12-free).
-					// The under-point can also project past the viewport
-					// edge; clamp to the sub-rect instead of reading outside
-					// the rendered region.
-					int2 renderDims = int2(SharedData::BufferDim.xy * dynResScale);
-					int2 maskPixel = clamp(int2(maskUV * dynResScale * SharedData::BufferDim.xy), int2(0, 0), renderDims - 1);
-					shadowMask = ShadowMask.Load(int3(maskPixel, 0));
-					maskLoaded = true;
-				}
-				lightShadow = lerp(1.0, shadowMask[light.shadowLightIndex], maskInfluence);
-			}
+			[branch] if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
+				lightShadow = SnowShadow::GetPointLightShadow(worldPosAbs, light.shadowLightIndex, light.radius);
 
 			float3 L = normalize(lightDirection);
 			float satNdotL = saturate(dot(normalWS, L));

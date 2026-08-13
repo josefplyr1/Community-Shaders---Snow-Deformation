@@ -305,8 +305,6 @@ void SnowDeformation::DrawShell()
 	// Skylighting probe volume for ambient parity with terrain shading.
 	auto& skylighting = globals::features::skylighting;
 	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
-	// Upscaling sub-rect ratio for the shadow-mask lookup.
-	cbData.DynResScale = { fb.GetDynamicResolutionParams1().x, fb.GetDynamicResolutionParams1().y };
 
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
@@ -435,16 +433,20 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
 		context->PSSetShaderResources(45, 1, &sssSRV);
 	}
-	// LLF cluster buffers (t35-t37) + the game's shadow mask (t14) for the
-	// shells' point lights. LLF binds t35-37 each Prepass, but slot state at
-	// deferred time is not guaranteed; rebind explicitly like t20. Do NOT
-	// null t35-37 in teardown: later forward passes (water, effects) read
-	// LLF's own binding, which this rebind matches exactly.
+	// LLF cluster buffers (t35-t37) + the point-shadow light table (t38) for
+	// the shells' point lights. LLF binds t35-37 each Prepass, but slot
+	// state at deferred time is not guaranteed; rebind explicitly like t20.
+	// Do NOT null t35-37 in teardown: later forward passes (water, effects)
+	// read LLF's own binding, which this rebind matches exactly. The shadow
+	// maps themselves ride the t22/t23 atlas copies bound above.
 	if (cbData.PointLightsActive > 0.5f) {
 		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
 		context->PSSetShaderResources(35, 3, lightSRVs);
-		ID3D11ShaderResourceView* maskSRV = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
-		context->PSSetShaderResources(14, 1, &maskSRV);
+		UpdatePointShadowLights();
+		if (pointShadowLights) {
+			ID3D11ShaderResourceView* pointShadowSRV = pointShadowLights->srv.get();
+			context->PSSetShaderResources(38, 1, &pointShadowSRV);
+		}
 	}
 	// Skylighting probe volume (t50). Skylighting's own SRV; no teardown
 	// needed for the same reason as t35-37.
@@ -513,10 +515,6 @@ void SnowDeformation::DrawShell()
 	// t21 are cleared alongside.
 	ID3D11ShaderResourceView* nullShadowSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(20, 4, nullShadowSRVs);
-	// t14 is an SRV of the shadow-mask render target; unbind before the next
-	// mask render binds it as an RTV (same principle as t22/t23).
-	ID3D11ShaderResourceView* nullMaskSRV = nullptr;
-	context->PSSetShaderResources(14, 1, &nullMaskSRV);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;

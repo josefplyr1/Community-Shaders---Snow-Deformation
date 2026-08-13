@@ -36,8 +36,8 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "Common/ShadowSampling.hlsli"
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "Skylighting/Skylighting.hlsli"
-#	include "SnowDeformation/SnowLights.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
+#	include "SnowDeformation/SnowLights.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -108,15 +108,10 @@ cbuffer ShellCB : register(b0)
 	// Statics skin: how much heavily trampled trench floors dissolve to the
 	// object's own texture (0 = solid snow floors).
 	float TrenchFloorFade;
-	// LLF cluster buffers bound at t35-t37, shadow mask at t14.
+	// LLF cluster buffers bound at t35-t37, point-shadow table at t38.
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
 	float SkylightingActive;
-
-	// Dynamic-resolution ratio (b12 DynamicResolutionParams1.xy): rendered
-	// content occupies this fraction of the full-size targets, top-left.
-	float2 DynResScale;
-	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -992,36 +987,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
 	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
 
-	// Placed lights (fires, lanterns): the clustered LLF list, with the
-	// per-light shadow mask sampled at the ground point under the pixel.
+	// Placed lights (fires, lanterns): the clustered LLF list, with each
+	// shadow-casting light's own map sampled at the shell surface.
 	[branch] if (PointLightsActive > 0.5)
 	{
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		float3 groundPos = float3(input.WorldPos.xy, pixelTerrain.x - ShellCameraPosAdjust.z);
-		float4 groundClip = mul(CameraViewProj, float4(groundPos, 1.0));
-		float2 maskUV = groundClip.xy / max(groundClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		// The mask only holds values for the surface visible at each pixel.
-		// When something nearer covers the under-point's pixel (an actor
-		// between camera and ground), its mask value would paint the
-		// occluder's screen silhouette onto the snow; fall back to this
-		// pixel's own sample, whose pre-shell surface is the ground below
-		// and carries the occluder's real fire-cast shadow instead.
-		int2 renderDims = int2(SharedData::BufferDim.xy * DynResScale);
-		int2 maskPx = clamp(int2(maskUV * DynResScale * SharedData::BufferDim.xy), int2(0, 0), renderDims - 1);
-		float visibleZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(maskPx, 0)));
-		[flatten] if (visibleZ < groundClip.w - 24.0)
-			maskUV = clusterUV;
-		// The mask holds shadows computed for the buried ground. Low lights
-		// (fires) cast shadows whose length is very sensitive to receiver
-		// height, so ground shadows on a raised surface stretch into long
-		// streaks; trust the mask only where the shell hugs the ground
-		// (trench floors, thin cover) and fade it out on deep snow.
-		float surfaceRaise = (input.WorldPos.z + ShellCameraPosAdjust.z) - pixelTerrain.x;
-		float maskInfluence = 1.0 - smoothstep(8.0, 32.0, surfaceRaise);
-		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
-			clusterUV, maskUV, DynResScale, maskInfluence, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+		SnowLights::AccumulatePointLights(input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
+			normalWS, V, viewZ, clusterUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;

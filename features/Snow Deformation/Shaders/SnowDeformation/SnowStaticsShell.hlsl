@@ -34,8 +34,8 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "Common/ShadowSampling.hlsli"
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "Skylighting/Skylighting.hlsli"
-#	include "SnowDeformation/SnowLights.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
+#	include "SnowDeformation/SnowLights.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -102,15 +102,10 @@ cbuffer ShellCB : register(b0)
 	// How much heavily trampled trench floors dissolve to the object's own
 	// texture (0 = solid snow floors).
 	float TrenchFloorFade;
-	// LLF cluster buffers bound at t35-t37, shadow mask at t14.
+	// LLF cluster buffers bound at t35-t37, point-shadow table at t38.
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
 	float SkylightingActive;
-
-	// Dynamic-resolution ratio (b12 DynamicResolutionParams1.xy): rendered
-	// content occupies this fraction of the full-size targets, top-left.
-	float2 DynResScale;
-	float2 padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -967,18 +962,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
 	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
 
-	// Placed lights: same clustered path as the terrain shell. The skin and
-	// patch hug the object surface, so the pixel's own position doubles as
-	// the mask under-point.
+	// Placed lights: same clustered path as the terrain shell, with each
+	// shadow-casting light's own map sampled at the skin/patch surface.
 	[branch] if (PointLightsActive > 0.5)
 	{
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		// Full mask influence: the skin and patch stay within a few units of
-		// the pre-shell surface, so ground shadows read correctly here.
-		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
-			screenUV, screenUV, DynResScale, 1.0, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+		SnowLights::AccumulatePointLights(input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
+			normalWS, V, viewZ, screenUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;

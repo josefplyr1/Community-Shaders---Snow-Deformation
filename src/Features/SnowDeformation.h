@@ -310,16 +310,27 @@ public:
 		float UndulationScale;
 		/** @brief How much heavily trampled object-trench floors dissolve to the object's own texture (0 = solid snow floors). */
 		float TrenchFloorFade;
-		/** @brief LLF cluster buffers bound at t35-t37, shadow mask at t14 (point lights on the shells). */
+		/** @brief LLF cluster buffers bound at t35-t37, point-shadow table at t38 (point lights on the shells). */
 		float PointLightsActive;
 		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */
 		float SkylightingActive;
-
-		/** @brief Dynamic-resolution ratio (b12 DynamicResolutionParams1.xy); rendered content occupies this fraction of the full-size targets. */
-		float2 DynResScale;
-		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
+
+	/**
+	 * @brief Per-light shadow data for shadow-casting local lights (t38), indexed by the light's shadow-mask channel.
+	 *
+	 * Mirrors PointShadowLight in SnowShadow.hlsli. LightType 0 marks an empty slot; the table is left empty
+	 * whenever the shadow-atlas copies are unavailable, so the shader falls back to unshadowed light.
+	 */
+	struct PointShadowLightData
+	{
+		DirectX::XMFLOAT4X4 LightTransform;
+		uint32_t SliceIndex;
+		uint32_t LightType;  ///< 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
+		float pad[2];
+	};
+	static constexpr uint32_t kPointShadowMaxLights = 4;
 
 	/**
 	 * @brief Draws the snow shell into the deferred G-buffer.
@@ -454,6 +465,12 @@ public:
 	uint32_t dbgLodDescriptorCount = 0;
 	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
 	uint32_t dbgLodAtlasSlices = 0;
+
+	/** @brief 4-entry structured buffer of PointShadowLightData (t38), rebuilt each frame from the shadow scene node's active local shadow lights. Their maps share the captured atlas, so no extra capture exists. */
+	Buffer* pointShadowLights = nullptr;
+
+	/** @brief Fills and uploads the point-shadow light table from ShadowSceneNode::activeShadowLights (spot and paraboloid lights, keyed by shadow-mask channel). Leaves the table empty when the atlas copies are invalid or on VR. Implemented in SnowDeformation/Shadows.cpp. */
+	void UpdatePointShadowLights();
 
 	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
 	struct alignas(16) StaticsCB

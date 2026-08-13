@@ -22,6 +22,20 @@ Texture2DArray<float> SnowShadowAtlas : register(t22);
 Texture2DArray<float> SnowShadowAtlasESRAM : register(t23);
 SamplerComparisonState SnowShadowCmpSampler : register(s2);
 
+// Shadow-casting local lights (fires, lanterns, torches). Their maps live
+// in the same atlas as the sun cascades, on their own slices; this table
+// carries each light's descriptor transform and slice, indexed by the
+// light's shadow-mask channel. LightType 0 marks an empty slot (also used
+// when the atlas copies are unavailable this frame).
+struct PointShadowLight
+{
+	column_major float4x4 LightTransform;
+	uint SliceIndex;
+	uint LightType;  // 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
+	float2 padPSL;
+};
+StructuredBuffer<PointShadowLight> PointShadowLights : register(t38);
+
 namespace SnowShadow
 {
 	float SampleCascadeCmp(float3 posLS, uint cascade)
@@ -93,5 +107,68 @@ namespace SnowShadow
 			result = lerp(1.0, shadow, 1.0 - pow(fade * fade, 8));
 		}
 		return result;
+	}
+
+	static const float kSpotShadowBias = 0.0015;
+	static const float kRadialShadowBias = 0.003;
+
+	float SamplePointCmp(float2 uv, uint slice, float cmp)
+	{
+		float lit = SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
+		float litEsram = SnowShadowAtlasESRAM.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
+		return min(lit, litEsram);
+	}
+
+	// Local-light shadow evaluated at the receiver's REAL position (the
+	// raised snow surface), so shadow length is correct for the shell
+	// rather than the buried ground. The three projections transcribe the
+	// game's own shadow-mask passes (Utility.hlsl RENDER_SHADOWMASKSPOT /
+	// PB / DPB): spot = perspective map; paraboloid depth compares are
+	// RADIAL distance normalized by the light radius, not projected z.
+	// positionWS absolute; lightRadius from the light's cluster data.
+	float GetPointLightShadow(float3 positionWS, uint shadowLightIndex, float lightRadius)
+	{
+		PointShadowLight sl = PointShadowLights[shadowLightIndex];
+		float vis = 1.0;
+		[branch] if (sl.LightType == 1)
+		{
+			float4 positionLS = mul(sl.LightTransform, float4(positionWS, 1.0));
+			[branch] if (positionLS.w > 1e-4)
+			{
+				positionLS.xyz /= positionLS.w;
+				float2 uv = positionLS.xy * 0.5 + 0.5;
+				vis = SamplePointCmp(uv, sl.SliceIndex, positionLS.z - kSpotShadowBias);
+				// Cone edge falloff. Vanilla exponentiates by the light's
+				// authored falloff; a fixed exponent stands in (the final
+				// saturate makes outside-cone fully dark, matching the
+				// spot's illumination cone).
+				vis -= pow(2.0 * length(0.5 * positionLS.xy), 8.0) * vis;
+			}
+		}
+		else if (sl.LightType == 2)
+		{
+			float4 unadjusted = mul(sl.LightTransform, float4(positionWS, 1.0));
+			[branch] if (unadjusted.z * 0.5 + 0.5 >= 0.0)
+			{
+				float3 positionLS = unadjusted.xyz / unadjusted.w;
+				float3 lightDirection = normalize(normalize(positionLS) + float3(0, 0, 1));
+				float2 uv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
+				float cmp = saturate(length(positionLS) / lightRadius) - kRadialShadowBias;
+				vis = SamplePointCmp(uv, sl.SliceIndex, cmp);
+			}
+		}
+		else if (sl.LightType == 3)
+		{
+			// Dual paraboloid (torches, campfires): hemispheres packed into
+			// the slice's vertical halves.
+			float3 positionLS = mul(sl.LightTransform, float4(positionWS, 1.0)).xyz;
+			bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0.0;
+			float3 lightDirection = normalize(normalize(positionLS) + (lowerHalf ? float3(0, 0, -1) : float3(0, 0, 1)));
+			float2 uv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
+			uv.y = lowerHalf ? 1.0 - 0.5 * uv.y : 0.5 * uv.y;
+			float cmp = saturate(length(positionLS) / lightRadius) - kRadialShadowBias;
+			vis = SamplePointCmp(uv, sl.SliceIndex, cmp);
+		}
+		return saturate(vis);
 	}
 }
