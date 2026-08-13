@@ -289,6 +289,10 @@ void SnowDeformation::DrawShell()
 	context->Draw(kShellGridDim * kShellGridDim * 6, 0);
 	globals::profiler->EndPass();
 
+	// Captured projected-snow statics, inflated with the same material.
+	// Inherits this pass's bindings (b0, t0-t7, s0, b4-b6, RTs, depth).
+	DrawCapturedStatics();
+
 	// Restore everything we changed.
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);

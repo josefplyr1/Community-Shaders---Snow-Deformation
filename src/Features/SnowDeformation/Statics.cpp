@@ -1,0 +1,349 @@
+#include "Features/SnowDeformation.h"
+
+#include <d3dcompiler.h>
+
+#include "Globals.h"
+#include "State.h"
+#include "Utils/D3D.h"
+
+void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
+{
+	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
+		return;
+	if (!settings.EnableSnowDeformation || (settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+		return;
+	// Main world view only: probe/reflection passes must not fill the list.
+	if (!globals::state->inWorld)
+		return;
+
+	// The clean gate: projected-UV + snow flags together — covers rocks,
+	// roofs, logs, stumps and never flora, because foliage is not
+	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture
+	// match; a catch-all "snow" match drags frosted bushes in, whose leaf
+	// cards shard under the skin.
+	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+	const auto& flags = a_pass->shaderProperty->flags;
+	// Animated flora never qualifies: card meshes shard under the skin.
+	if (flags.all(Flag::kTreeAnim))
+		return;
+	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
+		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		if (!material)
+			return;
+
+		static std::unordered_map<const void*, bool> driftMaterialCache;
+		if (driftMaterialCache.size() > 4096)
+			driftMaterialCache.clear();
+		auto [it, inserted] = driftMaterialCache.try_emplace(material, false);
+		if (inserted) {
+			if (auto textureSet = material->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+					std::string lowered(path);
+					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					// Drifts wear plain LANDSCAPE snow textures (no "drift" in
+					// the path) — requiring the landscape folder keeps frosted
+					// plants (plant/tree folders) out.
+					it->second = lowered.find("drift") != std::string::npos ||
+					             (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
+				}
+			}
+		}
+		if (!it->second)
+			return;
+	}
+
+	// Range cap: distant mountains are snow-projected everywhere in Skyrim;
+	// the skin only matters where deformation can happen.
+	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const auto& translate = a_pass->geometry->world.translate;
+	float dx = translate.x - eye.x;
+	float dy = translate.y - eye.y;
+	if (dx * dx + dy * dy > kStaticsCaptureRange * kStaticsCaptureRange)
+		return;
+
+	// The same geometry renders through multiple passes; capture once.
+	if (!capturedStaticsSet.insert(a_pass->geometry).second)
+		return;
+
+	// Road-mesh model class: deterministic NAME + texture-path match. The
+	// name check matters: road models are built from MULTIPLE trishapes
+	// ('RoadChunk...:0', ':2'), and only some wear road textures — matching
+	// textures alone splits one road across two depth settings, stacking a
+	// second hovering shell.
+	bool road = false;
+	{
+		std::string loweredName(a_pass->geometry->name.c_str());
+		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		road = loweredName.find("road") != std::string::npos || loweredName.find("bridge") != std::string::npos;
+	}
+	if (!road) {
+		if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
+			static std::unordered_map<const void*, bool> roadMaterialCache;
+			if (roadMaterialCache.size() > 4096)
+				roadMaterialCache.clear();
+			auto [roadIt, roadInserted] = roadMaterialCache.try_emplace(roadMaterial, false);
+			if (roadInserted) {
+				if (auto textureSet = roadMaterial->textureSet.get()) {
+					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+						std::string lowered(path);
+						std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+							[](unsigned char c) { return (char)std::tolower(c); });
+						roadIt->second = lowered.find("road") != std::string::npos || lowered.find("bridge") != std::string::npos;
+					}
+				}
+			}
+			road = roadIt->second;
+		}
+	}
+
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road });
+}
+
+struct SD_BSLightingShader_SetupGeometry
+{
+	static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
+	{
+		func(shader, a_pass, a_flags);
+
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.BSLightingShader_SetupGeometry(a_pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void SnowDeformation::InstallStaticsCaptureHook()
+{
+	logger::info("[SNOW DEFORMATION] Hooking BSLightingShader::SetupGeometry");
+	stl::write_vfunc<0x6, SD_BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+}
+
+// Compiles one stage of the statics skin, RETURNING the bytecode blob —
+// input layouts must be created against the VS bytecode, which
+// Util::CompileShader discards. Include resolution matches CompileShader's
+// convention (everything relative to Data\Shaders).
+static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr)
+{
+	struct ShaderInclude : public ID3DInclude
+	{
+		HRESULT Open(D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID* ppData, UINT* pBytes) override
+		{
+			std::filesystem::path filePath = pFileName;
+			filePath = L"Data\\Shaders" / filePath;
+			std::ifstream file(filePath, std::ios::binary);
+			if (!file.is_open()) {
+				*ppData = nullptr;
+				*pBytes = 0;
+				return E_FAIL;
+			}
+			file.seekg(0, std::ios::end);
+			UINT size = static_cast<UINT>(file.tellg());
+			file.seekg(0, std::ios::beg);
+			char* data = new char[size];
+			file.read(data, size);
+			*ppData = data;
+			*pBytes = size;
+			return S_OK;
+		}
+		HRESULT Close(LPCVOID pData) override
+		{
+			delete[] static_cast<const char*>(pData);
+			return S_OK;
+		}
+	} includeHandler;
+
+	D3D_SHADER_MACRO macros[] = {
+		{ a_stageDefine, "" },
+		{ a_extraDefine ? a_extraDefine : "DX11", "" },
+		{ "WINPC", "" },
+		{ "DX11", "" },
+		{ nullptr, nullptr }
+	};
+
+	ID3DBlob* blob = nullptr;
+	ID3DBlob* errors = nullptr;
+	if (FAILED(D3DCompileFromFile(a_path, macros, &includeHandler, "main", a_target,
+			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &blob, &errors))) {
+		logger::warn("[SNOW DEFORMATION] Statics skin {} compile failed:\n{}", a_target,
+			errors ? static_cast<char*>(errors->GetBufferPointer()) : "unknown error");
+		if (errors)
+			errors->Release();
+		return nullptr;
+	}
+	if (errors)
+		errors->Release();
+	return blob;
+}
+
+bool SnowDeformation::EnsureStaticsShaders()
+{
+	if (staticsVS && staticsPS)
+		return true;
+	if (staticsShadersFailed)
+		return false;
+
+	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
+
+	if (!staticsVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsVS))) {
+				staticsVSBlob = blob;
+				Util::SetResourceName(staticsVS, "SnowDeformation::StaticsShellVS");
+			}
+		}
+	}
+	if (!staticsPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
+				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
+		}
+	}
+
+	if (!staticsVS || !staticsPS) {
+		staticsShadersFailed = true;
+		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
+		return false;
+	}
+	return true;
+}
+
+void SnowDeformation::DrawCapturedStatics()
+{
+	if (capturedStatics.empty() || (settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+		return;
+	if (!EnsureStaticsShaders())
+		return;
+
+	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
+
+	context->VSSetShader(staticsVS, nullptr, 0);
+	context->PSSetShader(staticsPS, nullptr, 0);
+	ID3D11Buffer* cb1 = staticsCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+	context->PSSetConstantBuffers(1, 1, &cb1);
+
+	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
+	// One-shot skip diagnostics: geometries that capture but cannot draw are
+	// the "why is THIS rock bare" cases — name the reason in the log.
+	static std::unordered_set<std::string> loggedSkips;
+	auto logSkip = [](RE::BSGeometry* a_geometry, const char* a_reason) {
+		if (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second)
+			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
+	};
+
+	for (const auto& cap : capturedStatics) {
+		auto* geometry = cap.geometry.get();
+		if (!geometry)
+			continue;
+		auto triShape = geometry->AsTriShape();
+		if (!triShape) {
+			logSkip(geometry, "not a BSTriShape");
+			continue;
+		}
+		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
+			logSkip(geometry, "no renderer buffers");
+			continue;
+		}
+		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0) {
+			logSkip(geometry, "zero triangles");
+			continue;
+		}
+
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
+			logSkip(geometry, "vertex format lacks POSITION/NORMAL");
+			continue;
+		}
+
+		// One input layout per distinct vertex descriptor; layouts may carry
+		// more elements than the VS consumes, so POSITION+NORMAL suffices.
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto& layout = staticsILCache[descKey];
+		if (!layout) {
+			// Position size = distance to the first following attribute (the
+			// descriptor's offset table is authoritative). The VF_FULLPREC
+			// flag is NOT reliable: logged runtime buffers carry 16-byte
+			// float4 positions with the flag clear, and reading them as
+			// halfs shreds geometry into screen-wide streaks.
+			uint32_t strideBytes = uint32_t(descKey & 0xF) * 4;
+			uint32_t positionBytes = strideBytes;
+			static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
+				{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
+				{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
+				{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
+				{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
+				{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
+				{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
+				{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
+				{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
+			};
+			for (auto [flag, attr] : kAttrs) {
+				if (desc.HasFlag(flag)) {
+					uint32_t attrOffset = desc.GetAttributeOffset(attr);
+					if (attrOffset > 0 && attrOffset < positionBytes)
+						positionBytes = attrOffset;
+				}
+			}
+
+			D3D11_INPUT_ELEMENT_DESC elements[2] = {
+				{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+				{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			};
+			if (FAILED(device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put())))
+				continue;  // null stays cached: this descriptor is skipped from now on
+		}
+		if (!layout)
+			continue;
+		context->IASetInputLayout(layout.get());
+
+		// Stride comes from the descriptor's low nibble (in dwords) — the
+		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
+		// equivalent: it reconstructs from flags assuming 16-byte float
+		// positions, but most SSE meshes store 8-byte half positions, and
+		// the overshot stride shreds vertices into giant garbage triangles.
+		UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
+			logSkip(geometry, "implausible stride/offset");
+			continue;
+		}
+		UINT offset = 0;
+		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+		StaticsCB scb{};
+		const auto& rot = cap.world.rotate;
+		const float scale = cap.world.scale;
+		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
+		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
+		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		staticsCB->Update(scb);
+
+		context->DrawIndexed(indexCount, 0, 0);
+	}
+	globals::profiler->EndPass();
+
+	// Leave IA clean, mirroring DrawShell's convention (game state manager
+	// rebinds via DIRTY_RENDERTARGET).
+	ID3D11Buffer* nullVB = nullptr;
+	UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
+	context->IASetInputLayout(nullptr);
+
+	ID3D11Buffer* nullCB = nullptr;
+	context->VSSetConstantBuffers(1, 1, &nullCB);
+	context->PSSetConstantBuffers(1, 1, &nullCB);
+}

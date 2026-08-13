@@ -335,4 +335,6 @@ void SnowDeformation::PostPostLoad()
 
 	logger::info("[SNOW DEFORMATION] Hooking BSLightingShader::SetupMaterial");
 	stl::write_vfunc<0x4, SD_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
+
+	InstallStaticsCaptureHook();
 }
