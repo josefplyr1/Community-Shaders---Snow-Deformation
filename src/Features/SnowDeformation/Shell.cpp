@@ -3,7 +3,9 @@
 #include <DDSTextureLoader.h>
 
 #include "Deferred.h"
+#include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
+#include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Globals.h"
 #include "State.h"
@@ -296,6 +298,14 @@ void SnowDeformation::DrawShell()
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
 	cbData.TrenchFloorFade = std::clamp(settings.TrenchFloorFade, 0.0f, 1.0f);
 
+	// Point lights: LLF's clustered visible-light list. The cluster buffers
+	// are only coherent when LLF ran this frame (CORE, but boot-disableable).
+	auto& lightLimitFix = globals::features::lightLimitFix;
+	cbData.PointLightsActive = (lightLimitFix.loaded && lightLimitFix.lights && lightLimitFix.lightIndexList && lightLimitFix.lightGrid) ? 1.0f : 0.0f;
+	// Skylighting probe volume for ambient parity with terrain shading.
+	auto& skylighting = globals::features::skylighting;
+	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
+
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
 	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
@@ -423,6 +433,23 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
 		context->PSSetShaderResources(45, 1, &sssSRV);
 	}
+	// LLF cluster buffers (t35-t37) + the game's shadow mask (t14) for the
+	// shells' point lights. LLF binds t35-37 each Prepass, but slot state at
+	// deferred time is not guaranteed; rebind explicitly like t20. Do NOT
+	// null t35-37 in teardown: later forward passes (water, effects) read
+	// LLF's own binding, which this rebind matches exactly.
+	if (cbData.PointLightsActive > 0.5f) {
+		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
+		context->PSSetShaderResources(35, 3, lightSRVs);
+		ID3D11ShaderResourceView* maskSRV = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
+		context->PSSetShaderResources(14, 1, &maskSRV);
+	}
+	// Skylighting probe volume (t50). Skylighting's own SRV; no teardown
+	// needed for the same reason as t35-37.
+	if (cbData.SkylightingActive > 0.5f) {
+		ID3D11ShaderResourceView* probeSRV = skylighting.texProbeArray->srv.get();
+		context->PSSetShaderResources(50, 1, &probeSRV);
+	}
 
 	winrt::com_ptr<ID3D11SamplerState> prevSamplers[2];
 	context->PSGetSamplers(0, 1, prevSamplers[0].put());
@@ -484,6 +511,10 @@ void SnowDeformation::DrawShell()
 	// t21 are cleared alongside.
 	ID3D11ShaderResourceView* nullShadowSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(20, 4, nullShadowSRVs);
+	// t14 is an SRV of the shadow-mask render target; unbind before the next
+	// mask render binds it as an RTV (same principle as t22/t23).
+	ID3D11ShaderResourceView* nullMaskSRV = nullptr;
+	context->PSSetShaderResources(14, 1, &nullMaskSRV);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;

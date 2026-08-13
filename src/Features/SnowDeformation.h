@@ -310,7 +310,10 @@ public:
 		float UndulationScale;
 		/** @brief How much heavily trampled object-trench floors dissolve to the object's own texture (0 = solid snow floors). */
 		float TrenchFloorFade;
-		float2 padShell;
+		/** @brief LLF cluster buffers bound at t35-t37, shadow mask at t14 (point lights on the shells). */
+		float PointLightsActive;
+		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */
+		float SkylightingActive;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

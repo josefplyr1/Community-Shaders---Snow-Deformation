@@ -35,6 +35,8 @@ SamplerState ShellLinearSampler : register(s1);
 #	define LinearSampler ShellLinearSampler
 #	include "Common/ShadowSampling.hlsli"
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
+#	include "Skylighting/Skylighting.hlsli"
+#	include "SnowDeformation/SnowLights.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
@@ -106,7 +108,10 @@ cbuffer ShellCB : register(b0)
 	// Statics skin: how much heavily trampled trench floors dissolve to the
 	// object's own texture (0 = solid snow floors).
 	float TrenchFloorFade;
-	float2 padShell;
+	// LLF cluster buffers bound at t35-t37, shadow mask at t14.
+	float PointLightsActive;
+	// Skylighting probe volume bound at t50.
+	float SkylightingActive;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -982,8 +987,31 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
 	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
 
+	// Placed lights (fires, lanterns): the clustered LLF list, with the
+	// per-light shadow mask sampled at the ground point under the pixel.
+	[branch] if (PointLightsActive > 0.5)
+	{
+		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
+		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		float3 groundPos = float3(input.WorldPos.xy, pixelTerrain.x - ShellCameraPosAdjust.z);
+		float4 groundClip = mul(CameraViewProj, float4(groundPos, 1.0));
+		float2 maskUV = groundClip.xy / max(groundClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
+			clusterUV, maskUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+	}
+
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;
 	float3 ambientPart = ambientColor * diffuseLobe;
+	// Skylighting parity with Lighting.hlsl's deferred tail: the ambient is
+	// darkened by the probe volume with the same multi-bounce term terrain
+	// uses, so the shell's shade matches adjacent ground.
+	[branch] if (SkylightingActive > 0.5)
+	{
+		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS);
+		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
+	}
 	float3 preLit = ambientPart + directDiffuse;
 
 	[branch] if (ShellDebugData != 0)
@@ -1010,9 +1038,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Albedo = float4(diffuseLobe, alpha);
 	psout.Specular = float4(directSpecular, alpha);
 	psout.Reflectance = float4(specularLobe, alpha);
-	// Masks.z carries the raw directional ambient luma for the composite
-	// (un-multiplied by albedo, matching Lighting's masksZ convention).
-	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientColor).x, alpha);
+	// Masks.z carries the final ambient luma for the composite. Lighting's
+	// masksZ is albedo-multiplied and skylit (directionalAmbientColor *=
+	// outputAlbedo, then ApplySkylighting); ambientPart matches that.
+	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
 	psout.Masks2 = float4(0.0, 0.0, 0.0, alpha);
 	return psout;
 }
