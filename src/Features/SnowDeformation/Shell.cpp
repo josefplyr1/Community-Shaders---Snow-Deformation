@@ -292,6 +292,10 @@ void SnowDeformation::DrawShell()
 	auto& screenSpaceShadowsFeature = globals::features::screenSpaceShadows;
 	cbData.ScreenSpaceShadowsActive = (screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) ? 1.0f : 0.0f;
 
+	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
+	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
+	cbData.TrenchFloorFade = std::clamp(settings.TrenchFloorFade, 0.0f, 1.0f);
+
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
 	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {

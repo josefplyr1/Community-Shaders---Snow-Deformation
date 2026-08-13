@@ -171,6 +171,29 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	shellDataDirty.store(true, std::memory_order_release);
 }
 
+float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missing)
+{
+	// A cell is 33 vertices = 32 intervals of kShellVertexSpacing.
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const int cellX = (int)std::floor(a_x / kCellSize);
+	const int cellY = (int)std::floor(a_y / kCellSize);
+	const int vx = std::clamp((int)std::lround((a_x - cellX * kCellSize) / kShellVertexSpacing), 0, 32);
+	const int vy = std::clamp((int)std::lround((a_y - cellY * kCellSize) / kShellVertexSpacing), 0, 32);
+
+	const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+	const std::shared_lock lock(shellCellMutex);
+	const auto it = shellCells.find(key);
+	if (it == shellCells.end())
+		return a_missing;
+
+	// Same class-weight resolve the window rebuild uses, for one vertex.
+	const uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
+	float depth = 0.0f;
+	for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
+		depth += it->second.classWeights[classI][idx] / 255.0f * settings.SnowClassDepths[classI];
+	return depth;
+}
+
 void SnowDeformation::UpdateShellTerrainWindow()
 {
 	auto eyeFB = globals::game::frameBufferCached.GetCameraPosAdjust();

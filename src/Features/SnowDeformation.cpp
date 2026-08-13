@@ -9,6 +9,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowDeformation::Settings,
 	EnableSnowDeformation,
 	StampRadius,
+	TrenchWallSharpness,
+	TrailIrregularity,
+	HighDetailTrenches,
 	RefillTime,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
@@ -23,18 +26,24 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowBorderUntrampledFade,
 	SnowSnowFade,
 	SnowMoundSteepness,
+	UndulationStrength,
+	UndulationSpacing,
+	TrenchFloorFade,
 	RangeShellM,
 	RangeTrenchesM,
 	RangeSkinsM,
 	RangeSkinsFadeM)
 
-void SnowDeformation::SetupResources()
+void SnowDeformation::CreateDeformationTextures()
 {
-	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
+	for (uint i = 0; i < 2; i++) {
+		delete deformationTextures[i];
+		deformationTextures[i] = nullptr;
+	}
 
 	D3D11_TEXTURE2D_DESC texDesc = {
-		.Width = kTextureDim,
-		.Height = kTextureDim,
+		.Width = deformMapDim,
+		.Height = deformMapDim,
 		.MipLevels = 1,
 		.ArraySize = 1,
 		.Format = DXGI_FORMAT_R16_FLOAT,
@@ -62,6 +71,13 @@ void SnowDeformation::SetupResources()
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
 	}
+}
+
+void SnowDeformation::SetupResources()
+{
+	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
+
+	CreateDeformationTextures();
 
 	{
 		D3D11_TEXTURE2D_DESC terrainDesc = {
@@ -160,7 +176,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		// cached FrameBuffer camera position is what the lighting pixel
 		// shader sees as CameraPosAdjust, so map and terrain agree.
 		auto eyePosFB = globals::game::frameBufferCached.GetCameraPosAdjust();
-		const float deformTexel = deformWorldSize / kTextureDim;
+		const float deformTexel = deformWorldSize / deformMapDim;
 		float2 desiredOrigin = {
 			std::floor((eyePosFB.x - deformWorldSize * 0.5f) / deformTexel) * deformTexel,
 			std::floor((eyePosFB.y - deformWorldSize * 0.5f) / deformTexel) * deformTexel
@@ -189,6 +205,18 @@ void SnowDeformation::ApplyRangeSettings()
 			clearRequested = true;
 		}
 		trenchRangeDirty = false;
+	}
+
+	// Trench detail: the resolution change recreates the ping-pong pair (and
+	// clears it — texel content is resolution-relative).
+	if (trenchDetailDirty || !rangeInitApplied) {
+		const uint desiredDim = settings.HighDetailTrenches ? kTextureDim * 2 : kTextureDim;
+		if (desiredDim != deformMapDim) {
+			deformMapDim = desiredDim;
+			CreateDeformationTextures();
+			clearRequested = true;
+		}
+		trenchDetailDirty = false;
 	}
 	rangeInitApplied = true;
 }
@@ -229,7 +257,9 @@ void SnowDeformation::Prepass()
 	pendingScrollDelta = { 0, 0 };
 
 	perFrameData.WindowOrigin = windowOrigin;
-	perFrameData.TexelSize = deformWorldSize / kTextureDim;
+	perFrameData.TexelSize = deformWorldSize / deformMapDim;
+	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness, 0.0f, 0.95f);
+	perFrameData.StampNoiseAmp = std::max(settings.TrailIrregularity, 0.0f);
 
 	float deltaTime = *globals::game::deltaTime;
 	// With RefillOnlyWhenSnowing, snow only recovers while the current
@@ -263,7 +293,7 @@ void SnowDeformation::Prepass()
 
 		context->CSSetShader(GetDeformationUpdateCS(), nullptr, 0);
 		globals::profiler->BeginPass("SnowDeformation::DeformationUpdate");
-		context->Dispatch(kTextureDim / 8, kTextureDim / 8, 1);
+		context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 		globals::profiler->EndPass();
 	}
 
@@ -353,6 +383,10 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	// Loaded values may change the window size or map resolution; the apply
+	// path is a no-op when they match the current state.
+	trenchRangeDirty = true;
+	trenchDetailDirty = true;
 }
 
 void SnowDeformation::SaveSettings(json& o_json)
@@ -363,5 +397,7 @@ void SnowDeformation::SaveSettings(json& o_json)
 void SnowDeformation::RestoreDefaultSettings()
 {
 	settings = {};
+	trenchRangeDirty = true;
+	trenchDetailDirty = true;
 	clearRequested = true;
 }

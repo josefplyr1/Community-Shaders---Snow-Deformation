@@ -29,6 +29,16 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
+		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 0.85f, "%.2f");
+		if (auto _ttSharp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; high = full depth held almost to the trail's edge."));
+		ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 0.6f, "%.2f");
+		if (auto _ttIrr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
+		if (ImGui::Checkbox(T(TKEY("high_detail_trenches"), "High Detail Trenches"), &settings.HighDetailTrenches))
+			trenchDetailDirty = true;
+		if (auto _ttHd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("high_detail_trenches_tooltip"), "Doubles the deformation map to 4096² for crisper trench edges (2-unit texels at the default Trenches range). Uses 64 MB of VRAM instead of 16 MB; toggling clears existing trenches."));
 		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
 		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing. Trails and trenches persist through clear weather."));
@@ -48,6 +58,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
+			ImGui::SliderFloat(T(TKEY("floor_see_through"), "Trench Floor See-Through"), &settings.TrenchFloorFade, 0.0f, 1.0f, "%.2f");
+			if (auto _ttFloor = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("floor_see_through_tooltip"), "How much a heavily trampled trench floor on an object (rock, log, walkway) wears through to the object's own surface instead of holding solid snow."));
 			ImGui::TreePop();
 		}
 
@@ -89,6 +102,18 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 			if (auto _ttSteep = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Surface Undulation"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttUnd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
+			ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
+			if (auto _ttUs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
+			ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
+			if (auto _ttUsp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
 			ImGui::TreePop();
 		}
 

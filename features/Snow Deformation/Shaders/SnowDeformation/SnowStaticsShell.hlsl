@@ -92,7 +92,15 @@ cbuffer ShellCB : register(b0)
 	// depth-marched shadows that carry distant LOD tree shadows beyond the
 	// two cascades.
 	float ScreenSpaceShadowsActive;
-	float padShell;
+	// Dune-field amplitude in world units (landscape shell only).
+	float UndulationAmp;
+
+	// Multiplier on the dune field's wavelengths (landscape shell only).
+	float UndulationScale;
+	// How much heavily trampled trench floors dissolve to the object's own
+	// texture (0 = solid snow floors).
+	float TrenchFloorFade;
+	float2 padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -755,9 +763,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel
-	// must never dissolve to the object's own texture, whatever the seam
-	// blends above decided.
-	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
+	// must never fully dissolve to the object's own texture, whatever the
+	// seam blends above decided. TrenchFloorFade relaxes the guarantee where
+	// the trample is heavy, so a well-worn floor wears through to the
+	// object's own surface (rock, log, planks) instead of holding solid snow.
+	float floorHold = smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage);
+	floorHold *= 1.0 - TrenchFloorFade * smoothstep(0.4, 1.0, pixelDeform);
+	coverageAlpha = max(coverageAlpha, floorHold);
 
 #	ifndef PATCH
 	// Vertical cull, middle strength: with the drape ramp the connective

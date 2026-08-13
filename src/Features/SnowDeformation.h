@@ -28,8 +28,9 @@ public:
 
 	// Square world-space deformation window following the camera in whole-texel
 	// steps. Texel value = normalized depression depth, 0 = untouched snow,
-	// 1 = compressed to the ground. World size is runtime (deformWorldSize),
-	// resolution is fixed, so trench detail coarsens with range.
+	// 1 = compressed to the ground. World size is runtime (deformWorldSize) and
+	// the resolution doubles with HighDetailTrenches, so trench detail coarsens
+	// with range and sharpens with the quality toggle.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 128;
 
@@ -110,6 +111,12 @@ public:
 		bool ShowDebugTexture = false;
 		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size). */
 		float StampRadius = 20.0f;
+		/** @brief Lower smoothstep edge of the stamp falloff, as a fraction of the stamp radius: 0 = the softest, widest banks; higher values hold full depth almost to the edge for steep trench walls. */
+		float TrenchWallSharpness = 0.2f;
+		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
+		float TrailIrregularity = 0.25f;
+		/** @brief Doubles the deformation map to 4096² (2-unit texels at the default Trenches range) for crisper trench detail. 64 MB of VRAM instead of 16; toggling clears existing trenches. */
+		bool HighDetailTrenches = false;
 		/** @brief Seconds for compressed snow to fully recover. 0 disables refilling. */
 		float RefillTime = 700.0f;
 		/** @brief Only refill while the current weather is snowing, so trails persist through clear spells and interiors. */
@@ -138,6 +145,12 @@ public:
 		float SnowSnowFade = 10.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
+		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
+		float UndulationStrength = 3.5f;
+		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
+		float UndulationSpacing = 1.0f;
+		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. */
+		float TrenchFloorFade = 0.5f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
@@ -178,6 +191,12 @@ public:
 		float RefillAmount;
 		uint ClearMap;
 
+		/** @brief Lower smoothstep edge of the stamp falloff (fraction of radius): higher = steeper trench walls. */
+		float StampFalloffStart;
+		/** @brief Fraction-of-radius noise wobbling each stamp's edge. */
+		float StampNoiseAmp;
+		float2 padStamp;
+
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
 		float4 StampEnds[kMaxStamps];
@@ -197,6 +216,9 @@ public:
 
 	/** @brief Creates the ping-pong deformation textures and the per-frame constant buffer. */
 	virtual void SetupResources() override;
+
+	/** @brief (Re)creates the ping-pong deformation textures at deformMapDim, releasing any previous pair. */
+	void CreateDeformationTextures();
 
 	/**
 	 * @brief Per-frame update: gathers actor stamp positions, scrolls the window
@@ -281,7 +303,14 @@ public:
 		float CrispShadows;
 		/** @brief Screen-Space Shadows output bound at t45: the long-range depth-marched shadows carrying distant LOD tree shadows beyond the cascades. */
 		float ScreenSpaceShadowsActive;
-		float padShell;
+		/** @brief Dune-field amplitude in world units (0 flattens the undulation). */
+		float UndulationAmp;
+
+		/** @brief Multiplier on the dune field's wavelengths (>1 = broader, calmer waves). */
+		float UndulationScale;
+		/** @brief How much heavily trampled object-trench floors dissolve to the object's own texture (0 = solid snow floors). */
+		float TrenchFloorFade;
+		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -337,6 +366,9 @@ public:
 
 	/** @brief Recenters and re-uploads the terrain data window when the camera crosses cells or new cells were baked. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
 	void UpdateShellTerrainWindow();
+
+	/** @brief Nominal (untrampled) snow depth in world units at a world XY, resolved from the baked cell data and the class depth sliders. Returns a_missing where no cell is baked (interiors, unvisited land). Implemented in SnowDeformation/TerrainData.cpp. */
+	float GetNominalSnowDepthAt(float a_x, float a_y, float a_missing);
 
 	/** @brief Thread-safe count of baked cells, for the settings UI. */
 	size_t ShellCellCountForUI()
@@ -623,6 +655,9 @@ protected:
 	/** @brief Deformation window world size (2x the Trenches range). Changing it clears the map. */
 	float deformWorldSize = 14000.0f;
 	bool trenchRangeDirty = false;
+	/** @brief Deformation map resolution: kTextureDim, doubled by HighDetailTrenches. Changing it recreates and clears the map. */
+	uint deformMapDim = kTextureDim;
+	bool trenchDetailDirty = false;
 	bool rangeInitApplied = false;
 
 public:

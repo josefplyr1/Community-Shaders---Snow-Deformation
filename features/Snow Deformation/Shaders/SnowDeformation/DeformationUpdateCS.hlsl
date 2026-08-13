@@ -17,12 +17,42 @@ cbuffer PerFrame : register(b0)
 	float RefillAmount;
 	uint ClearMap;
 
+	// Lower smoothstep edge of the stamp falloff (fraction of radius):
+	// higher = steeper trench walls.
+	float StampFalloffStart;
+	// Fraction-of-radius noise wobbling each stamp's edge.
+	float StampNoiseAmp;
+	float2 padStamp;
+
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth, w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule segment start)
 }
 
 Texture2D<float> PreviousDeformation : register(t0);
 RWTexture2D<float> CurrentDeformation : register(u0);
+
+// World-anchored value noise (8-unit cells at the call site) wobbling each
+// stamp's falloff distance, so trail edges read as churned snow instead of
+// swept circles.
+float StampNoiseHash(float2 cell)
+{
+	// Wrap the lattice so the hash's frac() math stays well inside float
+	// precision at world-scale inputs; the 512-cell repeat is invisible in
+	// edge wobble.
+	cell -= 512.0 * floor(cell / 512.0);
+	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float StampNoise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return lerp(lerp(StampNoiseHash(i), StampNoiseHash(i + float2(1, 0)), f.x),
+		lerp(StampNoiseHash(i + float2(0, 1)), StampNoiseHash(i + float2(1, 1)), f.x), f.y);
+}
 
 [numthreads(8, 8, 1)] void main(uint3 DTid
 								: SV_DispatchThreadID) {
@@ -58,11 +88,19 @@ RWTexture2D<float> CurrentDeformation : register(u0);
 		float distSq = dot(delta, delta);
 		float radius = Stamps[i].w;
 
-		[branch] if (distSq < radius * radius)
+		// Edge noise can push the falloff outward, so the gate widens with it.
+		float gateRadius = radius * (1.0 + 0.5 * StampNoiseAmp);
+		[branch] if (distSq < gateRadius * gateRadius)
 		{
-			// Falloff from 0.2 of the radius keeps a wide edge band, so
-			// coarser consumers of the map can still represent trench walls.
-			float falloff = 1.0 - smoothstep(0.2, 1.0, sqrt(distSq) / radius);
+			float edgeDist = sqrt(distSq) / radius;
+			[branch] if (StampNoiseAmp > 0.001)
+			{
+				edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
+			}
+			// Falloff from StampFalloffStart of the radius: low values keep a
+			// wide edge band coarser consumers of the map can still represent,
+			// high values hold full depth almost to the edge.
+			float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
 			deformation = max(deformation, Stamps[i].z * falloff);
 		}
 	}

@@ -98,7 +98,15 @@ cbuffer ShellCB : register(b0)
 	// depth-marched shadows that carry distant LOD tree shadows beyond the
 	// two cascades.
 	float ScreenSpaceShadowsActive;
-	float padShell;
+	// Dune-field amplitude in world units (0 flattens the undulation).
+	float UndulationAmp;
+
+	// Multiplier on the dune field's wavelengths (>1 = broader, calmer waves).
+	float UndulationScale;
+	// Statics skin: how much heavily trampled trench floors dissolve to the
+	// object's own texture (0 = solid snow floors).
+	float TrenchFloorFade;
+	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -300,8 +308,9 @@ float ShapeNoise(float2 p)
 // Two octaves of world-anchored value noise, added as real geometry (via
 // ShellSurfaceZ, so the VS displaces by it) and shaded per-pixel through
 // its gradient. Amplitude scales with local depth so thin snow, class
-// boundaries and carved floors stay flat.
-static const float kUndulationAmp = 3.5;
+// boundaries and carved floors stay flat. Wave height and wavelength are
+// live controls (UndulationAmp / UndulationScale).
+//
 // Minimum snow cover on carved trench floors (world units). Covers the
 // terrain window's bilinear approximation error so the real landscape mesh
 // never pokes through a floor.
@@ -309,8 +318,9 @@ static const float kTrenchFloor = 5.0;
 
 float Undulation(float2 worldXY)
 {
-	float n = ShapeNoise(worldXY / 340.0) * 0.72 + ShapeNoise(worldXY / 110.0) * 0.28;
-	return (n - 0.5) * 2.0 * kUndulationAmp;
+	float2 p = worldXY / max(UndulationScale, 0.05);
+	float n = ShapeNoise(p / 340.0) * 0.72 + ShapeNoise(p / 110.0) * 0.28;
+	return (n - 0.5) * 2.0 * UndulationAmp;
 }
 
 // Class borders are hard edges in the baked depth/coverage data: a +30

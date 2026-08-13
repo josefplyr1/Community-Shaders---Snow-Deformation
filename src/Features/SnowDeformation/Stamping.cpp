@@ -17,6 +17,13 @@ static constexpr float kStampMovementGate = 3.0f;
 // Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
+// Depth-scaled stamps: the nominal snow depth at the mover's position scales
+// its stamp radii, so shallow grass-snow takes narrower trenches than
+// hip-deep drifts. Reference = the deep snow classes' default depth; the
+// clamp keeps bare and unbaked ground recording readable trails.
+static constexpr float kStampDepthReference = 30.0f;
+static constexpr float kStampDepthScaleMin = 0.65f;
+static constexpr float kStampDepthScaleMax = 1.2f;
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
@@ -66,7 +73,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
 				return;
 
-		const float groundZ = position.z;
+		// The living stand on whatever supports them, so their own position IS
+		// the ground reference. Dead ragdolls are exempt from the airborne gate
+		// above (their controllers freeze in stale states), so they get the
+		// prop rule instead: ground = LAND height, which keeps a corpse flung
+		// off a ledge from carving the snow beneath its whole flight arc.
+		float groundZ = position.z;
+		if (isDead)
+			if (const auto tesGround = RE::TES::GetSingleton())
+				tesGround->GetLandHeight(position, groundZ);
+
+		const float depthScale = std::clamp(
+			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
+			kStampDepthScaleMin, kStampDepthScaleMax);
 		uint32_t shapeIndex = 0;
 		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
@@ -120,7 +139,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stamp.y = current.y;
 				stamp.z = 1.0f;
 				// StampRadius scales the shape's own radius.
-				stamp.w = radius * settings.StampRadius / kStampRadiusNeutral;
+				stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 				stampCount++;
@@ -207,6 +226,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			float groundZ = position.z;
 			tes->GetLandHeight(position, groundZ);
 
+			const float depthScale = std::clamp(
+				GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
+				kStampDepthScaleMin, kStampDepthScaleMax);
 			uint32_t shapeIndex = 0;
 			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				RE::NiPoint3 centerPos;
@@ -237,7 +259,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = current.x;
 					stamp.y = current.y;
 					stamp.z = 1.0f;
-					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral;
+					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 					stampCount++;
@@ -266,7 +288,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = current.x;
 					stamp.y = current.y;
 					stamp.z = 1.0f;
-					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral;
+					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 					stampCount++;
