@@ -75,6 +75,7 @@ void SnowDeformation::EnsureShellSnowTextures()
 	shellSnowDiffuseSRV = nullptr;
 	shellSnowNormalSRV = nullptr;
 	shellSnowRmaosSRV = nullptr;
+	shellSnowHeightSRV = nullptr;
 	shellSnowTextureIsPBR = false;
 
 	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
@@ -102,7 +103,8 @@ void SnowDeformation::EnsureShellSnowTextures()
 		std::string base = pbrPath.substr(0, pbrPath.size() - 4);
 		bool hasNormal = tryLoadDDS(base + "_n.dds", shellSnowNormalSRV);
 		bool hasRmaos = tryLoadDDS(base + "_rmaos.dds", shellSnowRmaosSRV);
-		logger::info("[SNOW DEFORMATION] PBR snow set: {} (normal={} rmaos={})", pbrPath, hasNormal, hasRmaos);
+		bool hasHeight = tryLoadDDS(base + "_p.dds", shellSnowHeightSRV);
+		logger::info("[SNOW DEFORMATION] PBR snow set: {} (normal={} rmaos={} height={})", pbrPath, hasNormal, hasRmaos, hasHeight);
 
 		snowGlintLogDensity = 6.0f;
 		snowGlintMicroRoughness = 0.3f;
@@ -139,6 +141,7 @@ void SnowDeformation::EnsureShellSnowTextures()
 				}
 				snowRoughnessScale = cfg.value("roughnessScale", 0.7f);
 				snowSpecularLevel = cfg.value("specularLevel", 0.02f);
+				snowDisplacementScale = cfg.value("displacementScale", 1.0f);
 				logger::info("[SNOW DEFORMATION] PBR config matched: {} (glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",
 					fname, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel);
 				break;
@@ -260,6 +263,10 @@ void SnowDeformation::DrawShell()
 	EnsureShellSnowTextures();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
+	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
+	// Relief amplitude: displacementScale mapped to ~6 world units of full
+	// relief, expressed in snow-UV units (tile = 256 world units).
+	cbData.SnowParallaxAmp = snowDisplacementScale * 6.0f / 256.0f;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -395,9 +402,9 @@ void SnowDeformation::DrawShell()
 	// sampling it here is legal; the PS fades the shell where it hovers close
 	// in front of any geometry so it dissolves into statics (walkways, mesh
 	// roads, rocks).
-	ID3D11ShaderResourceView* shellSRVs[8] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get() };
+	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
-	context->PSSetShaderResources(0, 8, shellSRVs);
+	context->PSSetShaderResources(0, 9, shellSRVs);
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };

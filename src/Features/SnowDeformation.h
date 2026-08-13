@@ -314,6 +314,12 @@ public:
 		float PointLightsActive;
 		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */
 		float SkylightingActive;
+
+		/** @brief PBR displacement companion bound at t8. */
+		float HasSnowHeight;
+		/** @brief Parallax relief amplitude in snow-UV units (displacementScale scaled to world relief / tile size). */
+		float SnowParallaxAmp;
+		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -364,6 +370,8 @@ public:
 	/** @brief TruePBR companion maps, auto-resolved by probing the Textures\PBR\ variant of the snow path: tangent normals (_n) and roughness/metal/AO/spec (_rmaos). Their presence also auto-selects linear color. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowNormalSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowRmaosSRV;
+	/** @brief Displacement companion (_p): drives the shells' parallax occlusion, the same depth mechanic PBR ground uses. */
+	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowHeightSRV;
 	bool shellSnowTextureIsPBR = false;
 	bool shellSnowTextureAttempted = false;
 
@@ -374,6 +382,7 @@ public:
 	float snowGlintScreenSpaceScale = 1.0f;
 	float snowRoughnessScale = 0.7f;
 	float snowSpecularLevel = 0.02f;
+	float snowDisplacementScale = 1.0f;
 	winrt::com_ptr<ID3D11SamplerState> shellSnowSampler;
 
 	/** @brief Lazy-loads the shell snow texture set (and its authored PBR parameters) from the user-configured path. Implemented in SnowDeformation/Shell.cpp. */

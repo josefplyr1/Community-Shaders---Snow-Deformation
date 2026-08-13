@@ -112,6 +112,12 @@ cbuffer ShellCB : register(b0)
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
 	float SkylightingActive;
+
+	// PBR displacement companion bound at t8.
+	float HasSnowHeight;
+	// Parallax relief amplitude in snow-UV units.
+	float SnowParallaxAmp;
+	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -136,6 +142,8 @@ Texture2D<float> ObjectSkinDepthMap : register(t12);
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
+// Displacement companion (_p): parallax occlusion relief.
+Texture2D<float> SnowHeightMap : register(t8);
 SamplerState SnowSampler : register(s0);
 
 static const float kSnowUVTile = 256.0;
@@ -671,6 +679,44 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
 }
 
+// Parallax occlusion: march the view ray through the PBR displacement map
+// so grazing light reveals real relief, the same depth mechanic PBR ground
+// uses. Returns the UV offset for every material sample. V points surface
+// to camera; normalWS is the geometric (pre-bump) normal.
+float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
+{
+	float3 pomT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+	float3 pomB = cross(normalWS, pomT);
+	float3 viewTS = float3(dot(V, pomT), dot(V, pomB), dot(V, normalWS));
+	// Grazing clamp: bounds the total march so relief cannot smear.
+	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.25) * (SnowParallaxAmp * fade);
+	float2 dx = ddx(uv);
+	float2 dy = ddy(uv);
+
+	const uint kPomSteps = 12;
+	const float stepH = 1.0 / kPomSteps;
+	float2 uvStep = maxOffset * stepH;
+	float rayH = 1.0;
+	float2 uvCur = uv;
+	float hPrev = 1.0;
+	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
+	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
+	{
+		if (rayH <= hSample)
+			break;
+		hPrev = hSample;
+		uvCur -= uvStep;
+		rayH -= stepH;
+		hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
+	}
+	// Linear intersection refine between the last two samples.
+	float afterDiff = hSample - rayH;
+	float beforeDiff = (rayH + stepH) - hPrev;
+	float w = saturate(afterDiff / max(afterDiff + beforeDiff, 1e-4));
+	uvCur += uvStep * w;
+	return uvCur - uv;
+}
+
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -803,14 +849,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
 
 	// Snow texture taps, shared by albedo, normal and RMAOS so every map
-	// agrees on the same anti-tiling offsets.
-	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
-
-	// Micro-relief: PBR sets carry a real tangent-space normal map; legacy
-	// sets treat the diffuse luminance as a height proxy. Both fade with
+	// agrees on the same anti-tiling offsets. Micro-relief fades with
 	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
+	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	[branch] if (HasSnowHeight > 0.5 && bumpFade > 0.001)
+	{
+		float2 pomDelta = SnowParallaxOffset(snowUV, normalWS, -normalize(input.WorldPos), bumpFade);
+		snowUV += pomDelta;
+		// The anti-tiling lattice follows the same shift so cells stay
+		// coherent with the displaced texture.
+		worldXYPS += pomDelta * kSnowUVTile;
+	}
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
