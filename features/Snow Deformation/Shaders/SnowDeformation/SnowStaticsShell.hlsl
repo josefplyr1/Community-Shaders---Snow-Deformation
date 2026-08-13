@@ -558,13 +558,14 @@ float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
 	float2 dx = ddx(uv);
 	float2 dy = ddy(uv);
 
-	const uint kPomSteps = 12;
+	const uint kPomSteps = 20;
 	const float stepH = 1.0 / kPomSteps;
 	float2 uvStep = maxOffset * stepH;
-	float rayH = 1.0;
 	float2 uvCur = uv;
-	float hPrev = 1.0;
 	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
+	// Start just above the local surface; see the terrain shell.
+	float rayH = min(1.0, hSample + 4.0 * stepH);
+	float hPrev = hSample;
 	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
 	{
 		if (rayH <= hSample)

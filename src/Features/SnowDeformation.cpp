@@ -28,6 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowMoundSteepness,
 	UndulationStrength,
 	UndulationSpacing,
+	ParallaxDepth,
 	TrenchFloorFade,
 	RangeShellM,
 	RangeTrenchesM,

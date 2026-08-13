@@ -693,13 +693,16 @@ float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
 	float2 dx = ddx(uv);
 	float2 dy = ddy(uv);
 
-	const uint kPomSteps = 12;
+	const uint kPomSteps = 20;
 	const float stepH = 1.0 / kPomSteps;
 	float2 uvStep = maxOffset * stepH;
-	float rayH = 1.0;
 	float2 uvCur = uv;
-	float hPrev = 1.0;
 	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
+	// Displacement content is mostly mid-gray; entering at 1.0 would burn
+	// most steps crossing empty air. Start just above the local surface so
+	// the step resolution concentrates where the relief actually is.
+	float rayH = min(1.0, hSample + 4.0 * stepH);
+	float hPrev = hSample;
 	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
 	{
 		if (rayH <= hSample)

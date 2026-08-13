@@ -142,8 +142,8 @@ void SnowDeformation::EnsureShellSnowTextures()
 				snowRoughnessScale = cfg.value("roughnessScale", 0.7f);
 				snowSpecularLevel = cfg.value("specularLevel", 0.02f);
 				snowDisplacementScale = cfg.value("displacementScale", 1.0f);
-				logger::info("[SNOW DEFORMATION] PBR config matched: {} (glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",
-					fname, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel);
+				logger::info("[SNOW DEFORMATION] PBR config matched: {} (glintDensity={:.1f} roughScale={:.2f} spec={:.3f} displScale={:.2f})",
+					fname, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel, snowDisplacementScale);
 				break;
 			}
 		} catch (const std::exception& e) {
@@ -263,10 +263,10 @@ void SnowDeformation::DrawShell()
 	EnsureShellSnowTextures();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
-	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
-	// Relief amplitude: displacementScale mapped to ~6 world units of full
-	// relief, expressed in snow-UV units (tile = 256 world units).
-	cbData.SnowParallaxAmp = snowDisplacementScale * 6.0f / 256.0f;
+	cbData.HasSnowHeight = (shellSnowHeightSRV && settings.ParallaxDepth > 0.01f) ? 1.0f : 0.0f;
+	// Relief amplitude: the Parallax Depth slider in world units, expressed
+	// in snow-UV units (tile = 256 world units).
+	cbData.SnowParallaxAmp = snowDisplacementScale * settings.ParallaxDepth / 256.0f;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
