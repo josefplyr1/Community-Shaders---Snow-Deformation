@@ -1,8 +1,8 @@
 // Object height-window processing.
 //
-// ScrollCS — persistence: carries the accumulated raw top/bottom maps into
+// ScrollCS; persistence: carries the accumulated raw top/bottom maps into
 //            the current window position (whole-texel offsets). The maps
-//            must not depend on what the camera renders this frame — the
+//            must not depend on what the camera renders this frame; the
 //            capture list is frustum-culled, and rebuilding from it alone
 //            makes object heights vanish behind the camera.
 //
@@ -34,7 +34,7 @@ RWTexture2D<float> OutB : register(u1);
 		int2 src = int2(dtid.xy) + ScrollDelta;
 		if (all(src >= 0) && all(src < int2(dims))) {
 			// Ghost decay: accumulated heights fade unless re-rasterized this
-			// frame — live objects re-assert themselves every frame, but
+			// frame; live objects re-assert themselves every frame, but
 			// stale imprints (disabled/harvested/moved objects) melt away
 			// instead of persisting until the window scrolls past them.
 			top = InA[uint2(src)] - GhostDecay;

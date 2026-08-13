@@ -8,11 +8,11 @@
 // data. Only the input layout, vertex/index buffers, shaders and StaticCB
 // (b1) change per object.
 //
-// The VS consumes only POSITION and NORMAL — D3D11 accepts input layouts
+// The VS consumes only POSITION and NORMAL; D3D11 accepts input layouts
 // carrying more elements than the shader reads, so one layout per vertex
 // descriptor covers every static mesh format.
 //
-// cbuffer ShellCB MUST stay layout-identical to SnowShell.hlsl (and ShellCB
+// cbuffer ShellCB must stay layout-identical to SnowShell.hlsl (and ShellCB
 // in SnowDeformation.h).
 
 #include "Common/BRDF.hlsli"
@@ -82,14 +82,14 @@ cbuffer StaticCB : register(b1)
 	float4 WorldRow1;
 	float4 WorldRow2;
 
-	float ObjectsDepth;  // FLAT-class depth (walkways, roofs, planks)
+	float ObjectsDepth;  // flat-class depth (walkways, roofs, planks)
 	float2 HeightWindowCenter;  // top-down height window (see SnowHeightCapture)
 	float HeightHalfExtent;
 
 	// >0.5: SmoothedNormals (VS t10) holds position-averaged normals for
-	// this object — pillow inflation for flat split-normal meshes.
+	// this object; pillow inflation for flat split-normal meshes.
 	float HasSmoothedNormals;
-	float RoundedDepth;  // ROUNDED-class depth (rocks, drifts, logs)
+	float RoundedDepth;  // rounded-class depth (rocks, drifts, logs)
 	float VertexCountF;  // index of the flatness-stats element in SmoothedNormals
 	float padStat2;
 }
@@ -99,12 +99,12 @@ Texture2D<float> DeformationMap : register(t1);
 #ifdef PSHADER
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> SnowDiffuse : register(t2);
-// Full-scene depth copy taken BEFORE the shell pass (see SnowShell.hlsl).
+// Full-scene depth copy taken before the shell pass (see SnowShell.hlsl).
 Texture2D<float> SceneDepth : register(t3);
-// TruePBR snow companion maps (see SnowShell.hlsl) — inherited bindings.
+// TruePBR snow companion maps (see SnowShell.hlsl); inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
-// Depth AFTER the terrain shell drew (its surface included) — the skin's
+// Depth after the terrain shell drew (its surface included); the skin's
 // view-ray reference for cross-fading into the landscape shell.
 Texture2D<float> ShellDepthCopy : register(t9);
 SamplerState SnowSampler : register(s0);
@@ -136,7 +136,7 @@ float SampleDeformation(float2 gridLocal)
 }
 
 #ifdef PATCH
-// B-spline bicubic deformation sample — the landscape shell's smoothing,
+// B-spline bicubic deformation sample; the landscape shell's smoothing,
 // ported so patch trench walls CURVE the way landscape trench walls do
 // instead of showing bilinear facets.
 float PatchDeformBilinear(float2 t, float2 dims)
@@ -194,7 +194,7 @@ struct VS_INPUT
 
 #ifdef VSHADER
 // Position-averaged normals (model space) built by SmoothNormalsCS, indexed
-// by vertex id. w=0 entries are unresolved — fall back to the raw normal.
+// by vertex id. w=0 entries are unresolved; fall back to the raw normal.
 StructuredBuffer<float4> SmoothedNormals : register(t10);
 #endif
 
@@ -247,10 +247,10 @@ float PatchSkinDepth(float2 worldXY)
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
 
-// TRENCH PATCH: the landscape shell's recipe applied to objects — a dense
+// Trench patch (PATCH define): the landscape shell's recipe applied to objects; a dense
 // 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
-// the top-down object height raster and carved per VERTEX by the
-// deformation map. REAL geometry: real silhouettes, floors that hold at
+// the top-down object height raster and carved per vertex by the
+// deformation map. real geometry: real silhouettes, floors that hold at
 // every camera angle, no parallax. The skin dithers itself away over
 // trails to hand off (see the PS).
 VS_OUTPUT main(uint vertexID : SV_VertexID)
@@ -274,13 +274,13 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	vsout.Coverage = 1.0;
 	vsout.Flat = 0.0;
 
-	// Rim test: a vertex whose column towers over ANY neighbor column is
-	// the top edge of a tall structure (roof or wall rim) — its triangles
-	// stretch down the facade as giant white sheets. VALID neighbors only:
-	// a sentinel neighbor (off the footprint) must NOT count as a rim —
+	// Rim test: a vertex whose column towers over any neighbor column is
+	// the top edge of a tall structure (roof or wall rim); its triangles
+	// stretch down the facade as giant white sheets. valid neighbors only:
+	// a sentinel neighbor (off the footprint) must NOT count as a rim;
 	// that culls the patch's edge ring along every road chunk, punching
 	// trench holes at road edges. Facade sheets still die: an off-footprint
-	// VERTEX is killed by its own sentinel top (outline-spanning triangles
+	// vertex is killed by its own sentinel top (outline-spanning triangles
 	// go with it), and within-footprint roof-to-ground drops are caught by
 	// the height delta.
 	float topXP = PatchTop(worldXY + float2(8.0, 0.0));
@@ -302,9 +302,9 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	bool rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
 
 	// Neighborhood trample test: the patch lives only around trails,
-	// sampled with a 1.5-cell margin as a 16-RAY star. At radius 12 the
+	// sampled with a 1.5-cell margin as a 16-ray star. At radius 12 the
 	// rays sit 22.5 degrees apart (~4.7-unit arc gaps), so even the
-	// thinnest trail we can produce — a small rolling prop — cannot slip
+	// thinnest trail we can produce (a small rolling prop) cannot slip
 	// between rays: every triangle touching a trench edge keeps ALL its
 	// vertices (cardinal-only taps dropped diagonal-neighbor vertices and
 	// shed triangles at trench edges).
@@ -325,7 +325,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 		return vsout;
 	}
 
-	// Bicubic, like the landscape shell — rounded trench walls.
+	// Bicubic, like the landscape shell; rounded trench walls.
 	float deform = saturate(SampleDeformationSmooth(gridLocal));
 
 	// The landscape shell's carve, verbatim: floored so the mesh beneath
@@ -342,7 +342,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	// Carved-surface shading normal from the SMOOTH deformation gradient —
+	// Carved-surface shading normal from the SMOOTH deformation gradient;
 	// the 8-unit geometry carries the shape, this rounds the shading with
 	// the same curve the depth uses.
 	float2 grad = float2(
@@ -359,7 +359,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	// Pillow inflation: displace along POSITION-AVERAGED normals where
 	// available. Split-normal flat meshes (planks, roofs, pole caps) get the
-	// smooth normals they lack — shared-position twins displace identically
+	// smooth normals they lack; shared-position twins displace identically
 	// (rim cracks sealed by construction), plank edges mushroom outward like
 	// pole caps. Already-smooth meshes are unchanged (average == raw).
 	float3 inflateMS = nrmMS;
@@ -367,8 +367,8 @@ VS_OUTPUT main(VS_INPUT input)
 	[branch] if (HasSmoothedNormals > 0.5)
 	{
 		// Mesh-level flatness stats (element appended past the last vertex):
-		// split-normal plates — walkways, roofs, planks — score a high
-		// divergent fraction and get COMPLETELY FLAT snow (straight-up
+		// split-normal plates; walkways, roofs, planks; score a high
+		// divergent fraction and get completely flat snow (straight-up
 		// offset, raw shading normal, separate depth slider). Organically
 		// smooth meshes keep the pillow. Divergence-only on purpose:
 		// alignment-based extensions misclassify real compound meshes (see
@@ -393,7 +393,7 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow0.xyz, inflateMS),
 		dot(WorldRow1.xyz, inflateMS),
 		dot(WorldRow2.xyz, inflateMS)));
-	// FLAT class: displacement goes straight up — no pillow, no mushroom
+	// flat class: displacement goes straight up; no pillow, no mushroom
 	// rims, no per-plank shading gradient. The snow on a walkway is a
 	// featureless flat sheet.
 	[flatten] if (isFlat > 0.5)
@@ -403,15 +403,15 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 
 	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
-	// bare, matching the vanilla projection's extent). FLAT meshes gate on
-	// the RAW normal: their straight-up inflate direction would paint the
-	// sides white. ROUNDED meshes use the DRAPE ramp: with a hard 0.4-0.7
+	// bare, matching the vanilla projection's extent). flat meshes gate on
+	// the raw normal: their straight-up inflate direction would paint the
+	// sides white. rounded meshes use the drape ramp: with a hard 0.4-0.7
 	// gate a deep layer becomes a full-height cap hovering over bare sides,
 	// joined by near-vertical skirts. Ramping depth over almost the whole
-	// up-facing range pins the shell's edges to the mesh — it puffs at the
+	// up-facing range pins the shell's edges to the mesh; it puffs at the
 	// top and meets the surface in a sloped snow lip.
-	// The layer stays geometrically UNCARVED: on low-poly meshes a carved
-	// vertex would drag whole 100+-unit triangles down with it — trench
+	// The layer stays geometrically uncarved: on low-poly meshes a carved
+	// vertex would drag whole 100+-unit triangles down with it; trench
 	// relief is traced per pixel in the PS instead.
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, inflateWS.z);
 	float depth = depthBase * upFacing;
@@ -427,12 +427,12 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
 	// Displaced snow shades by the smooth surface it forms, not the flat
-	// face beneath; undisplaced vertices keep the raw normal. FLAT meshes
-	// always shade by the raw normal — the smoothed-normal lerp stamps an
+	// face beneath; undisplaced vertices keep the raw normal. flat meshes
+	// always shade by the raw normal; the smoothed-normal lerp stamps an
 	// identical shading gradient onto every plank instance.
 	vsout.NormalWS = isFlat > 0.5 ? nrmWS : normalize(lerp(nrmWS, inflateWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
-	// RAW normal Z, interpolated — the PS runs the up-facing smoothstep PER
-	// PIXEL. Thresholding in the VS makes low-poly rocks flip whole FACES
+	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
+	// pixel. Thresholding in the VS makes low-poly rocks flip whole FACES
 	// between snowed and bare (blocky patches); thresholding the interpolated
 	// normal instead varies smoothly across faces.
 	vsout.Coverage = nrmWS.z;
@@ -451,7 +451,7 @@ float2 StochasticHash(float2 cell)
 	return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
 }
 
-// Anti-tiling snow taps — identical to the terrain shell's, so the texture
+// Anti-tiling snow taps; identical to the terrain shell's, so the texture
 // pattern continues seamlessly from ground onto objects, and every snow map
 // (albedo, normal, RMAOS) agrees on the same stochastic offsets.
 struct SnowTaps
@@ -512,11 +512,11 @@ struct PS_OUTPUT
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
 #	ifndef PATCH
-	// Written so the parallax trench relief is REAL to the depth buffer:
+	// Written so the parallax trench relief is real to the depth buffer:
 	// the carved floor's projected depth replaces the flat top's, so feet
 	// and props z-test against the trench instead of vanishing under it,
 	// and camera motion sees a geometrically consistent surface. The PATCH
-	// is real geometry and skips it — keeping early-z, which is what makes
+	// is real geometry and skips it; keeping early-z, which is what makes
 	// its full-span coverage cheap (hidden pixels reject before shading).
 	float Depth : SV_Depth;
 #	endif
@@ -563,22 +563,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 normalWS = normalize(input.NormalWS);
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
-	// Per-pixel up-facing gate from the interpolated RAW normal (see the VS
+	// Per-pixel up-facing gate from the interpolated raw normal (see the VS
 	// note on Coverage): smooth accumulation edges on low-poly meshes.
-	// STRICT gate: nothing steeper than ~66 degrees wears snow. A wide gate
+	// strict gate: nothing steeper than ~66 degrees wears snow. A wide gate
 	// matching the drape ramp smears translucent snow onto steep faces
-	// (wall fog, boulder-flank sheets, bark streaks — TAA resolves the
-	// partial dither into a wet-looking film). The drape's GEOMETRY still
+	// (wall fog, boulder-flank sheets, bark streaks; TAA resolves the
+	// partial dither into a wet-looking film). The drape's geometry still
 	// pins shell edges to the mesh; only the lip's visibility fades here.
 	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
 #	ifndef PATCH
-	// Geometric steepness gate — one fix for three symptoms (wall fog,
+	// Geometric steepness gate; one fix for three symptoms (wall fog,
 	// boulder-flank sheets, trunk-bark streaks): on huge low-poly triangles
-	// the INTERPOLATED normal smears one top vertex's up-ness down the whole
+	// the interpolated normal smears one top vertex's up-ness down the whole
 	// face, and sloped faces (30-60 degrees) sail over the vertical sliver
-	// cull below. The DERIVATIVE normal knows each pixel's true facing:
+	// cull below. The derivative normal knows each pixel's true facing:
 	// snow sheds off anything steeper than ~65 degrees regardless of
-	// interpolation. The band sits BELOW the interpolated gate's range, so
+	// interpolation. The band sits below the interpolated gate's range, so
 	// rounded snow edges (z 0.4+) stay interpolation-shaped and per-face
 	// blockiness cannot return. The PATCH is exempt: its trench walls are
 	// legitimately steep real geometry.
@@ -586,49 +586,49 @@ PS_OUTPUT main(VS_OUTPUT input)
 	pixelCoverage *= smoothstep(0.22, 0.42, abs(geoFacing.z));
 #	endif
 
-	// Per-pixel trench RELIEF: the vertex layer stays uncarved (cliff edges
-	// measure 20-160 units — no vertex ever lands inside a trail), so the
-	// trench is traced per PIXEL: parallax-march the view ray down into the
+	// Per-pixel trench relief: the vertex layer stays uncarved (cliff edges
+	// measure 20-160 units; no vertex ever lands inside a trail), so the
+	// trench is traced per pixel: parallax-march the view ray down into the
 	// deformation heightfield and shade from where the ray actually hits
-	// the carved surface, then write that hit's REAL depth (SV_Depth) so
+	// the carved surface, then write that hit's real depth (SV_Depth) so
 	// feet and props z-test into the trench. PATCH pixels have real carved
-	// geometry and a VS gradient normal — neither applies there.
+	// geometry and a VS gradient normal; neither applies there.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
 	float2 trenchGridLocal = input.GridLocal;
 	float3 viewDirWS = normalize(input.WorldPos);
-	// Ray parameter (world units along the view ray) to the parallax hit —
+	// Ray parameter (world units along the view ray) to the parallax hit;
 	// 0 means no carve; drives the SV_Depth push at the end.
 	float trenchHitS = 0.0;
 #	ifndef PATCH
-	// Hand-off to the trench patch: trampled ROUNDED pixels near the camera
-	// dissolve out so the patch's REAL carved geometry beneath shows
+	// Hand-off to the trench patch: trampled rounded pixels near the camera
+	// dissolve out so the patch's real carved geometry beneath shows
 	// through. Three gates keep the hand-off airtight:
 	// - RoundedDepth > 1: the patch culls sub-1-unit layers, so the skin
 	//   must not discard into nothing (vanished floors at shallow depths).
-	// - GEOMETRICALLY UP-FACING pixels only: the top-down patch can never
-	//   replace a flank — discarding a log's side pixels (whose map column
+	// - geometrically up-facing pixels only: the top-down patch can never
+	//   replace a flank; discarding a log's side pixels (whose map column
 	//   carries the trail) punches see-through holes.
 	// Far trails and painted-flat trails keep the parallax relief instead.
 	[branch] if (input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.005 && length(input.WorldPos.xy) < 950.0)
 	{
 		// Sharp hand-off band: the skin stays FULL height (its carve lives
 		// in the patch), so every percent of trample it survives is a
-		// full-height ledge overhanging the already-carved patch — hovering
+		// full-height ledge overhanging the already-carved patch; hovering
 		// rim sheets. Fully gone by 6% trample keeps the ledge under ~2
 		// units.
 		if (abs(geoFacing.z) > 0.55 && Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount) < smoothstep(0.01, 0.06, pixelDeform))
 			discard;
 	}
 
-	// Parallax relief for the trails the patch does not cover. FLAT-class
-	// trails never parallax — a raised flat overlay would occlude its own
+	// Parallax relief for the trails the patch does not cover. flat-class
+	// trails never parallax; a raised flat overlay would occlude its own
 	// illusion; they keep only the compression darkening.
 	[branch] if (input.Flat < 0.5 && pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
 		[branch] if (pomDepth > 0.5)
 		{
-			// Trench floor — the landscape shell's rule, ported: the carve
+			// Trench floor; the landscape shell's rule, ported: the carve
 			// can never reach the object mesh. Without the cap a full-depth
 			// carve pushes SV_Depth to (and past) the underlying surface,
 			// which both exposes its texture and z-fights it into floors
@@ -659,7 +659,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				carvePrev = carve;
 			}
 			// Fallback: the ray stayed under the (capped) surface through
-			// every sample — land it on the floor.
+			// every sample; land it on the floor.
 			[flatten] if (trenchHitS == 0.0 && carvePrev > 0.0)
 			{
 				trenchGridLocal = input.GridLocal + stepXY * carveCap;
@@ -677,7 +677,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 		// Surface drops by depth*deform toward the trench: tilt the normal
 		// up the slope so walls shade like real dents. Tilt is capped and
-		// softened — full-depth gradients carve black gashes on deep-snow
+		// softened; full-depth gradients carve black gashes on deep-snow
 		// cliffs.
 		float pixelDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0) * pixelCoverage;
 		normalWS = normalize(normalWS + float3(deformGradient * pixelDepth * 0.6, 0.0));
@@ -686,8 +686,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Per-pixel coverage: noisy up-facing gate (vanilla-projection-like
 	// extent). NO deformation carve in alpha: cutting holes would reveal the
-	// bright projected-diffuse beneath — trampling only dents the shading.
-	// The noise only MODULATES existing coverage — it must never create
+	// bright projected-diffuse beneath; trampling only dents the shading.
+	// The noise only MODULATES existing coverage; it must never create
 	// snow from nothing, or undersides and walls pick up dithered dabs.
 	float coverageGate = saturate(pixelCoverage + (CoverageNoise(worldXY) - 0.5) * 0.3 * saturate(pixelCoverage * 4.0));
 	float coverageAlpha = smoothstep(0.05, 0.35, coverageGate);
@@ -698,10 +698,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells dither into
-	// one blanket instead of meeting at a hard seam. The SAME dials that
+	// one blanket instead of meeting at a hard seam. The same dials that
 	// shape class borders shape this hand-off: Border Smoothness widens the
 	// dissolve band (a taller, softer rise of ground snow up the object) and
-	// Border Noise jitters WHERE the meeting line sits, so the seam wanders
+	// Border Noise jitters where the meeting line sits, so the seam wanders
 	// organically around a rock's base instead of tracing a level line.
 	float3 groundData = SampleTerrainStatics(input.GridLocal);
 	[flatten] if (groundData.x > -50000.0)
@@ -714,10 +714,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha *= smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
 	}
 
-	// Snow<->Snow Fade — Terrain Blending's technique adapted: the fade is
-	// measured along the VIEW RAY against the landscape shell's actually-
-	// rendered surface (post-shell depth copy), and ONLY where the thing
-	// behind this pixel IS the shell (pre-vs-post depth divergence). A
+	// Snow<->Snow Fade; Terrain Blending's technique adapted: the fade is
+	// measured along the view ray against the landscape shell's actually-
+	// rendered surface (post-shell depth copy), and only where the thing
+	// behind this pixel is the shell (pre-vs-post depth divergence). A
 	// height-based band could dissolve the skin over its own mesh and expose
 	// the bare road beneath; this construction can only ever fade white snow
 	// into white snow.
@@ -732,16 +732,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 	}
 
-	// Guaranteed snow floor in object trenches — the statics-skin mirror of
+	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel
 	// must never dissolve to the object's own texture, whatever the seam
 	// blends above decided.
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
 
 #	ifndef PATCH
-	// Vertical cull, MIDDLE strength: with the drape ramp the connective
-	// snow lips are SLOPED geometry (z well above 0.2) and survive, while
-	// truly vertical surfaces die — the interpolation-smeared white veils
+	// Vertical cull, middle strength: with the drape ramp the connective
+	// snow lips are sloped geometry (z well above 0.2) and survive, while
+	// truly vertical surfaces die; the interpolation-smeared white veils
 	// down house walls and pole sides. (A harder cull cuts gap windows into
 	// the drape's skirts; full relaxation lets the veils through.) The
 	// PATCH is exempt: its trench walls are steep real geometry.
@@ -750,7 +750,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the
-	// capture range) — distant objects keep their real look instead of
+	// capture range); distant objects keep their real look instead of
 	// turning blank white.
 	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
@@ -758,7 +758,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
 
-	// Snow texture taps — shared by albedo, normal and RMAOS, sampled at the
+	// Snow texture taps; shared by albedo, normal and RMAOS, sampled at the
 	// parallax-corrected position so the texture rides the relief. Steep
 	// drape sides re-project along the facing wall plane: the top-down
 	// projection stretches down a puffed shell's flanks, and the stochastic
@@ -776,7 +776,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
 
-	// Micro-relief — identical recipe to the terrain shell so ground and
+	// Micro-relief; identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
 	// gate: bending the normal first would jitter the up-facing test into
@@ -809,7 +809,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
-	// Snow material — same albedo path as the terrain shell.
+	// Snow material; same albedo path as the terrain shell.
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
 	[branch] if (HasSnowTexture != 0)
 	{
@@ -820,7 +820,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Compressed snow reads slightly darker and bluer than powder.
 	kSnowAlbedo *= 1.0 - pixelDeform * float3(0.13, 0.12, 0.08);
 
-	// PBR response — identical constants to the terrain shell.
+	// PBR response; identical constants to the terrain shell.
 	static const float kSnowRoughness = 0.6;
 	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
 
@@ -849,7 +849,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
 	float specD = BRDF::D_GGX(snowRoughness, satNdotH);
-	// Sparkle — same glint NDF and authored parameters as the terrain shell.
+	// Sparkle; same glint NDF and authored parameters as the terrain shell.
 	[branch] if (EnableGlints > 0.5 && SnowGlintParams.x > 1.1)
 	{
 		float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
@@ -878,7 +878,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	PS_OUTPUT psout;
 #	ifndef PATCH
 	// Depth: unchanged pixels echo the rasterized depth; carved pixels
-	// project the parallax hit point through the SAME (jittered) matrix
+	// project the parallax hit point through the same (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
 	psout.Depth = input.Position.z;
 	[branch] if (trenchHitS > 0.0)

@@ -16,7 +16,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!globals::state->inWorld)
 		return;
 
-	// The clean gate: projected-UV + snow flags together — covers rocks,
+	// The clean gate: projected-UV + snow flags together; covers rocks,
 	// roofs, logs, stumps and never flora, because foliage is not
 	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture
 	// match; a catch-all "snow" match drags frosted bushes in, whose leaf
@@ -42,7 +42,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 						[](unsigned char c) { return (char)std::tolower(c); });
 					// Drifts wear plain LANDSCAPE snow textures (no "drift" in
-					// the path) — requiring the landscape folder keeps frosted
+					// the path); requiring the landscape folder keeps frosted
 					// plants (plant/tree folders) out.
 					it->second = lowered.find("drift") != std::string::npos ||
 					             (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
@@ -69,7 +69,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Road-mesh model class: deterministic NAME + texture-path match. The
 	// name check matters: road models are built from MULTIPLE trishapes
-	// ('RoadChunk...:0', ':2'), and only some wear road textures — matching
+	// ('RoadChunk...:0', ':2'), and only some wear road textures; matching
 	// textures alone splits one road across two depth settings, stacking a
 	// second hovering shell.
 	bool road = false;
@@ -121,7 +121,7 @@ void SnowDeformation::InstallStaticsCaptureHook()
 	stl::write_vfunc<0x6, SD_BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 }
 
-// Compiles one stage of the statics skin, RETURNING the bytecode blob —
+// Compiles one stage of the statics skin, RETURNING the bytecode blob;
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
@@ -460,7 +460,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 	// First sight of this geometry: build now (a buffer copy + two small
 	// dispatches, once per unique mesh). Failures leave the permanent null
-	// entry — no per-frame retries; the VS falls back to raw normals.
+	// entry; no per-frame retries; the VS falls back to raw normals.
 	if (!smoothAccumulateCS)
 		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
 	if (!smoothResolveCS)
@@ -506,7 +506,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	auto context = globals::d3d::context;
 	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
 
-	// SRV-capable copy of the game's vertex buffer (raw view) — the game's
+	// SRV-capable copy of the game's vertex buffer (raw view); the game's
 	// own buffers carry no shader-resource bind flag.
 	D3D11_BUFFER_DESC srcDesc{};
 	gameVB->GetDesc(&srcDesc);
@@ -635,7 +635,7 @@ void SnowDeformation::DrawCapturedStatics()
 
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
-	// the "why is THIS rock bare" cases — name the reason in the log.
+	// the "why is THIS rock bare" cases; name the reason in the log.
 	static std::unordered_set<std::string> loggedSkips;
 	auto logSkip = [](RE::BSGeometry* a_geometry, const char* a_reason) {
 		if (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second)
@@ -710,7 +710,7 @@ void SnowDeformation::DrawCapturedStatics()
 			continue;
 		context->IASetInputLayout(layout.get());
 
-		// Stride comes from the descriptor's low nibble (in dwords) — the
+		// Stride comes from the descriptor's low nibble (in dwords); the
 		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
 		// equivalent: it reconstructs from flags assuming 16-byte float
 		// positions, but most SSE meshes store 8-byte half positions, and
@@ -738,7 +738,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation
-		// for flat split-normal surfaces — planks, roofs, pole caps.
+		// for flat split-normal surfaces; planks, roofs, pole caps.
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
 		context->VSSetShaderResources(10, 1, &smoothSRV);
 		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
@@ -758,8 +758,8 @@ void SnowDeformation::DrawCapturedStatics()
 	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
 
-	// TRENCH PATCH: the landscape shell's dense-grid carve applied to object
-	// tops — real carved geometry drawn after the skins so it shows through
+	// trench PATCH: the landscape shell's dense-grid carve applied to object
+	// tops; real carved geometry drawn after the skins so it shows through
 	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
 	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 1.0f || settings.RoadMeshesDepth > 1.0f)) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");

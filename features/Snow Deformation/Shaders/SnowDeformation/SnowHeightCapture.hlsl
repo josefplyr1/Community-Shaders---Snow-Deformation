@@ -1,10 +1,10 @@
 // Top-down height capture of snow statics.
 //
 // Captured statics are rasterized from above into R32F world-height maps
-// with MIN/MAX blending (no depth buffer needed — the highest/lowest surface
+// with MIN/MAX blending (no depth buffer needed; the highest/lowest surface
 // wins in any draw order): object TOPS, object BOTTOMS (together they tell
 // whether a texel's object is grounded or floating), and the snow-layer
-// depth the texel's model class wears — the surface description later snow
+// depth the texel's model class wears; the surface description later snow
 // systems (the trench patch, sheltering, burial mounds) build on.
 //
 // StaticCB layout must match StaticsCB in SnowDeformation.h and StaticCB in
@@ -40,7 +40,7 @@ struct VS_OUTPUT
 };
 
 #ifdef VSHADER
-// Flatness stats (element past the last vertex) — the same GPU
+// Flatness stats (element past the last vertex); the same GPU
 // classification the skin uses, so the skin-depth raster (RT2) reports the
 // class layer depth per texel.
 StructuredBuffer<float4> SmoothedNormals : register(t10);
@@ -54,13 +54,13 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
 
 	// Ortho top-down: world XY window to NDC. +worldY maps to +ndcY, which
-	// rasterizes to texture v=0 at the top — the samplers mirror this.
+	// rasterizes to texture v=0 at the top; the samplers mirror this.
 	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
 
 	float skinDepth = RoundedDepth;
 	[branch] if (HasSmoothedNormals > 0.5)
 	{
-		// Same FLAT condition as the skin VS (divergence-only).
+		// Same flat condition as the skin VS (divergence-only).
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
 		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			skinDepth = ObjectsDepth;

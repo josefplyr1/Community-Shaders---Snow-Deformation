@@ -11,17 +11,17 @@
 // are unchanged since their normals already agree.
 //
 // Three passes over a copy of the mesh's vertex buffer:
-//   AccumulateCS — quantized-position hash table accumulates fixed-point
+//   AccumulateCS; quantized-position hash table accumulates fixed-point
 //                  normal sums (linear probing, fingerprint-guarded).
-//   ResolveCS    — per vertex, look up its position's sum and write the
+//   ResolveCS   ; per vertex, look up its position's sum and write the
 //                  normalized average. w=1 marks validity; unresolvable
 //                  vertices write 0 and the VS falls back to the raw normal.
-//   FlatStatsCS  — one-group reduction writing the mesh's FLATNESS stats to
+//   FlatStatsCS ; one-group reduction writing the mesh's FLATNESS stats to
 //                  OutNormals[VertexCount]: x = fraction of vertices whose
 //                  smoothed normal diverges from the raw one. Split-normal
 //                  plates (walkways, roofs, planks) score high; organically
 //                  smooth meshes (rocks, drifts) score ~0. The skin VS reads
-//                  it to pick flat vs rounded snow — no CPU readback.
+//                  it to pick flat vs rounded snow; no CPU readback.
 //
 // Runs ONCE per unique geometry (cached CPU-side by vertex buffer).
 
@@ -70,7 +70,7 @@ uint2 PositionHashes(float3 p)
 }
 
 // Finds (or in AccumulateCS claims) the slot for fingerprint h2. Returns
-// 0xFFFFFFFF when probing fails (table pressure) — vertex falls back.
+// 0xFFFFFFFF when probing fails (table pressure); vertex falls back.
 uint FindSlot(uint h1, uint h2, bool claim)
 {
 	uint slot = h1 & TableMask;
@@ -153,7 +153,7 @@ groupshared float3 gsNormalSum[64];
 		// 0 when they spread or cancel (rocks, boxes). y carries the mean
 		// direction's z. Neither is consumed today: two alignment-based
 		// classifier extensions (any-planar, then sloped-sheets-only) both
-		// misclassified real compound meshes worse than they helped — the
+		// misclassified real compound meshes worse than they helped; the
 		// stats stay available, but do not build a third heuristic on them.
 		float sumLen = length(sumNormal);
 		float alignRatio = sumTotal > 0 ? sumLen / float(sumTotal) : 0.0;

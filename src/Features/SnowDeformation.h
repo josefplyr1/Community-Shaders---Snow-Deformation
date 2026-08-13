@@ -116,17 +116,17 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
-		/** @brief Statics skin, FLAT class: layer height on flat split-normal meshes (walkways, roofs, planks) — classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get COMPLETELY FLAT snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface — even 1 unit reads as a tiny hover. */
+		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
 		float ObjectsSnowDepth = 0.0f;
-		/** @brief Statics skin, ROUNDED class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
+		/** @brief Statics skin, rounded class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
 		float SnowMeshesDepth = 3.0f;
-		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately BELOW the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
+		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
 		bool SnowTextureLinear = false;
-		/** @brief World-unit jitter of WHERE class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
+		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 32.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
@@ -266,7 +266,7 @@ public:
 		float BorderUntrampledFade;
 		/** @brief View-ray band over which the statics skin cross-fades into the landscape shell behind it. */
 		float SnowSnowFade;
-		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material — start of the fade and the hard end (the capture range). */
+		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
 		float SkinFadeStart;
 
 		float SkinFadeEnd;
@@ -361,7 +361,7 @@ public:
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
 
-	/** @brief Depth copy taken AFTER the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell — Terrain Blending's technique adapted to the two snow kinds. */
+	/** @brief Depth copy taken after the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell; Terrain Blending's technique adapted to the two snow kinds. */
 	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
 
@@ -371,14 +371,14 @@ public:
 		float4 WorldRow0;
 		float4 WorldRow1;
 		float4 WorldRow2;
-		/** @brief FLAT-class depth (walkways, roofs, planks); road captures use RoadMeshesDepth for BOTH classes so the GPU pick cannot override it. */
+		/** @brief flat-class depth (walkways, roofs, planks); road captures use RoadMeshesDepth for both classes so the GPU pick cannot override it. */
 		float ObjectsDepth;
 		/** @brief The top-down height window (center-anchored, camera-following). */
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
 		/** @brief >0.5: a smoothed-normal buffer is bound at VS t10 for this object (pillow inflation for flat meshes). */
 		float HasSmoothedNormals;
-		/** @brief ROUNDED-class depth (rocks, drifts, logs); the VS picks per mesh from the GPU flatness stats. */
+		/** @brief rounded-class depth (rocks, drifts, logs); the VS picks per mesh from the GPU flatness stats. */
 		float RoundedDepth;
 		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
 		float VertexCountF;
@@ -419,7 +419,7 @@ public:
 
 	// ---- Top-down object height windows ----
 
-	// 4096 units at 8-unit texels, following the camera — matches the
+	// 4096 units at 8-unit texels, following the camera; matches the
 	// shell's inner grid density.
 	static constexpr uint kHeightMapDim = 512;
 	static constexpr float kHeightMapHalfExtent = 2048.0f;
@@ -427,16 +427,16 @@ public:
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
 
-	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters — the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
+	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
-	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence — a missed frame is invisible for one frame. */
+	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
 	float2 heightWindowCenter = { 0, 0 };
 
-	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order — no depth buffer needed. */
+	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
@@ -447,7 +447,7 @@ public:
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
-		/** @brief Units/frame the accumulated tops/bottoms drift toward empty — stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
+		/** @brief Units/frame the accumulated tops/bottoms drift toward empty; stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
 		float GhostDecay;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
@@ -460,7 +460,7 @@ public:
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
-	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops — real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
+	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
 	ID3D11VertexShader* patchVS = nullptr;
 	ID3D11PixelShader* patchPS = nullptr;
 	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */

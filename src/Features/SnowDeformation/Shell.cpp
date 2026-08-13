@@ -325,7 +325,7 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 	// The PS evaluates the terrain/deformation fields for per-pixel coverage
-	// and normals, so the field textures must be bound to BOTH stages; the
+	// and normals, so the field textures must be bound to both stages; the
 	// snow maps and scene depth are PS-only. The depth SRV is a copy (Terrain
 	// Blending's blended depth when available), never the bound DSV, so
 	// sampling it here is legal; the PS fades the shell where it hovers close
@@ -356,7 +356,7 @@ void SnowDeformation::DrawShell()
 	// Post-shell depth copy (Terrain Blending's technique adapted): the main
 	// depth now contains the landscape shell's surface. The statics skin
 	// samples this at t9 to measure its view-ray gap to the shell and cross-
-	// fade into it — fading toward what is ACTUALLY behind the pixel, which
+	// fade into it; fading toward what is actually behind the pixel, which
 	// a height-based band cannot guarantee (it can expose the bare mesh
 	// beneath the skin instead). Targets must be unbound around CopyResource
 	// of a bound DSV.
