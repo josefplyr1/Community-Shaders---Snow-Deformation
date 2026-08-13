@@ -239,10 +239,14 @@ struct VS_OUTPUT
 	float Flat : TEXCOORD6;
 };
 
-#if defined(VSHADER) && defined(PATCH)
-// Top-down object rasters the patch drapes over.
+#ifdef PATCH
+// Top-down object rasters the patch drapes over. Visible to both stages:
+// the VS places geometry on them, the PS clips the silhouette overhang.
 Texture2D<float> ObjectTopRaw : register(t11);
 Texture2D<float> ObjectSkinDepth : register(t12);
+#endif
+
+#if defined(VSHADER) && defined(PATCH)
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
 // object edges; MAX both ignores them and keeps the patch on the highest
@@ -783,14 +787,31 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// PATCH is exempt: its trench walls are steep real geometry.
 	coverageAlpha *= smoothstep(0.06, 0.18, abs(geoFacing.z));
 #	else
-	// Overhang clip: the top-down raster extends object tops up to a texel
-	// past the silhouette, so rim triangles drape into the air as blankets
-	// stretching beyond the model. A pixel hovering far in front of the
-	// pre-shell geometry behind it is overhang and dissolves; on-object
-	// floors and trench walls hug their surface and keep alpha.
+	// Silhouette clip, view-independent: the max-of-4 raster placement
+	// extends object tops up to a texel past the silhouette, so rim
+	// triangles drape into the air as blankets. In the interior all four
+	// texel tops agree; within a texel of the edge the bilinear top pulls
+	// toward the low/sentinel neighbors, and its drop below the max-based
+	// placement marks the overhang. Dissolve on that drop, so the patch
+	// ends where the object ends (to raster resolution).
 	{
-		float patchSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-		coverageAlpha *= 1.0 - smoothstep(16.0, 40.0, patchSceneZ - input.CurrentClip.w);
+		float2 clipDims;
+		ObjectTopRaw.GetDimensions(clipDims.x, clipDims.y);
+		float2 clipLocal = (worldXY - HeightWindowCenter) / HeightHalfExtent;
+		float2 clipUV = float2(clipLocal.x * 0.5 + 0.5, 0.5 - clipLocal.y * 0.5);
+		float2 clipT = clamp(clipUV * clipDims - 0.5, 0.0, clipDims.x - 1.001);
+		int2 c0 = (int2)clipT;
+		float2 cf = clipT - c0;
+		int2 c1 = min(c0 + 1, int2(clipDims) - 1);
+		float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
+		float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
+		float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
+		float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+		float maxTop = max(max(top00, top10), max(top01, top11));
+		// Per-texel drop vs the supporting top, sentinel-clamped.
+		float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
+		float drop = lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
+		coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, drop);
 	}
 #	endif
 
