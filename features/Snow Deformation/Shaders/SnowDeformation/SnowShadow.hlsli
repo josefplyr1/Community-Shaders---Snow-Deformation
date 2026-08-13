@@ -23,10 +23,11 @@ Texture2DArray<float> SnowShadowAtlasESRAM : register(t23);
 SamplerComparisonState SnowShadowCmpSampler : register(s2);
 
 // Shadow-casting local lights (fires, lanterns, torches). Their maps live
-// in the same atlas as the sun cascades, on their own slices; this table
-// carries each light's descriptor transform and slice, indexed by the
-// light's shadow-mask channel. LightType 0 marks an empty slot (also used
-// when the atlas copies are unavailable this frame).
+// in their own atlas, copied at the local lights' mask passes (NOT the
+// sun cascade atlas: local slice indices collide with the cascades');
+// this table carries each light's descriptor transform and slice, indexed
+// by the light's shadow-mask channel. LightType 0 marks an empty slot
+// (also used when the local atlas copy is unavailable this frame).
 struct PointShadowLight
 {
 	column_major float4x4 LightTransform;
@@ -35,6 +36,7 @@ struct PointShadowLight
 	float2 padPSL;
 };
 StructuredBuffer<PointShadowLight> PointShadowLights : register(t38);
+Texture2DArray<float> SnowPointShadowAtlas : register(t39);
 
 namespace SnowShadow
 {
@@ -114,9 +116,7 @@ namespace SnowShadow
 
 	float SamplePointCmp(float2 uv, uint slice, float cmp)
 	{
-		float lit = SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
-		float litEsram = SnowShadowAtlasESRAM.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
-		return min(lit, litEsram);
+		return SnowPointShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
 	}
 
 	// Local-light shadow evaluated at the receiver's REAL position (the

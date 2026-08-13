@@ -229,6 +229,9 @@ void SnowDeformation::Prepass()
 {
 	ApplyRangeSettings();
 
+	// Frame boundary for the once-per-frame local shadow atlas copy.
+	pointShadowFrameIndex++;
+
 	auto context = globals::d3d::context;
 
 	// Keep t101 bound even while paused or disabled: the lighting shader

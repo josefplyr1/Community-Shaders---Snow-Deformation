@@ -466,10 +466,23 @@ public:
 	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
 	uint32_t dbgLodAtlasSlices = 0;
 
-	/** @brief 4-entry structured buffer of PointShadowLightData (t38), rebuilt each frame from the shadow scene node's active local shadow lights. Their maps share the captured atlas, so no extra capture exists. */
+	/** @brief 4-entry structured buffer of PointShadowLightData (t38), uploaded each frame from the mask-time snapshots. */
 	Buffer* pointShadowLights = nullptr;
 
-	/** @brief Fills and uploads the point-shadow light table from ShadowSceneNode::activeShadowLights (spot and paraboloid lights, keyed by shadow-mask channel). Leaves the table empty when the atlas copies are invalid or on VR. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Copy of the LOCAL lights' shadow atlas (t39), taken while a local light's mask renders; the local maps do NOT live in the sun cascade atlas, and by deferred time the engine has returned the live target. */
+	winrt::com_ptr<ID3D11Texture2D> pointShadowAtlasCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> pointShadowAtlasCopySRV;
+
+	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
+	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
+	/** @brief Frame latch for the once-per-frame atlas copy; index incremented in Prepass. */
+	uint64_t pointShadowFrameIndex = 0;
+	uint64_t pointShadowCaptureFrame = 0;
+
+	/** @brief Called from State::Draw while the game renders a LOCAL light's shadow mask (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live (renderTarget reads -1 once the engine returns the maps) and PS t4 genuinely holds the local atlas. Copies the atlas once per frame and snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
+	void CapturePointShadowMask();
+
+	/** @brief Uploads the pending point-shadow table (t38). The table stays empty until mask-time snapshots exist. Implemented in SnowDeformation/Shadows.cpp. */
 	void UpdatePointShadowLights();
 
 	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */

@@ -123,6 +123,14 @@ void State::Draw()
 					if (globals::features::snowDeformation.loaded)
 						globals::features::snowDeformation.CaptureShadowAtlas();
 				}
+				// Local shadow lights (spot/paraboloid) render their masks in
+				// separate Utility passes; their descriptors are only live here.
+				if (currentPixelDescriptor & (static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+												 static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
+												 static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb))) {
+					if (globals::features::snowDeformation.loaded)
+						globals::features::snowDeformation.CapturePointShadowMask();
+				}
 			}
 		}
 

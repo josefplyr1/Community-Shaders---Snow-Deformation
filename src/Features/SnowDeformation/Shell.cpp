@@ -409,9 +409,9 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
 		context->PSSetShaderResources(20, 1, &glintSRV);
 	}
-	// Raw shadow-atlas copies (t22/t23) + comparison sampler (s2) for crisp
-	// cascade shadows; the statics skin inherits these too.
-	if (cbData.CrispShadows > 0.5f) {
+	// Comparison sampler (s2), shared by the crisp cascade path and the
+	// point-light shadow path.
+	if (cbData.CrispShadows > 0.5f || pointShadowAtlasCopySRV) {
 		if (!shadowCmpSampler) {
 			D3D11_SAMPLER_DESC cmpDesc{};
 			cmpDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
@@ -423,10 +423,14 @@ void SnowDeformation::DrawShell()
 			globals::d3d::device->CreateSamplerState(&cmpDesc, shadowCmpSampler.put());
 			Util::SetResourceName(shadowCmpSampler.get(), "SnowDeformation::ShadowCmpSampler");
 		}
-		ID3D11ShaderResourceView* shadowSRVs[2] = { shadowAtlasCopySRV.get(), shadowEsramCopySRV.get() };
-		context->PSSetShaderResources(22, 2, shadowSRVs);
 		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
 		context->PSSetSamplers(2, 1, &cmpSampler);
+	}
+	// Raw shadow-atlas copies (t22/t23) for crisp cascade shadows; the
+	// statics skin inherits these too.
+	if (cbData.CrispShadows > 0.5f) {
+		ID3D11ShaderResourceView* shadowSRVs[2] = { shadowAtlasCopySRV.get(), shadowEsramCopySRV.get() };
+		context->PSSetShaderResources(22, 2, shadowSRVs);
 	}
 	// Screen-Space Shadows output (t45) for the shell + statics passes.
 	if (cbData.ScreenSpaceShadowsActive > 0.5f) {
@@ -444,8 +448,8 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(35, 3, lightSRVs);
 		UpdatePointShadowLights();
 		if (pointShadowLights) {
-			ID3D11ShaderResourceView* pointShadowSRV = pointShadowLights->srv.get();
-			context->PSSetShaderResources(38, 1, &pointShadowSRV);
+			ID3D11ShaderResourceView* pointShadowSRVs[2] = { pointShadowLights->srv.get(), pointShadowAtlasCopySRV.get() };
+			context->PSSetShaderResources(38, 2, pointShadowSRVs);
 		}
 	}
 	// Skylighting probe volume (t50). Skylighting's own SRV; no teardown

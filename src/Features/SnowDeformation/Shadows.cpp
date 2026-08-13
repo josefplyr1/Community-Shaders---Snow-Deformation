@@ -68,6 +68,67 @@ void SnowDeformation::CaptureShadowAtlas()
 	}
 }
 
+void SnowDeformation::CapturePointShadowMask()
+{
+	// Called while the game renders a LOCAL light's shadow mask: the only
+	// moment the light's descriptor is live (renderTarget reads -1 once the
+	// engine returns the maps, and the local slices are NOT in the sun
+	// cascade atlas) and PS t4 genuinely holds the local atlas.
+	if (!settings.EnableSnowDeformation || REL::Module::IsVR())
+		return;
+
+	// Copy the local atlas once per frame, on the first local mask pass.
+	if (pointShadowCaptureFrame != pointShadowFrameIndex) {
+		pointShadowCaptureFrame = pointShadowFrameIndex;
+		winrt::com_ptr<ID3D11ShaderResourceView> liveAtlasSRV;
+		globals::d3d::context->PSGetShaderResources(4, 1, liveAtlasSRV.put());
+		if (liveAtlasSRV)
+			CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::PointShadowAtlasCopy", pointShadowAtlasCopyTex, pointShadowAtlasCopySRV);
+	}
+
+	// Snapshot every local light whose descriptor is live right now. Merge
+	// semantics: a light drawn earlier this frame already snapshotted at its
+	// own pass; entries persist until their channel is reassigned.
+	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
+	if (!shadowSceneNode)
+		return;
+	for (auto& lightPtr : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+		auto* bsLight = lightPtr.get();
+		if (!bsLight || !bsLight->IsShadowLight())
+			continue;
+		auto* light = static_cast<RE::BSShadowLight*>(bsLight);
+		// Local lights only; the sun has its own path.
+		const bool isFrustum = light->GetIsFrustumLight();
+		const bool isParabolic = light->GetIsParabolicLight();
+		if (!isFrustum && !isParabolic)
+			continue;
+		auto& lightRuntime = light->GetRuntimeData();
+		// 255 = parked/inactive shadow light.
+		const uint32_t maskIndex = lightRuntime.maskIndex;
+		if (maskIndex >= kPointShadowMaxLights)
+			continue;
+		if (lightRuntime.shadowmapDescriptors.empty())
+			continue;
+		auto& desc = lightRuntime.shadowmapDescriptors[0];
+		if (!desc.isEnabled || desc.renderTarget == static_cast<RE::RENDER_TARGET_DEPTHSTENCIL>(-1))
+			continue;
+
+		PointShadowLightData& dd = pendingPointShadows[maskIndex];
+		auto proj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&desc.lightTransform));
+		DirectX::XMStoreFloat4x4(&dd.LightTransform, proj);
+		dd.SliceIndex = desc.shadowmapIndex;
+		dd.LightType = isFrustum ? 1u : (light->GetIsOmniLight() ? 3u : 2u);
+
+		// One-shot layout log: which target/slice each mask channel uses.
+		static uint32_t layoutLogCount = 0;
+		if (layoutLogCount < 12) {
+			layoutLogCount++;
+			logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} slice={} rt={} biasScale={:.3f}",
+				maskIndex, dd.LightType, dd.SliceIndex, uint32_t(desc.renderTarget), lightRuntime.shadowBiasScale);
+		}
+	}
+}
+
 void SnowDeformation::UpdatePointShadowLights()
 {
 	auto context = globals::d3d::context;
@@ -91,51 +152,11 @@ void SnowDeformation::UpdatePointShadowLights()
 		pointShadowLights->CreateSRV(srvDesc);
 	}
 
+	// No local atlas copy = no usable maps; upload an empty table so
+	// shadow-casting lights render unshadowed instead of sampling garbage.
 	PointShadowLightData table[kPointShadowMaxLights]{};
-
-	// The local maps live in the captured atlas; with no valid copies the
-	// table stays empty and shadow-casting lights render unshadowed.
-	const bool atlasValid = shadowAtlasCopySRV && shadowEsramCopySRV;
-	if (atlasValid && !REL::Module::IsVR()) {
-		if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
-			for (auto& lightPtr : shadowSceneNode->GetRuntimeData().activeShadowLights) {
-				auto* bsLight = lightPtr.get();
-				if (!bsLight || !bsLight->IsShadowLight())
-					continue;
-				auto* light = static_cast<RE::BSShadowLight*>(bsLight);
-				// Local lights only; the sun has its own path.
-				const bool isFrustum = light->GetIsFrustumLight();
-				const bool isParabolic = light->GetIsParabolicLight();
-				if (!isFrustum && !isParabolic)
-					continue;
-				auto& lightRuntime = light->GetRuntimeData();
-				// 255 = parked/inactive shadow light.
-				const uint32_t maskIndex = lightRuntime.maskIndex;
-				if (maskIndex >= kPointShadowMaxLights)
-					continue;
-				if (lightRuntime.shadowmapDescriptors.empty())
-					continue;
-				auto& desc = lightRuntime.shadowmapDescriptors[0];
-				if (!desc.isEnabled)
-					continue;
-
-				PointShadowLightData& dd = table[maskIndex];
-				auto proj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&desc.lightTransform));
-				DirectX::XMStoreFloat4x4(&dd.LightTransform, proj);
-				dd.SliceIndex = desc.shadowmapIndex;
-				dd.LightType = isFrustum ? 1u : (light->GetIsOmniLight() ? 3u : 2u);
-
-				// One-shot layout log: which target/slice each mask channel
-				// uses; answers whether local maps land in the copied atlas.
-				static uint32_t layoutLogCount = 0;
-				if (layoutLogCount < 12) {
-					layoutLogCount++;
-					logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} slice={} rt={} biasScale={:.3f}",
-						maskIndex, dd.LightType, dd.SliceIndex, uint32_t(desc.renderTarget), lightRuntime.shadowBiasScale);
-				}
-			}
-		}
-	}
+	if (pointShadowAtlasCopySRV)
+		memcpy(table, pendingPointShadows, sizeof(table));
 
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (SUCCEEDED(context->Map(pointShadowLights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
