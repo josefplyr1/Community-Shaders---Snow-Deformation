@@ -215,6 +215,10 @@ float ShapeNoise(float2 p)
 // per-pixel through its gradient. Amplitude scales with local depth so thin
 // snow, class boundaries and carved floors stay flat.
 static const float kUndulationAmp = 3.5;
+// Minimum snow cover on carved trench floors (world units). Covers the
+// terrain window's bilinear approximation error so the real landscape mesh
+// never pokes through a floor.
+static const float kTrenchFloor = 5.0;
 
 float Undulation(float2 worldXY)
 {
@@ -337,13 +341,21 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	depth = lerp(-8.0, depth, edgeFade);
 
 	// Deformation carves only where the layer is actually raised; the
-	// negative-depth submerge at class edges is untouched. The dune
-	// undulation rides on top, scaled by the remaining depth so carved
-	// floors and thin edges stay flat (3.5/8 < 1 keeps it non-negative).
+	// negative-depth submerge at class edges is untouched. The carved floor
+	// never drops below kTrenchFloor units (or the un-carved depth when
+	// thinner), so trench bottoms are always shell snow and the landscape
+	// texture underneath never shows through. The floor tapers away where
+	// the UNCARVED depth thins — that ramp is the "between two classes"
+	// signal, and a full floor there would hold a hard-edged slab over bare
+	// ground instead of blending out (border fade itself is an ALPHA matter,
+	// handled in the PS). The dune undulation rides on top, scaled by the
+	// remaining depth so floors and thin edges stay flat (3.5/8 < 1 keeps
+	// it non-negative).
 	[flatten] if (depth > 0.0)
 	{
 		float deformation = saturate(SampleDeformation(gridLocal));
-		depth *= 1.0 - deformation;
+		float floorDepth = min(depth, kTrenchFloor * smoothstep(0.5, 8.0, depth));
+		depth = max(depth * (1.0 - deformation), floorDepth);
 		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 	}
 
