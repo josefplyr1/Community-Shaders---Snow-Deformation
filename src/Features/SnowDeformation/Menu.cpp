@@ -1,5 +1,7 @@
 #include "Features/SnowDeformation.h"
 
+#include <imgui_stdlib.h>
+
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.snow_deformation."
@@ -8,6 +10,21 @@ void SnowDeformation::DrawSettings()
 {
 	if (ImGui::TreeNodeEx(T(TKEY("snow_deformation"), "Snow Deformation"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
+
+		ImGui::InputText(T(TKEY("snow_texture_path"), "Shell Snow Texture"), &settings.SnowTexturePath);
+		if (auto _ttTex = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_texture_path_tooltip"), "DDS path (relative to Data) for the shell's snow diffuse. Point it at the modlist's snow texture, then press Reload."));
+		ImGui::SameLine();
+		if (ImGui::Button(T(TKEY("reload_texture"), "Reload"))) {
+			shellSnowDiffuseSRV = nullptr;
+			shellSnowNormalSRV = nullptr;
+			shellSnowRmaosSRV = nullptr;
+			shellSnowTextureIsPBR = false;
+			shellSnowTextureAttempted = false;
+		}
+		ImGui::Checkbox(T(TKEY("snow_texture_linear"), "Linear (PBR) Texture"), &settings.SnowTextureLinear);
+		if (auto _ttLin = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_texture_linear_tooltip"), "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored."));
 
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())

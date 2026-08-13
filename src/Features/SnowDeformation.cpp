@@ -12,6 +12,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillTime,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
+	SnowTexturePath,
+	SnowTextureLinear,
 	RangeTrenchesM)
 
 void SnowDeformation::SetupResources()
@@ -90,6 +92,16 @@ void SnowDeformation::SetupResources()
 	depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthDesc, shellDepthState.put()));
 	Util::SetResourceName(shellDepthState.get(), "SnowDeformation::ShellDepthState");
+
+	D3D11_SAMPLER_DESC samplerDesc{};
+	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.MaxAnisotropy = 8;
+	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, shellSnowSampler.put()));
+	Util::SetResourceName(shellSnowSampler.get(), "SnowDeformation::ShellSnowSampler");
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)

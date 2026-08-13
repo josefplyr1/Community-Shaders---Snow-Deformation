@@ -120,6 +120,10 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
+		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
+		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
+		bool SnowTextureLinear = false;
 		/** @brief Trenches render range in meters (converted via kUnitsPerMeter). Applying a change clears the map: content is scale-relative. */
 		float RangeTrenchesM = 100.0f;
 	};
@@ -227,7 +231,19 @@ public:
 		uint ShellDebugData;
 
 		float DeformInvWorldSize;
-		float3 padShell;
+		uint HasSnowTexture;
+		float SnowTextureIsLinear;
+		float HasSnowNormal;
+
+		float HasSnowRmaos;
+		float SnowRoughnessScale;
+		float2 SnowUVOffset;
+
+		float4 SnowGlintParams;
+
+		float SnowSpecularLevel;
+		float EnableGlints;
+		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -257,6 +273,26 @@ public:
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
 	bool shellDataDebug = false;
+
+	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
+	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
+	/** @brief TruePBR companion maps, auto-resolved by probing the Textures\PBR\ variant of the snow path: tangent normals (_n) and roughness/metal/AO/spec (_rmaos). Their presence also auto-selects linear color — the manual Linear checkbox only matters for legacy textures. */
+	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowNormalSRV;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowRmaosSRV;
+	bool shellSnowTextureIsPBR = false;
+	bool shellSnowTextureAttempted = false;
+
+	/** @brief Material parameters fetched from the modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture basename) so the shell's sparkle and response follow whatever texture set the user runs. Defaults mirror common authored snow values. */
+	float snowGlintLogDensity = 6.0f;
+	float snowGlintMicroRoughness = 0.3f;
+	float snowGlintDensityRandomization = 5.0f;
+	float snowGlintScreenSpaceScale = 1.0f;
+	float snowRoughnessScale = 0.7f;
+	float snowSpecularLevel = 0.02f;
+	winrt::com_ptr<ID3D11SamplerState> shellSnowSampler;
+
+	/** @brief Lazy-loads the shell snow texture set (and its authored PBR parameters) from the user-configured path. Implemented in SnowDeformation/Shell.cpp. */
+	void EnsureShellSnowTextures();
 
 	/** @brief Bakes one cell's heights and per-vertex snow coverage from LoadedLandData. Called from the TESObjectLAND hook. Implemented in SnowDeformation/TerrainData.cpp. */
 	void BakeShellCell(RE::TESObjectLAND* land);
