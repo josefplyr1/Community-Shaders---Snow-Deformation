@@ -34,9 +34,8 @@ static bool IsSnowClass(int a_classIndex)
 	return a_classIndex >= 0 && a_classIndex < (int)SnowDeformation::kSnowOnlyClassCount;
 }
 
-// One-shot diagnostic: log every distinct land texture the bake encounters
-// with its classification, so misclassified modlist textures (e.g. static
-// mesh roads that never appear here at all) can be identified from the log.
+// One-shot diagnostic: log each distinct land texture with its
+// classification, so misclassified modlist textures show up in the log.
 static void LogLandTextureOnce(RE::TESLandTexture* a_landTexture, int a_classIndex)
 {
 	static std::mutex logMutex;
@@ -114,10 +113,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	auto loadedData = land->loadedData;
 
 	// heights[] are relative to the cell's mid-height; the absolute base is
-	// the midpoint of heightExtents (verified against the quad geometry local
-	// transforms, which equal exactly (extents.x + extents.y) / 2). World
-	// transforms are NOT composed yet when this hook runs, so they cannot be
-	// used for placement.
+	// the midpoint of heightExtents. World transforms are not composed yet
+	// when this hook runs and cannot be used for placement.
 	float cellBaseZ = (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
 
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
@@ -146,8 +143,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			float classSum[kSnowClassCount] = {};
 			for (uint32_t layerI = 0; layerI < 6; ++layerI) {
 				// percents is declared std::int8_t but holds 0-255: a fully
-				// painted layer reads as -1 without the unsigned cast, which
-				// zeroes strong layers and hands their weight to the base.
+				// painted layer reads as -1 without the unsigned cast.
 				float weight = static_cast<uint8_t>(loadedData->percents[quadI][vertexI][layerI]) / 255.0f;
 				layerSum += weight;
 				if (layerClass[layerI] >= 0)
@@ -165,9 +161,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		const std::unique_lock lock(shellCellMutex);
 		if (shellCells.size() > 4096)
 			shellCells.clear();
-		// The engine re-runs land material setup frequently; only mark the
-		// window dirty when the baked data actually changed, so the window
-		// is not re-uploaded every frame.
+		// Land material setup re-runs frequently; only mark the window dirty
+		// when the baked data actually changed.
 		auto it = shellCells.find(key);
 		if (it != shellCells.end() && it->second.height == data.height && it->second.classWeights == data.classWeights)
 			return;
@@ -221,8 +216,8 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				float* texel = &shellUploadScratch[(size_t(ty) * kShellWindowDim + tx) * 4];
 				if (rowCell) {
 					uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
-					// Per-class depths are applied HERE, so the class sliders
-					// retune the shell from cached weights without a re-bake.
+					// Class depths are applied here, so the sliders retune the
+					// shell from cached weights without a re-bake.
 					float rampDepth = 0.0f;
 					float coverage = 0.0f;
 					for (uint32_t classI = 0; classI < kSnowClassCount; ++classI) {

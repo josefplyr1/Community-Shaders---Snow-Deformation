@@ -1,8 +1,8 @@
 // Syncs the snow shell's depth writes into Terrain Blending's blended depth
 // copies. Screen-space passes that run after the shell (Screen Space GI in
-// particular) consume the blended depth, which was finalized during opaque
-// rendering — without this sync they still see buried geometry poking up
-// through the snow and paint occlusion halos onto the shell surface.
+// particular) consume the blended depth, finalized during opaque rendering;
+// without this sync they still see buried geometry poking up through the
+// snow and paint occlusion halos onto the shell surface.
 //
 // min() only takes effect where the shell drew closer than the pre-shell
 // scene, so Terrain Blending's soft-blend depth values survive everywhere

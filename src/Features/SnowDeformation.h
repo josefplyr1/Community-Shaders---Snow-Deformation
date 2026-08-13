@@ -39,16 +39,14 @@ public:
 	// ---- Snow shell: a camera-following grid of real snow geometry ----
 
 	static constexpr uint kShellGridDim = 640;
-	// 8-unit inner spacing: trench walls are ~10-unit features carved from
-	// 4-unit deformation texels — 16-unit vertices undersampled them into
-	// blocky silhouettes no amount of data smoothing could fix.
+	// 8-unit inner spacing: 16-unit vertices undersample the ~10-unit trench
+	// walls into blocky silhouettes.
 	static constexpr float kShellGridSpacing = 8.0f;
 
 	// Distance warp: the inner kShellWarpInnerVerts vertices per side keep
 	// linear kShellGridSpacing; beyond them each ring's spacing grows by
-	// kShellWarpGrowth, stretching the grid to ~26k units half-span so the
-	// shell continues into the distance. Constants MUST match the WarpAxis()
-	// constants in SnowShell.hlsl.
+	// kShellWarpGrowth (~26k units half-span). Must match WarpAxis() in
+	// SnowShell.hlsl.
 	static constexpr float kShellWarpInnerVerts = 256.0f;
 	static constexpr float kShellWarpGrowth = 1.0902f;
 
@@ -71,12 +69,10 @@ public:
 	/** @brief Height sentinel for window texels with no baked cell data. */
 	static constexpr float kShellMissingHeight = -100000.0f;
 
-	// Per-texture-class depth: landscape mods retexture the same vanilla LTEX
-	// files, so classes match on diffuse filename substrings — FIRST match
-	// wins, so more specific names must precede their substrings (grasssnow
-	// before snow01: "grasssnow01" contains both). EVERY texture classifies:
-	// unmatched snow-material textures fall to the "Snow 01" class, anything
-	// else to "Other" (default -5 = submerged, giving users full control).
+	// Landscape mods retexture the same vanilla LTEX files, so classes match
+	// on diffuse filename substrings. First match wins: more specific names
+	// must precede their substrings ("grasssnow" before "snow01"). Unmatched
+	// snow-material textures fall to "Snow 01", anything else to "Other".
 	static constexpr uint kSnowClassCount = 12;
 	// Classes below this index count as snow for the terrain-shader mask bits.
 	static constexpr uint kSnowOnlyClassCount = 5;
@@ -122,13 +118,13 @@ public:
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
-		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
+		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
 		bool SnowTextureLinear = false;
 		/** @brief World-unit jitter of WHERE class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 32.0f;
-		/** @brief World-unit radius widening the depth ramp between neighboring classes — deep snow meets shallow ground in a slope, not a ravine wall. */
+		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
-		/** @brief How far from a class border trampled snow keeps its visibility override — beyond ~20 the landscape under trenches becomes too visible. */
+		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. */
 		float SnowBorderTrampledFade = 20.0f;
 		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
 		float SnowBorderUntrampledFade = 5.0f;
@@ -290,7 +286,7 @@ public:
 
 	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
-	/** @brief TruePBR companion maps, auto-resolved by probing the Textures\PBR\ variant of the snow path: tangent normals (_n) and roughness/metal/AO/spec (_rmaos). Their presence also auto-selects linear color — the manual Linear checkbox only matters for legacy textures. */
+	/** @brief TruePBR companion maps, auto-resolved by probing the Textures\PBR\ variant of the snow path: tangent normals (_n) and roughness/metal/AO/spec (_rmaos). Their presence also auto-selects linear color. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowNormalSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowRmaosSRV;
 	bool shellSnowTextureIsPBR = false;

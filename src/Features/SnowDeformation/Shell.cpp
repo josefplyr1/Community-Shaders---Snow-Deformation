@@ -14,12 +14,10 @@
  * @brief Lazy-loads the shell snow texture set from the user-configurable
  * path (through the MO2 VFS).
  *
- * TruePBR sets live under Textures\PBR\... with _n / _rmaos companion maps
- * and linear-color albedo, so the PBR variant of the chosen path is probed
- * FIRST — matching the landscape's actual material beats the legacy diffuse,
- * and finding it removes the manual Linear guesswork. When the PBR set is
- * found, the modlist's own TruePBR config JSON (PBRTextureSets\, matched by
- * texture basename) supplies the authored glint/roughness/specular values.
+ * The TruePBR variant of the chosen path (Textures\PBR\..., _n / _rmaos
+ * companions, linear-color albedo) is probed first. When found, the
+ * modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture
+ * basename) supplies the authored glint/roughness/specular values.
  */
 void SnowDeformation::EnsureShellSnowTextures()
 {
@@ -163,9 +161,9 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
-	// Shell range: the slider scales the warped grid's inner spacing — the
-	// warp shape is unchanged, so range costs no extra vertices, only
-	// near-field density (8 units at the 375 m default).
+	// The range slider scales the warped grid's inner spacing; the warp
+	// shape is unchanged, so range costs only near-field density (8 units
+	// at the 375 m default).
 	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
 	cbData.GridSpacing = shellSpacing;
 	cbData.GridDim = kShellGridDim;
@@ -275,7 +273,7 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(0, 4, shellSRVs);
 	context->PSSetShaderResources(0, 8, shellSRVs);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
-	// at deferred time is not guaranteed — bind explicitly for this pass.
+	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {
 		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
 		context->PSSetShaderResources(20, 1, &glintSRV);
@@ -314,10 +312,10 @@ void SnowDeformation::DrawShell()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
 	// Screen-space passes running after us (SSGI) read Terrain Blending's
-	// blended depth, which was finalized during opaque rendering — without a
-	// sync they see buried geometry poking up through the snow and paint
-	// occlusion halos onto the shell. min() the shell's fresh depth writes
-	// into both blended copies (DSV is unbound again at this point).
+	// blended depth, finalized during opaque rendering; without a sync they
+	// see buried geometry poking through the snow and paint occlusion halos
+	// onto the shell. min() the shell's fresh depth into both blended copies
+	// (DSV is unbound again at this point).
 	auto& tb = globals::features::terrainBlending;
 	if (tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS()) {

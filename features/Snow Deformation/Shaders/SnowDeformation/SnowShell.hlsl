@@ -26,7 +26,7 @@
 
 cbuffer ShellCB : register(b0)
 {
-	// row_major matches the game's FrameBuffer.hlsli declarations — the CPU
+	// row_major matches the game's FrameBuffer.hlsli declarations; the CPU
 	// side copies the b12 bytes verbatim, which are row-major packed.
 	row_major float4x4 CameraViewProj;
 	row_major float4x4 CameraViewProjUnjittered;
@@ -74,7 +74,7 @@ cbuffer ShellCB : register(b0)
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float> DeformationMap : register(t1);
 Texture2D<float4> SnowDiffuse : register(t2);
-// Full-scene depth copy (Terrain Blending's blended depth when available) —
+// Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
@@ -88,8 +88,8 @@ static const float kSnowUVTile = 256.0;
 
 // Distance warp: inner kWarpInnerVerts vertices per side keep linear
 // GridSpacing; beyond them each ring's spacing grows by kWarpGrowth so the
-// grid stretches ~26k units from the camera. Constants MUST match
-// SnowDeformation.h (kShellWarpInnerVerts / kShellWarpGrowth).
+// grid stretches ~26k units from the camera. Must match SnowDeformation.h
+// (kShellWarpInnerVerts / kShellWarpGrowth).
 static const float kWarpInnerVerts = 256.0;
 static const float kWarpGrowth = 1.0902;
 
@@ -154,9 +154,9 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 }
 
 // B-spline bicubic sample of the deformation map, built from four bilinear
-// taps at fractional offsets. Smooth VALUE and smooth GRADIENT: plain
-// bilinear leaves texel-rate creases in trench walls, and value-only
-// smoothing terraces the gradient the normals consume.
+// taps at fractional offsets. Smooth value and gradient: plain bilinear
+// leaves texel-rate creases in trench walls, and value-only smoothing
+// terraces the gradient the normals consume.
 // Returns 0 outside the deformation window.
 float SampleDeformation(float2 gridLocal)
 {
@@ -209,11 +209,10 @@ float ShapeNoise(float2 p)
 }
 
 // ---- Surface undulation: wind-settled dunes ----
-// Deep snow is never a mathematically smooth sheet: wind works it into broad,
-// gentle waves. Two octaves of world-anchored value noise, added as REAL
-// geometry (via ShellSurfaceZ, so the VS displaces by it) and shaded
-// per-pixel through its gradient. Amplitude scales with local depth so thin
-// snow, class boundaries and carved floors stay flat.
+// Two octaves of world-anchored value noise, added as real geometry (via
+// ShellSurfaceZ, so the VS displaces by it) and shaded per-pixel through
+// its gradient. Amplitude scales with local depth so thin snow, class
+// boundaries and carved floors stay flat.
 static const float kUndulationAmp = 3.5;
 // Minimum snow cover on carved trench floors (world units). Covers the
 // terrain window's bilinear approximation error so the real landscape mesh
@@ -226,14 +225,11 @@ float Undulation(float2 worldXY)
 	return (n - 0.5) * 2.0 * kUndulationAmp;
 }
 
-// Class-border shaping. Landscape texture borders are hard edges in the
-// baked depth/coverage data, so a +30 snow class meeting a -5 mud class
-// produces a ravine wall exactly along the texture seam. Two live controls:
-// BorderNoise domain-warps WHERE the border falls (depth/coverage sampled at
-// a noise-jittered position — real snow edges never trace a seam), and
-// BorderSmooth widens the ramp with a tap cross so the two depths meet in a
-// slope. Terrain HEIGHT is always sampled at the true position — the shell
-// keeps conforming exactly.
+// Class borders are hard edges in the baked depth/coverage data: a +30
+// snow class meeting a -5 mud class produces a ravine wall along the
+// texture seam. BorderNoise domain-warps where the border falls and
+// BorderSmooth widens the ramp with a tap cross. Terrain height is always
+// sampled at the true position, so the shell keeps conforming.
 float3 SampleTerrainShaped(float2 gridLocal)
 {
 	float3 result = SampleTerrain(gridLocal);
@@ -261,8 +257,8 @@ float3 SampleTerrainShaped(float2 gridLocal)
 }
 
 // The shell surface: per-texture-class snow depth carved by deformation.
-// Class depths blend by their baked weights on the CPU (window rebuild), so
-// boundaries between differently-deep snows are geometric depth ramps —
+// Class depths blend by their baked weights on the CPU (window rebuild),
+// so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
@@ -272,14 +268,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	float rampDepth = terrain.y;
 	coverage = saturate(terrain.z);
 
-	// Distant de-noising: out here one terrain-window texel spans 100+
-	// world units, and the bilinear height/coverage under-resolve — on
-	// slopes the interpolated height dips BELOW the real landscape mesh
-	// and single bare texels punch pinholes into continuous snowfields,
-	// holes that crawl as the window re-rasterizes with camera motion. A
-	// snow-biased neighborhood MAX over one texel radius lifts the shell
-	// clear of the mesh and fills the pinholes; the blend-in leaves the
-	// near field untouched.
+	// Distant de-noising: out here one terrain-window texel spans 100+ world
+	// units and the bilinear height/coverage under-resolve; on slopes the
+	// interpolated height dips below the real mesh and single bare texels
+	// punch crawling pinholes into continuous snowfields. A snow-biased
+	// neighborhood max over one texel radius lifts the shell clear and fills
+	// the pinholes; the blend-in leaves the near field untouched.
 	float camDist = length(gridLocal - WarpedHalfSpan);
 	[branch] if (camDist > 4000.0)
 	{
@@ -292,10 +286,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float3 n5 = SampleTerrain(gridLocal - float2(TerrainTexelSize, TerrainTexelSize));
 		float3 n6 = SampleTerrain(gridLocal + float2(TerrainTexelSize, -TerrainTexelSize));
 		float3 n7 = SampleTerrain(gridLocal + float2(-TerrainTexelSize, TerrainTexelSize));
-		// Never-rasterized window texels at the data edge hold sentinel
-		// heights: ONE such neighbor tap would explode the ridge pad into a
-		// kilometer-tall white pillar. Trust only plausible taps (fall back
-		// to the center height) and cap the pad at a sane bound.
+		// Never-rasterized window texels at the data edge hold sentinel heights
+		// that would explode the ridge pad through a single neighbor tap. Trust
+		// only plausible taps (fall back to the center height) and cap the pad.
 		float h0 = n0.x > -50000.0 ? n0.x : terrainHeight;
 		float h1 = n1.x > -50000.0 ? n1.x : terrainHeight;
 		float h2 = n2.x > -50000.0 ? n2.x : terrainHeight;
@@ -314,19 +307,17 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float c6 = n6.x > -50000.0 ? n6.z : 0.0;
 		float c7 = n7.x > -50000.0 ? n7.z : 0.0;
 		float maxCoverage = saturate(max(max(max(c0, c1), max(c2, c3)), max(max(c4, c5), max(c6, c7))));
-		// Within-texel ridge error: one height sample per 100+ world units
-		// cannot see a crest between texel centers — on a slope the real
-		// mesh can top the interpolated field by half the local gradient,
-		// which is exactly the crawling holes that survive the plain max.
-		// Pad by that bound so the shell always clears the mesh.
+		// Within-texel ridge error: one height sample per 100+ world units cannot
+		// see a crest between texel centers; on a slope the real mesh can top the
+		// interpolated field by half the local gradient. Pad by that bound so the
+		// shell always clears the mesh.
 		float ridgePad = min(0.25 * max(abs(h0 - h1), abs(h2 - h3)), 150.0);
 		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
 		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
-		// Decisive separation: wherever the pad still lands the far shell
-		// within a few units of the landscape mesh, the two interleave at
-		// depth precision and the winner flips with the view angle — holes
-		// that appear and vanish as the camera turns. A fixed covered-only
-		// margin makes the shell win at every angle.
+		// Wherever the pad still lands the far shell within a few units of the
+		// landscape mesh, the two interleave at depth precision and the winner
+		// flips with the view angle. A fixed covered-only margin makes the
+		// shell win at every angle.
 		terrainHeight += farBlend * 8.0 * saturate(coverage);
 	}
 
@@ -343,14 +334,11 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// Deformation carves only where the layer is actually raised; the
 	// negative-depth submerge at class edges is untouched. The carved floor
 	// never drops below kTrenchFloor units (or the un-carved depth when
-	// thinner), so trench bottoms are always shell snow and the landscape
-	// texture underneath never shows through. The floor tapers away where
-	// the UNCARVED depth thins — that ramp is the "between two classes"
-	// signal, and a full floor there would hold a hard-edged slab over bare
-	// ground instead of blending out (border fade itself is an ALPHA matter,
-	// handled in the PS). The dune undulation rides on top, scaled by the
-	// remaining depth so floors and thin edges stay flat (3.5/8 < 1 keeps
-	// it non-negative).
+	// thinner), so trench bottoms stay shell snow. The floor tapers away as
+	// the uncarved depth thins toward class borders; a full floor there would
+	// hold a hard-edged slab over bare ground (border fade itself is alpha,
+	// handled in the PS). Undulation rides on top, scaled by the remaining
+	// depth so floors and thin edges stay flat.
 	[flatten] if (depth > 0.0)
 	{
 		float deformation = saturate(SampleDeformation(gridLocal));
@@ -371,11 +359,9 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	uint quadIndex = vertexID / 6;
 	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
 	// Union-jack triangulation: alternate the quad diagonal on a checkerboard
-	// so trench walls crossing the grid alias half as hard — one uniform
-	// diagonal turns every wall into a same-handed sawtooth. The parity is
-	// anchored to WORLD position (GridOrigin folded in), not grid indices:
-	// index parity re-phases every camera step and makes walls visibly shift
-	// with camera movement.
+	// so walls crossing the grid alias half as hard. Parity is anchored to
+	// world position, not grid indices: index parity re-phases every camera
+	// step and makes walls visibly shift with movement.
 	int2 parityBase = int2(floor(GridOrigin / GridSpacing));
 	uint parity = uint(parityBase.x + int(quadXY.x)) ^ uint(parityBase.y + int(quadXY.y));
 	float2 corner = ((parity & 1) != 0) ? kCornersFlipped[vertexID % 6] : kCorners[vertexID % 6];
@@ -387,14 +373,11 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float2 absXY = GridOrigin + gridLocal;
 
 	// World-anchored outer rings: warped-zone vertex offsets are camera-
-	// relative, so distant geometry MORPHS as the camera moves — terrain
-	// resampled at ever-shifting positions reads as breathing shapes,
-	// landscape peeking through, and blotchy far shading. Snapping each
-	// vertex to its OWN ring's step in WORLD space pins distant vertices in
-	// place; a vertex hops one ring-step only when the camera crosses one,
-	// which distance and TAA absorb. The inner linear region is already
-	// stable through GridOrigin's whole-texel snapping, so the snap blends
-	// in smoothly where the rings start stretching.
+	// relative, so distant geometry morphs as the camera moves. Snapping each
+	// vertex to its own ring's step in world space pins it; a vertex hops one
+	// ring-step only when the camera crosses one, which distance and TAA
+	// absorb. The inner linear region is already stable through GridOrigin's
+	// whole-texel snapping.
 	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
 	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
 	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
@@ -405,9 +388,9 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 
-	// Smooth terrain normal per-vertex (wide 32-unit differences bridge the
-	// 128-unit data texels — interpolation then removes the faceting the
-	// per-pixel piecewise-constant gradient produced).
+	// Smooth terrain normal per-vertex: wide 32-unit differences bridge the
+	// 128-unit data texels, and interpolation removes the faceting of the
+	// per-pixel piecewise-constant gradient.
 	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
 	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
 	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
@@ -468,11 +451,9 @@ struct SnowTaps
 SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
 {
 	// World-anchored lattice (~427 units per cell): the snow uv rebases by
-	// tile multiples as the camera-following grid moves, and a tile is not a
-	// whole number of lattice cells — a uv-derived lattice made the pattern
-	// jump with the camera. Absolute-coordinate precision is fine here: hash
-	// cell selection tolerates far more error than float32 carries at world
-	// magnitudes (unlike height-field finite differences).
+	// tile multiples as the camera-following grid moves, so a uv-derived
+	// lattice jumps with the camera. Hash cell selection tolerates absolute-
+	// coordinate float error (unlike height-field finite differences).
 	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
 	float2 cellBase = floor(lattice);
 	float2 f = frac(lattice);
@@ -499,10 +480,9 @@ SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
 	taps.uv1 = uv + StochasticHash(v1);
 	taps.uv2 = uv + StochasticHash(v2);
 	taps.weights = bary;
-	// All taps share the CONTINUOUS base uv's derivatives: the per-cell
-	// offsets are constant within a triangle but jump at lattice seams, and
-	// letting the sampler derive gradients there makes anisotropic filtering
-	// fetch the deepest mips — visible as discolored (beige) streaks.
+	// All taps share the continuous base uv's derivatives: the per-cell
+	// offsets jump at lattice seams, and sampler-derived gradients there make
+	// anisotropic filtering fetch the deepest mips (discolored streaks).
 	taps.duvdx = ddx(uv);
 	taps.duvdy = ddy(uv);
 	return taps;
@@ -564,36 +544,29 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * smoothstep(0.0, rampFadeBand, pixelRampDepth);
 
 	// Object blending (Terrain Blending-style depth proximity): where the
-	// shell hovers within a few units in front of ANY geometry behind it —
-	// walkway planks, mesh roads, rocks — dissolve it into the dither. The
-	// shell only knows terrain heights, so this is what makes it meet
-	// statics softly instead of slicing across them at the depth test.
-	// The gap is measured along the view ray, so it shifts with the camera;
-	// widening the band with distance turns that parallax wobble into a
-	// broad soft fade instead of a visible shape-hunting shimmer around
-	// distant uncovered objects.
-	// Mild distance scaling only: a steep view-Z-proportional band makes the
-	// blend wobble with camera tilt even up close.
+	// shell hovers within a few units in front of any geometry behind it
+	// (walkway planks, mesh roads, rocks), dissolve it into the dither. The
+	// shell only knows terrain heights; this is what makes it meet statics
+	// softly instead of slicing across them at the depth test. The gap is
+	// measured along the view ray and shifts with the camera; widening the
+	// band with distance turns that parallax wobble into a broad soft fade.
+	// Mild distance scaling only: a steep view-Z-proportional band wobbles
+	// with camera tilt even up close.
 	float objectFadeBand = 10.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
-	// Carved trench floors DELIBERATELY hug the geometry behind them
-	// (terrain, actor feet standing in the trench) and must override the
-	// fade — without the override they get view-dependently dithered away,
-	// which reads as "snow moving with the camera".
-	// But the carve override near class borders is what makes trenches END
-	// HARD while untrampled snow dissolves softly: the proximity dissolve is
-	// a large part of the border blend, and carved pixels were exempt from
-	// it. Trampled Border Fade scales the override away as the uncarved ramp
-	// thins, so walked snow rejoins the same soft dissolve at borders while
-	// deep-field trench floors keep their guaranteed visibility.
+	// Carved trench floors hug the geometry behind them (terrain, actor feet)
+	// and must override the fade, or they get view-dependently dithered away.
+	// The override is also what makes trenches end hard at class borders
+	// while untrampled snow dissolves softly; Trampled Border Fade scales the
+	// override away as the uncarved ramp thins, so walked snow rejoins the
+	// soft dissolve at borders.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, carveOverride);
 
-	// Stochastic discard dither: proven to blend in this pipeline (the wide
-	// distance fade). Writing alpha without discarding blends nothing in our
-	// pass — TB's alpha path runs through depth-prepass machinery we do not
-	// replicate.
+	// Stochastic discard dither: writing alpha without discarding blends
+	// nothing in this pass; TB's alpha path runs through depth-prepass
+	// machinery not replicated here.
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	[branch] if (ShellDebugData == 0)
 	{
@@ -630,15 +603,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
 
-	// Snow texture taps — shared by albedo, normal and RMAOS so every map
+	// Snow texture taps, shared by albedo, normal and RMAOS so every map
 	// agrees on the same anti-tiling offsets.
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 
-	// Micro-relief. PBR sets carry a REAL tangent-space normal map — the
-	// same dimples, clumps and crust the landscape shows; legacy sets fall
-	// back to treating the diffuse luminance as a height proxy. Both fade
-	// with distance, where the grain frequency aliases instead of detailing.
+	// Micro-relief: PBR sets carry a real tangent-space normal map; legacy
+	// sets treat the diffuse luminance as a height proxy. Both fade with
+	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
@@ -673,26 +645,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowMap(SnowDiffuse, snowTaps).rgb;
-		// PBR-authored textures store linear color; the rest of this path
-		// works in the pipeline's gamma space. Auto-enabled when the PBR set
-		// was resolved — no manual checkbox needed.
+		// PBR-authored textures store linear color; the rest of this path works
+		// in the pipeline's gamma space. Auto-enabled when the PBR set resolved.
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	// PBR snow material: GGX microfacet specular with Fresnel and
-	// energy-conserving lobes. Light and ambient stay in the frame's units
-	// (raw DirLightColor / Color::Ambient — DirLightColor is already
-	// π-scaled by pipeline convention, so no Lambert 1/π on diffuse); the
-	// material RESPONSE is physically based, and the indirect specular lobe
-	// goes to the Reflectance RT where the composite applies cubemap and
-	// ambient specular like any TruePBR surface.
+	// PBR snow material: GGX microfacet specular with Fresnel and energy-
+	// conserving lobes. Light and ambient stay in the frame's units
+	// (DirLightColor is already pi-scaled by pipeline convention, so no
+	// Lambert 1/pi on diffuse); the indirect specular lobe goes to the
+	// Reflectance RT where the composite applies cubemap and ambient
+	// specular like any TruePBR surface.
 	static const float kSnowRoughness = 0.6;
 	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape
-	// config's authored scales — the darker-and-brighter patchiness real
-	// PBR snow shows.
+	// config's authored scales.
 	float snowRoughness = kSnowRoughness;
 	float3 snowF0 = kSnowF0;
 	float snowAO = 1.0;
@@ -718,12 +687,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
 	float specD = BRDF::D_GGX(snowRoughness, satNdotH);
-	// Sparkle: replace the smooth GGX NDF with TruePBR's discrete glint NDF —
-	// individual microfacets flash in and out as view/sun angles change, which
-	// is the single strongest "real snow in sunlight" cue. Parameters come
-	// from the landscape's authored PBR config so shell sparkle equals ground
-	// sparkle, and the uv is the albedo uv so the sparkle field rides the
-	// same tiling.
+	// Sparkle: TruePBR's discrete glint NDF replaces the smooth GGX NDF.
+	// Parameters come from the landscape's authored PBR config so shell
+	// sparkle matches ground sparkle; the uv is the albedo uv so the sparkle
+	// field rides the same tiling.
 	[branch] if (EnableGlints > 0.5 && SnowGlintParams.x > 1.1)
 	{
 		float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
@@ -752,8 +719,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	[branch] if (ShellDebugData != 0)
 	{
-		// R = height, G = per-pixel coverage, B = ramp depth (40 units =
-		// full blue) — depth-class boundaries show as blue-intensity steps.
+		// R = height, G = per-pixel coverage, B = ramp depth (40 units = full
+		// blue); class boundaries show as blue-intensity steps.
 		float heightNorm = saturate((input.DebugHeight + 4000.0) / 8000.0);
 		bool isSentinel = input.DebugHeight < -50000.0;
 		preLit = isSentinel ? float3(0.0, 0.0, 0.5) : float3(heightNorm * 0.25, pixelCoverage * 0.5, saturate(pixelTerrain.y / 40.0));
