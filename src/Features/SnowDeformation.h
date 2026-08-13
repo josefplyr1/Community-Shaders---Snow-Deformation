@@ -274,7 +274,9 @@ public:
 		float ObjectHeightHalfExtent;
 		/** @brief Raw cascade-atlas copies are bound at t22/t23 this frame (else the shader falls back to the blurred VSM path). */
 		float CrispShadows;
-		float2 padShell;
+		/** @brief Screen-Space Shadows output bound at t45: the long-range depth-marched shadows carrying distant LOD tree shadows beyond the cascades. */
+		float ScreenSpaceShadowsActive;
+		float padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

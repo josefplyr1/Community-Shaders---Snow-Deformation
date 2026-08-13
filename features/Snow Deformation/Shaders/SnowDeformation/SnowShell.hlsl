@@ -34,6 +34,7 @@
 SamplerState ShellLinearSampler : register(s1);
 #	define LinearSampler ShellLinearSampler
 #	include "Common/ShadowSampling.hlsli"
+#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
@@ -93,7 +94,11 @@ cbuffer ShellCB : register(b0)
 	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
 	// shader falls back to the blurred VSM path).
 	float CrispShadows;
-	float2 padShell;
+	// Screen-Space Shadows output is bound at t45: the long-range
+	// depth-marched shadows that carry distant LOD tree shadows beyond the
+	// two cascades.
+	float ScreenSpaceShadowsActive;
+	float padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -898,6 +903,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// reading as hard-edged blocks on distant snow.
 		float soft = lerp(0.06, 0.35, farShadowT);
 		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+	}
+
+	// Screen-Space Shadows (the integrated long-range depth march): these
+	// carry the distant LOD tree shadows far beyond the two cascades. BUT
+	// the texture was marched on the PREPASS depth — the ground UNDER the
+	// shell — so applying it near paints barrel/object shadows straight
+	// through the snow ("transparent shell"). Near, the crisp cascades
+	// already shadow the shell correctly; SSS blends in only beyond them,
+	// where it is the ONLY shadow source and the shell hugs the very
+	// ground the march ran on.
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	{
+		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;

@@ -3,6 +3,7 @@
 #include <DDSTextureLoader.h>
 
 #include "Deferred.h"
+#include "Features/ScreenSpaceShadows.h"
 #include "Features/TerrainBlending.h"
 #include "Globals.h"
 #include "State.h"
@@ -280,6 +281,11 @@ void SnowDeformation::DrawShell()
 	// copies taken at the shadow-mask pass. When the copies are missing this
 	// frame, the shader falls back to the blurred VSM path.
 	cbData.CrispShadows = (shadowAtlasCopySRV && shadowEsramCopySRV) ? 1.0f : 0.0f;
+	// Screen-Space Shadows availability: the feature clears its texture to
+	// WHITE every Prepass even when disabled, so multiplying is always safe
+	// once the texture exists.
+	auto& screenSpaceShadowsFeature = globals::features::screenSpaceShadows;
+	cbData.ScreenSpaceShadowsActive = (screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) ? 1.0f : 0.0f;
 
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
@@ -397,6 +403,11 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(22, 2, shadowSRVs);
 		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
 		context->PSSetSamplers(2, 1, &cmpSampler);
+	}
+	// Screen-Space Shadows output (t45) for the shell + statics passes.
+	if (cbData.ScreenSpaceShadowsActive > 0.5f) {
+		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
+		context->PSSetShaderResources(45, 1, &sssSRV);
 	}
 
 	winrt::com_ptr<ID3D11SamplerState> prevSamplers[2];
