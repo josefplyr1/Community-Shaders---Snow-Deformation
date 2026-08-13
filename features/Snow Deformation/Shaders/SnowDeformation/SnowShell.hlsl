@@ -112,6 +112,11 @@ cbuffer ShellCB : register(b0)
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
 	float SkylightingActive;
+
+	// Dynamic-resolution ratio (b12 DynamicResolutionParams1.xy): rendered
+	// content occupies this fraction of the full-size targets, top-left.
+	float2 DynResScale;
+	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -998,7 +1003,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float4 groundClip = mul(CameraViewProj, float4(groundPos, 1.0));
 		float2 maskUV = groundClip.xy / max(groundClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
 		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
-			clusterUV, maskUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+			clusterUV, maskUV, DynResScale, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;

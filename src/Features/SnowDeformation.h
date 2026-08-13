@@ -314,6 +314,10 @@ public:
 		float PointLightsActive;
 		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */
 		float SkylightingActive;
+
+		/** @brief Dynamic-resolution ratio (b12 DynamicResolutionParams1.xy); rendered content occupies this fraction of the full-size targets. */
+		float2 DynResScale;
+		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

@@ -305,6 +305,8 @@ void SnowDeformation::DrawShell()
 	// Skylighting probe volume for ambient parity with terrain shading.
 	auto& skylighting = globals::features::skylighting;
 	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
+	// Upscaling sub-rect ratio for the shadow-mask lookup.
+	cbData.DynResScale = { fb.GetDynamicResolutionParams1().x, fb.GetDynamicResolutionParams1().y };
 
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;

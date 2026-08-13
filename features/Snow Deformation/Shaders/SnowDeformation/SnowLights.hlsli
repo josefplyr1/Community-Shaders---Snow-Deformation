@@ -58,7 +58,7 @@ namespace SnowLights
 	// vanilla falloff per light flags, so ISL parity is automatic.
 	void AccumulatePointLights(
 		float3 worldPos, float3 normalWS, float3 V, float viewZ,
-		float2 clusterUV, float2 maskUV,
+		float2 clusterUV, float2 maskUV, float2 dynResScale,
 		float3 albedo, float3 F0, float roughness,
 		inout float3 diffuse, inout float3 specular)
 	{
@@ -89,9 +89,15 @@ namespace SnowLights
 			{
 				[branch] if (!maskLoaded)
 				{
-					// The under-point can project past the viewport edge;
-					// clamp instead of reading out of bounds (= zeros).
-					int2 maskPixel = clamp(int2(maskUV * SharedData::BufferDim.xy), int2(0, 0), int2(SharedData::BufferDim.xy) - 1);
+					// Upscaling renders into the top-left sub-rect of the
+					// full-size target; full-screen UV must be scaled by the
+					// dynamic-resolution ratio (Lighting.hlsl's
+					// GetDynamicResolutionAdjustedScreenPosition, b12-free).
+					// The under-point can also project past the viewport
+					// edge; clamp to the sub-rect instead of reading outside
+					// the rendered region.
+					int2 renderDims = int2(SharedData::BufferDim.xy * dynResScale);
+					int2 maskPixel = clamp(int2(maskUV * dynResScale * SharedData::BufferDim.xy), int2(0, 0), renderDims - 1);
 					shadowMask = ShadowMask.Load(int3(maskPixel, 0));
 					maskLoaded = true;
 				}
