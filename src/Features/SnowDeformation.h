@@ -120,6 +120,14 @@ public:
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color; the shader converts to the pipeline's gamma space. Auto-enabled when a PBR set is resolved — only matters for legacy textures. */
 		bool SnowTextureLinear = false;
+		/** @brief World-unit jitter of WHERE class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
+		float SnowBorderNoise = 32.0f;
+		/** @brief World-unit radius widening the depth ramp between neighboring classes — deep snow meets shallow ground in a slope, not a ravine wall. */
+		float SnowBorderSmoothness = 32.0f;
+		/** @brief How far from a class border trampled snow keeps its visibility override — beyond ~20 the landscape under trenches becomes too visible. */
+		float SnowBorderTrampledFade = 20.0f;
+		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
+		float SnowBorderUntrampledFade = 5.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -238,6 +246,11 @@ public:
 
 		float SnowSpecularLevel;
 		float EnableGlints;
+		float BorderNoise;
+		float BorderSmooth;
+
+		float BorderTrampledFade;
+		float BorderUntrampledFade;
 		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

@@ -12,7 +12,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillTime,
 	SnowClassDepths,
 	SnowTexturePath,
-	SnowTextureLinear)
+	SnowTextureLinear,
+	SnowBorderNoise,
+	SnowBorderSmoothness,
+	SnowBorderTrampledFade,
+	SnowBorderUntrampledFade)
 
 void SnowDeformation::SetupResources()
 {

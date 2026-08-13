@@ -209,6 +209,10 @@ void SnowDeformation::DrawShell()
 	// Sparkle: the shell's specular runs TruePBR's glint NDF when its shared
 	// noise texture exists (bound to t20 below for the whole pass).
 	cbData.EnableGlints = globals::features::truePBR.glintsNoiseTexture ? 1.0f : 0.0f;
+	cbData.BorderNoise = settings.SnowBorderNoise;
+	cbData.BorderSmooth = settings.SnowBorderSmoothness;
+	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
+	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 
 	shellCB->Update(cbData);
 

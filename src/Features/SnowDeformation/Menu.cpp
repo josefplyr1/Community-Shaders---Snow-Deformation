@@ -44,6 +44,24 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttBorders = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
+			ImGui::SliderFloat(T(TKEY("border_noise"), "Border Noise"), &settings.SnowBorderNoise, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttBn = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("border_noise_tooltip"), "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam."));
+			ImGui::SliderFloat(T(TKEY("border_smoothness"), "Border Smoothness"), &settings.SnowBorderSmoothness, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttBs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("border_smoothness_tooltip"), "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall."));
+			ImGui::SliderFloat(T(TKEY("border_trampled_fade"), "Trampled Border Fade"), &settings.SnowBorderTrampledFade, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttTf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("border_trampled_fade_tooltip"), "How gradually TRAMPLED snow (trench floors) blends out toward a class border, letting the ground beneath show through faintly. Too high and the landscape becomes too visible under trenches."));
+			ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttUf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
 			if (settings.ShowDebugTexture) {
