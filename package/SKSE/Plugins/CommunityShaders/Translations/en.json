@@ -1391,7 +1391,7 @@
     "feature.snow_deformation.trail_irregularity": "Trail Irregularity",
     "feature.snow_deformation.trail_irregularity_tooltip": "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles.",
     "feature.snow_deformation.trench_sharpness": "Trench Wall Sharpness",
-    "feature.snow_deformation.trench_sharpness_tooltip": "How steeply trench walls drop. Low = wide, soft banks; high = full depth held almost to the trail's edge.",
+    "feature.snow_deformation.trench_sharpness_tooltip": "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge.",
     "feature.snow_deformation.undulation": "Surface Undulation",
     "feature.snow_deformation.undulation_spacing": "Undulation Spacing",
     "feature.snow_deformation.undulation_spacing_tooltip": "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet.",

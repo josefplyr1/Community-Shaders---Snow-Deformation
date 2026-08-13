@@ -763,13 +763,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel
-	// must never fully dissolve to the object's own texture, whatever the
-	// seam blends above decided. TrenchFloorFade relaxes the guarantee where
-	// the trample is heavy, so a well-worn floor wears through to the
-	// object's own surface (rock, log, planks) instead of holding solid snow.
-	float floorHold = smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage);
-	floorHold *= 1.0 - TrenchFloorFade * smoothstep(0.4, 1.0, pixelDeform);
-	coverageAlpha = max(coverageAlpha, floorHold);
+	// must never dissolve to the object's own texture, whatever the seam
+	// blends above decided.
+	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
+
+	// Floor wear: TrenchFloorFade dissolves heavily trampled floors back to
+	// the object's own surface (rock, log, planks). Applied MULTIPLICATIVELY
+	// after the floor guarantee — the coverage gates hold alpha at 1 on
+	// floors, so relaxing the guarantee alone changes nothing. Up-facing
+	// pixels only: the top-down map column carries the trail on flanks too,
+	// and wearing those punches see-through holes in trench walls.
+	[branch] if (TrenchFloorFade > 0.001)
+	{
+		coverageAlpha *= 1.0 - TrenchFloorFade * smoothstep(0.45, 0.95, pixelDeform) * smoothstep(0.35, 0.65, normalWS.z);
+	}
 
 #	ifndef PATCH
 	// Vertical cull, middle strength: with the drape ramp the connective

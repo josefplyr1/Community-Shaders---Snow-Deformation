@@ -110,11 +110,11 @@ public:
 		bool EnableSnowDeformation = true;
 		bool ShowDebugTexture = false;
 		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size). */
-		float StampRadius = 20.0f;
-		/** @brief Lower smoothstep edge of the stamp falloff, as a fraction of the stamp radius: 0 = the softest, widest banks; higher values hold full depth almost to the edge for steep trench walls. */
-		float TrenchWallSharpness = 0.2f;
+		float StampRadius = 10.0f;
+		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
+		float TrenchWallSharpness = 50.0f;
 		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
-		float TrailIrregularity = 0.25f;
+		float TrailIrregularity = 0.60f;
 		/** @brief Doubles the deformation map to 4096² (2-unit texels at the default Trenches range) for crisper trench detail. 64 MB of VRAM instead of 16; toggling clears existing trenches. */
 		bool HighDetailTrenches = false;
 		/** @brief Seconds for compressed snow to fully recover. 0 disables refilling. */
@@ -134,7 +134,7 @@ public:
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
 		bool SnowTextureLinear = false;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
-		float SnowBorderNoise = 32.0f;
+		float SnowBorderNoise = 64.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. */
@@ -146,9 +146,9 @@ public:
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
-		float UndulationStrength = 3.5f;
+		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
-		float UndulationSpacing = 1.0f;
+		float UndulationSpacing = 0.5f;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. */
 		float TrenchFloorFade = 0.5f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */

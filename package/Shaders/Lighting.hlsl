@@ -1196,9 +1196,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SNOW_DEFORMATION)
 	// Per-tile snow detection: how much of this pixel's landscape blend is
-	// snow material.
+	// snow material. Also computed for the debug overlay while the feature is
+	// disabled — snow detection is exactly what the overlay exists to verify.
 	float snowDeformationSnowness = 0.0;
-	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation)
+	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation || (SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
 	{
 #			if defined(TRUE_PBR)
 		// PBR terrain replaces the vanilla per-layer snow constants, so the

@@ -29,10 +29,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
-		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 0.85f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
 		if (auto _ttSharp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; high = full depth held almost to the trail's edge."));
-		ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 0.6f, "%.2f");
+			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
+		ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttIrr = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
 		if (ImGui::Checkbox(T(TKEY("high_detail_trenches"), "High Detail Trenches"), &settings.HighDetailTrenches))

@@ -170,8 +170,11 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 {
 	// Advance the window once per frame and only from the in-world upload:
 	// reflection/early uploads carry probe cameras that must not steer it.
+	// Not while disabled either: the disabled Prepass never scrolls the
+	// texture, so a walking origin would desync the constant buffer from the
+	// frozen map (visible as trails sliding with the camera in the overlay).
 	static Util::FrameChecker frameChecker;
-	if (a_inWorld && frameChecker.IsNewFrame()) {
+	if (a_inWorld && settings.EnableSnowDeformation && frameChecker.IsNewFrame()) {
 		// Snap to whole texels so scrolling never resamples the map. The
 		// cached FrameBuffer camera position is what the lighting pixel
 		// shader sees as CameraPosAdjust, so map and terrain agree.
@@ -258,7 +261,9 @@ void SnowDeformation::Prepass()
 
 	perFrameData.WindowOrigin = windowOrigin;
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
-	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness, 0.0f, 0.95f);
+	// Sharpness is a percent slider; 100% clamps just below the degenerate
+	// smoothstep(1, 1, x) edge.
+	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f, 0.0f, 0.98f);
 	perFrameData.StampNoiseAmp = std::max(settings.TrailIrregularity, 0.0f);
 
 	float deltaTime = *globals::game::deltaTime;
