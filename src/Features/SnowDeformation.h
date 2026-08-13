@@ -34,9 +34,34 @@ public:
 	static constexpr float kTexelSize = kWorldSize / kTextureDim;
 	static constexpr uint kMaxStamps = 128;
 
+	// ---- Snow shell: a camera-following grid of real snow geometry ----
+
+	static constexpr uint kShellGridDim = 640;
+	// 8-unit inner spacing: trench walls are ~10-unit features carved from
+	// 4-unit deformation texels — 16-unit vertices undersampled them into
+	// blocky silhouettes no amount of data smoothing could fix.
+	static constexpr float kShellGridSpacing = 8.0f;
+
+	// Distance warp: the inner kShellWarpInnerVerts vertices per side keep
+	// linear kShellGridSpacing; beyond them each ring's spacing grows by
+	// kShellWarpGrowth, stretching the grid to ~26k units half-span so the
+	// shell continues into the distance. Constants MUST match the WarpAxis()
+	// constants in SnowShell.hlsl.
+	static constexpr float kShellWarpInnerVerts = 256.0f;
+	static constexpr float kShellWarpGrowth = 1.0902f;
+
+	/** @brief World half-span of the warped shell grid (center to edge) at a given inner spacing. Linear in spacing: the warp shape is unchanged. */
+	static float ShellWarpedHalfSpan(float a_spacing = kShellGridSpacing)
+	{
+		const float outerVerts = kShellGridDim * 0.5f - kShellWarpInnerVerts;
+		const float outer = kShellWarpGrowth * (std::pow(kShellWarpGrowth, outerVerts) - 1.0f) / (kShellWarpGrowth - 1.0f);
+		return (kShellWarpInnerVerts + outer) * a_spacing;
+	}
+
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),
 	// cell-anchored so texels never resample as the camera moves. Sized with
-	// margin so a shell grid drawn around the camera never samples past it.
+	// margin so the warped grid never samples past the window even with the
+	// camera at a cell edge.
 	static constexpr int kShellWindowDim = 1024;
 	static constexpr float kShellVertexSpacing = 128.0f;
 	static constexpr int kShellTexelsPerCell = 32;
@@ -169,6 +194,64 @@ public:
 
 	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
+
+	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
+	struct alignas(16) ShellCB
+	{
+		Matrix CameraViewProj;
+		Matrix CameraViewProjUnjittered;
+		Matrix CameraPreviousViewProjUnjittered;
+		Matrix CameraView;
+
+		float4 CameraPosAdjust;
+		float4 CameraPreviousPosAdjust;
+
+		float2 GridOrigin;
+		float GridSpacing;
+		float TerrainTexelSize;
+
+		// Precomputed on CPU so all shader-side field sampling happens in
+		// small grid-local coordinates (absolute world XY at ~1e5 magnitude
+		// destroys float32 finite differences → shimmering normals).
+		float2 GridToTerrainOffset;
+		float2 GridToDeformOffset;
+
+		float WarpedHalfSpan;
+		uint GridDim;
+		uint TerrainDim;
+		uint ShellDebugData;
+
+		float DeformInvWorldSize;
+		float3 padShell;
+	};
+	STATIC_ASSERT_ALIGNAS_16(ShellCB);
+
+	/**
+	 * @brief Draws the snow shell into the deferred G-buffer.
+	 *
+	 * Called from Deferred::DeferredPasses before the composite, while the
+	 * frame's G-buffer contents and main depth are complete. Binds its own
+	 * targets/state and restores the previous pipeline state afterwards.
+	 * Implemented in SnowDeformation/Shell.cpp.
+	 */
+	void DrawShell();
+
+	/** @brief Returns the shell vertex/pixel shaders, compiling them on first use. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11VertexShader* GetShellVS();
+	ID3D11PixelShader* GetShellPS();
+	ID3D11VertexShader* shellVS = nullptr;
+	ID3D11PixelShader* shellPS = nullptr;
+
+	ConstantBuffer* shellCB = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
+	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
+
+	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11ComputeShader* GetDepthSyncCS();
+	ID3D11ComputeShader* depthSyncCS = nullptr;
+
+	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
+	bool shellDataDebug = false;
 
 	/** @brief Bakes one cell's heights and per-vertex snow coverage from LoadedLandData. Called from the TESObjectLAND hook. Implemented in SnowDeformation/TerrainData.cpp. */
 	void BakeShellCell(RE::TESObjectLAND* land);

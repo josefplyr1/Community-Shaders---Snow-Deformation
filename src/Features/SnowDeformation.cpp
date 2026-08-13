@@ -70,6 +70,24 @@ void SnowDeformation::SetupResources()
 		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
 		shellTerrainTexture->CreateSRV(terrainSrvDesc);
 	}
+
+	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
+
+	auto device = globals::d3d::device;
+
+	D3D11_RASTERIZER_DESC rasterDesc{};
+	rasterDesc.FillMode = D3D11_FILL_SOLID;
+	rasterDesc.CullMode = D3D11_CULL_NONE;
+	rasterDesc.DepthClipEnable = TRUE;
+	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, shellRasterState.put()));
+	Util::SetResourceName(shellRasterState.get(), "SnowDeformation::ShellRasterState");
+
+	D3D11_DEPTH_STENCIL_DESC depthDesc{};
+	depthDesc.DepthEnable = TRUE;
+	depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+	depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthDesc, shellDepthState.put()));
+	Util::SetResourceName(shellDepthState.get(), "SnowDeformation::ShellDepthState");
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -191,6 +209,15 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationUpdateCS)
 		deformationUpdateCS->Release();
 	deformationUpdateCS = nullptr;
+	if (shellVS)
+		shellVS->Release();
+	shellVS = nullptr;
+	if (shellPS)
+		shellPS->Release();
+	shellPS = nullptr;
+	if (depthSyncCS)
+		depthSyncCS->Release();
+	depthSyncCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
