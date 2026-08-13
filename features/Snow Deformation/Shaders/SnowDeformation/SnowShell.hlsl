@@ -63,6 +63,11 @@ cbuffer ShellCB : register(b0)
 
 	float SnowSpecularLevel;
 	float EnableGlints;
+	float BorderNoise;   // world-unit domain-warp jitter of class-depth borders
+	float BorderSmooth;  // world-unit ramp-widening radius between classes
+
+	float BorderTrampledFade;    // depth window: trench-floor visibility override toward borders
+	float BorderUntrampledFade;  // depth band: untrampled edge dissolve
 	float2 padShell;
 }
 
@@ -185,6 +190,58 @@ float SampleDeformation(float2 gridLocal)
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
 }
 
+// World-anchored value noise, shared by the border domain warp (and any
+// other organic-edge shaping).
+float ShapeNoiseHash(float2 cell)
+{
+	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float ShapeNoise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return lerp(lerp(ShapeNoiseHash(i), ShapeNoiseHash(i + float2(1, 0)), f.x),
+		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
+}
+
+// Class-border shaping. Landscape texture borders are hard edges in the
+// baked depth/coverage data, so a +30 snow class meeting a -5 mud class
+// produces a ravine wall exactly along the texture seam. Two live controls:
+// BorderNoise domain-warps WHERE the border falls (depth/coverage sampled at
+// a noise-jittered position — real snow edges never trace a seam), and
+// BorderSmooth widens the ramp with a tap cross so the two depths meet in a
+// slope. Terrain HEIGHT is always sampled at the true position — the shell
+// keeps conforming exactly.
+float3 SampleTerrainShaped(float2 gridLocal)
+{
+	float3 result = SampleTerrain(gridLocal);
+	[branch] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
+	{
+		float2 worldXY = GridOrigin + gridLocal;
+		float2 jitter = float2(
+			ShapeNoise(worldXY / 37.0) - 0.5,
+			ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) * (2.0 * BorderNoise);
+		float2 shapedLocal = gridLocal + jitter;
+
+		float2 depthCoverage = SampleTerrain(shapedLocal).yz;
+		[branch] if (BorderSmooth >= 0.01)
+		{
+			float r = BorderSmooth;
+			depthCoverage += SampleTerrain(shapedLocal + float2(r, 0.0)).yz;
+			depthCoverage += SampleTerrain(shapedLocal - float2(r, 0.0)).yz;
+			depthCoverage += SampleTerrain(shapedLocal + float2(0.0, r)).yz;
+			depthCoverage += SampleTerrain(shapedLocal - float2(0.0, r)).yz;
+			depthCoverage *= 0.2;
+		}
+		result.yz = depthCoverage;
+	}
+	return result;
+}
+
 // The shell surface: per-texture-class snow depth carved by deformation.
 // Class depths blend by their baked weights on the CPU (window rebuild), so
 // boundaries between differently-deep snows are geometric depth ramps —
@@ -192,7 +249,7 @@ float SampleDeformation(float2 gridLocal)
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
-	float3 terrain = SampleTerrain(gridLocal);
+	float3 terrain = SampleTerrainShaped(gridLocal);
 	terrainHeight = terrain.x;
 	float rampDepth = terrain.y;
 	coverage = saturate(terrain.z);
@@ -451,7 +508,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// interpolation. The temporally-varying stochastic test then dithers the
 	// boundary and TAA resolves it into a true cross-fade.
 	float2 gridLocal = input.GridLocal;
-	float3 pixelTerrain = SampleTerrain(gridLocal);
+	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
+	// dither agree with the shaped geometry.
+	float3 pixelTerrain = SampleTerrainShaped(gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float2 psEdgeDelta = abs(gridLocal - WarpedHalfSpan);
 	float psEdgeFade = saturate((WarpedHalfSpan - max(psEdgeDelta.x, psEdgeDelta.y)) / 2048.0);
@@ -470,7 +529,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
 	float shellZ = input.CurrentClip.w;
 
-	float rampFadeBand = max(2.0, pixelRampDepth * 0.2);
+	// User-tunable dissolve band (depth units): how much of the ramp's tail
+	// the untrampled edge dithers across before committing.
+	float rampFadeBand = max(2.0, BorderUntrampledFade);
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * smoothstep(0.0, rampFadeBand, pixelRampDepth);
 
 	// Object blending (Terrain Blending-style depth proximity): where the
@@ -490,8 +551,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// (terrain, actor feet standing in the trench) and must override the
 	// fade — without the override they get view-dependently dithered away,
 	// which reads as "snow moving with the camera".
+	// But the carve override near class borders is what makes trenches END
+	// HARD while untrampled snow dissolves softly: the proximity dissolve is
+	// a large part of the border blend, and carved pixels were exempt from
+	// it. Trampled Border Fade scales the override away as the uncarved ramp
+	// thins, so walked snow rejoins the same soft dissolve at borders while
+	// deep-field trench floors keep their guaranteed visibility.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
-	float carveOverride = smoothstep(0.1, 0.5, pixelCarve);
+	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, carveOverride);
 
 	// Stochastic discard dither: proven to blend in this pipeline (the wide
