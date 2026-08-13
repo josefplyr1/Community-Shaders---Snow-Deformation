@@ -17,6 +17,13 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
+#ifdef PSHADER
+// TruePBR's procedural glint NDF (Deliot & Chermain 2023) for snow sparkle.
+// Needs only the shared 128px noise texture at t20, which the CPU side binds
+// for this pass (EnableGlints gates the path when it is unavailable).
+#	include "Common/Glints/Glints2023.hlsli"
+#endif
+
 cbuffer ShellCB : register(b0)
 {
 	// row_major matches the game's FrameBuffer.hlsli declarations — the CPU
@@ -44,14 +51,35 @@ cbuffer ShellCB : register(b0)
 	uint ShellDebugData;
 
 	float DeformInvWorldSize;
-	float3 padShell;
+	uint HasSnowTexture;
+	float SnowTextureIsLinear;
+	float HasSnowNormal;
+
+	float HasSnowRmaos;
+	float SnowRoughnessScale;
+	float2 SnowUVOffset;
+
+	float4 SnowGlintParams;  // x logDensity, y microfacetRoughness, z densityRandomization, w screenSpaceScale
+
+	float SnowSpecularLevel;
+	float EnableGlints;
+	float2 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float> DeformationMap : register(t1);
+Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available) —
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
+// TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
+// of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
+// (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
+Texture2D<float4> SnowNormalMap : register(t6);
+Texture2D<float4> SnowRmaosMap : register(t7);
+SamplerState SnowSampler : register(s0);
+
+static const float kSnowUVTile = 256.0;
 
 // Distance warp: inner kWarpInnerVerts vertices per side keep linear
 // GridSpacing; beyond them each ring's spacing grows by kWarpGrowth so the
@@ -331,6 +359,76 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 #endif
 
 #ifdef PSHADER
+// Cheap 2D cell hash for stochastic tiling offsets.
+float2 StochasticHash(float2 cell)
+{
+	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
+}
+
+// Anti-tiling snow fetch: blend 3 taps of the texture at random per-cell UV
+// offsets over a triangular lattice, so the 256-unit repeat never lines up.
+// Weight sharpening keeps the cross-fade zones from reading as ghosted
+// double-images. Taps are computed once and applied to every snow map
+// (albedo, normal, RMAOS) so all channels agree on the same offsets.
+struct SnowTaps
+{
+	float2 uv0, uv1, uv2;
+	float3 weights;
+	float2 duvdx, duvdy;
+};
+
+SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
+{
+	// World-anchored lattice (~427 units per cell): the snow uv rebases by
+	// tile multiples as the camera-following grid moves, and a tile is not a
+	// whole number of lattice cells — a uv-derived lattice made the pattern
+	// jump with the camera. Absolute-coordinate precision is fine here: hash
+	// cell selection tolerates far more error than float32 carries at world
+	// magnitudes (unlike height-field finite differences).
+	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
+	float2 cellBase = floor(lattice);
+	float2 f = frac(lattice);
+
+	float2 v0, v1, v2;
+	float3 bary;
+	if (f.x + f.y < 1.0) {
+		v0 = cellBase;
+		v1 = cellBase + float2(1, 0);
+		v2 = cellBase + float2(0, 1);
+		bary = float3(1.0 - f.x - f.y, f.x, f.y);
+	} else {
+		v0 = cellBase + float2(1, 1);
+		v1 = cellBase + float2(0, 1);
+		v2 = cellBase + float2(1, 0);
+		bary = float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+	}
+
+	bary = pow(bary, 4.0);
+	bary /= dot(bary, 1.0);
+
+	SnowTaps taps;
+	taps.uv0 = uv + StochasticHash(v0);
+	taps.uv1 = uv + StochasticHash(v1);
+	taps.uv2 = uv + StochasticHash(v2);
+	taps.weights = bary;
+	// All taps share the CONTINUOUS base uv's derivatives: the per-cell
+	// offsets are constant within a triangle but jump at lattice seams, and
+	// letting the sampler derive gradients there makes anisotropic filtering
+	// fetch the deepest mips — visible as discolored (beige) streaks.
+	taps.duvdx = ddx(uv);
+	taps.duvdy = ddy(uv);
+	return taps;
+}
+
+float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
+{
+	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
+	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
+	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
+}
+
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -422,8 +520,57 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) - pixelDepth * deformGradient;
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
+
+	// Snow texture taps — shared by albedo, normal and RMAOS so every map
+	// agrees on the same anti-tiling offsets.
+	float2 worldXYPS = GridOrigin + gridLocal;
+	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
+
+	// Micro-relief. PBR sets carry a REAL tangent-space normal map — the
+	// same dimples, clumps and crust the landscape shows; legacy sets fall
+	// back to treating the diffuse luminance as a height proxy. Both fade
+	// with distance, where the grain frequency aliases instead of detailing.
+	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
+	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
+	{
+		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
+		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
+		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
+		float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+		float3 bumpB = cross(normalWS, bumpT);
+		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
+	}
+	else if (HasSnowTexture != 0 && bumpFade > 0.001)
+	{
+		const float kBumpTile = 64.0;
+		const float kBumpHeight = 0.55;
+		float2 texDims;
+		SnowDiffuse.GetDimensions(texDims.x, texDims.y);
+		float e = 1.5 / texDims.x;
+		float2 detailUV = worldXYPS / kBumpTile;
+		const float3 kLum = float3(0.30, 0.45, 0.25);
+		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
+		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
+		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
+		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
+	}
+
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
+	// Snow material: the modlist's snow diffuse when available, otherwise a
+	// bright, slightly blue constant.
+	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
+	[branch] if (HasSnowTexture != 0)
+	{
+		kSnowAlbedo = SampleSnowMap(SnowDiffuse, snowTaps).rgb;
+		// PBR-authored textures store linear color; the rest of this path
+		// works in the pipeline's gamma space. Auto-enabled when the PBR set
+		// was resolved — no manual checkbox needed.
+		[flatten] if (SnowTextureIsLinear != 0.0)
+			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
+	}
 	// PBR snow material: GGX microfacet specular with Fresnel and
 	// energy-conserving lobes. Light and ambient stay in the frame's units
 	// (raw DirLightColor / Color::Ambient — DirLightColor is already
@@ -431,9 +578,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// material RESPONSE is physically based, and the indirect specular lobe
 	// goes to the Reflectance RT where the composite applies cubemap and
 	// ambient specular like any TruePBR surface.
-	static const float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
 	static const float kSnowRoughness = 0.6;
 	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
+
+	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
+	// roughness / metallic / AO / specular level), with the landscape
+	// config's authored scales — the darker-and-brighter patchiness real
+	// PBR snow shows.
+	float snowRoughness = kSnowRoughness;
+	float3 snowF0 = kSnowF0;
+	float snowAO = 1.0;
+	[branch] if (HasSnowRmaos > 0.5)
+	{
+		float4 rmaos = SampleSnowMap(SnowRmaosMap, snowTaps);
+		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
+		snowAO = rmaos.z;
+		snowF0 = rmaos.w * SnowSpecularLevel;
+	}
 
 	float3 V = -normalize(input.WorldPos);
 	float3 L = SharedData::DirLightDirection.xyz;
@@ -447,20 +608,37 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow layers.
 	float3 sunLight = SharedData::DirLightColor.xyz;
 
-	float3 F = BRDF::F_Schlick(kSnowF0, satVdotH);
-	float specD = BRDF::D_GGX(kSnowRoughness, satNdotH);
-	float specV = BRDF::Vis_SmithJointApprox(kSnowRoughness, satNdotV, satNdotL);
+	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
+	float specD = BRDF::D_GGX(snowRoughness, satNdotH);
+	// Sparkle: replace the smooth GGX NDF with TruePBR's discrete glint NDF —
+	// individual microfacets flash in and out as view/sun angles change, which
+	// is the single strongest "real snow in sunlight" cue. Parameters come
+	// from the landscape's authored PBR config so shell sparkle equals ground
+	// sparkle, and the uv is the albedo uv so the sparkle field rides the
+	// same tiling.
+	[branch] if (EnableGlints > 0.5 && SnowGlintParams.x > 1.1)
+	{
+		float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+		float3 glintB = cross(normalWS, glintT);
+		float3 glintH = float3(dot(H, glintT), dot(H, glintB), saturate(dot(H, normalWS)));
+		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0).x);
+		Glints::GlintCachedVars glintCache;
+		Glints::PrecomputeGlints(glintNoise, snowUV, snowTaps.duvdx, snowTaps.duvdy, SnowGlintParams.w, glintCache);
+		float dMax = BRDF::D_GGX(snowRoughness, 1.0);
+		specD = Glints::SampleGlints2023NDF(glintNoise, SnowGlintParams.x, SnowGlintParams.y, SnowGlintParams.z, glintCache, glintH, specD, dMax).x;
+	}
+	float specV = BRDF::Vis_SmithJointApprox(snowRoughness, satNdotV, satNdotL);
 
 	// Indirect lobes: the specular weight is what the environment reflects,
 	// diffuse receives only what specular does not (energy conservation).
-	float2 envBRDF = BRDF::EnvBRDF(kSnowRoughness, satNdotV);
-	float3 specularLobe = kSnowF0 * envBRDF.x + envBRDF.y;
+	float2 envBRDF = BRDF::EnvBRDF(snowRoughness, satNdotV);
+	float3 specularLobe = snowF0 * envBRDF.x + envBRDF.y;
 	float3 diffuseLobe = kSnowAlbedo * (1.0 - specularLobe);
 
 	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
 	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
 
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;
 	float3 ambientPart = ambientColor * diffuseLobe;
 	float3 preLit = ambientPart + directDiffuse;
 
@@ -482,7 +660,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	PS_OUTPUT psout;
 	psout.Diffuse = float4(preLit, alpha);
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - kSnowRoughness, stochasticBlend);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
 	// Albedo carries the diffuse lobe (Lighting's PBR tail writes the same),
 	// Specular the direct GGX lobe, Reflectance the environment lobe weight.
 	psout.Albedo = float4(diffuseLobe, alpha);

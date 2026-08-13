@@ -1,11 +1,115 @@
 #include "Features/SnowDeformation.h"
 
+#include <DDSTextureLoader.h>
+
 #include "Deferred.h"
 #include "Features/TerrainBlending.h"
 #include "Globals.h"
 #include "State.h"
+#include "TruePBR.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
+
+/**
+ * @brief Lazy-loads the shell snow texture set from the user-configurable
+ * path (through the MO2 VFS).
+ *
+ * TruePBR sets live under Textures\PBR\... with _n / _rmaos companion maps
+ * and linear-color albedo, so the PBR variant of the chosen path is probed
+ * FIRST — matching the landscape's actual material beats the legacy diffuse,
+ * and finding it removes the manual Linear guesswork. When the PBR set is
+ * found, the modlist's own TruePBR config JSON (PBRTextureSets\, matched by
+ * texture basename) supplies the authored glint/roughness/specular values.
+ */
+void SnowDeformation::EnsureShellSnowTextures()
+{
+	if (shellSnowTextureAttempted)
+		return;
+	shellSnowTextureAttempted = true;
+	shellSnowDiffuseSRV = nullptr;
+	shellSnowNormalSRV = nullptr;
+	shellSnowRmaosSRV = nullptr;
+	shellSnowTextureIsPBR = false;
+
+	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
+		a_srv = nullptr;
+		std::wstring wide = L"Data\\" + std::wstring(a_path.begin(), a_path.end());
+		return SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()));
+	};
+
+	std::string chosenPath = settings.SnowTexturePath.empty() ? "Textures\\Landscape\\snow01.dds" : settings.SnowTexturePath;
+	for (auto& pathChar : chosenPath)
+		if (pathChar == '/')
+			pathChar = '\\';
+	std::string loweredPath = chosenPath;
+	std::transform(loweredPath.begin(), loweredPath.end(), loweredPath.begin(),
+		[](unsigned char c) { return (char)std::tolower(c); });
+
+	std::string pbrPath;
+	if (loweredPath.find("\\pbr\\") != std::string::npos || loweredPath.rfind("pbr\\", 0) == 0)
+		pbrPath = chosenPath;
+	else if (size_t texPos = loweredPath.find("textures\\"); texPos != std::string::npos)
+		pbrPath = chosenPath.substr(0, texPos + 9) + "PBR\\" + chosenPath.substr(texPos + 9);
+
+	if (!pbrPath.empty() && pbrPath.size() > 4 && tryLoadDDS(pbrPath, shellSnowDiffuseSRV)) {
+		shellSnowTextureIsPBR = true;
+		std::string base = pbrPath.substr(0, pbrPath.size() - 4);
+		bool hasNormal = tryLoadDDS(base + "_n.dds", shellSnowNormalSRV);
+		bool hasRmaos = tryLoadDDS(base + "_rmaos.dds", shellSnowRmaosSRV);
+		logger::info("[SNOW DEFORMATION] PBR snow set: {} (normal={} rmaos={})", pbrPath, hasNormal, hasRmaos);
+
+		snowGlintLogDensity = 6.0f;
+		snowGlintMicroRoughness = 0.3f;
+		snowGlintDensityRandomization = 5.0f;
+		snowGlintScreenSpaceScale = 1.0f;
+		snowRoughnessScale = 0.7f;
+		snowSpecularLevel = 0.02f;
+		try {
+			size_t slashPos = base.find_last_of('\\');
+			std::string baseName = (slashPos == std::string::npos) ? base : base.substr(slashPos + 1);
+			std::transform(baseName.begin(), baseName.end(), baseName.begin(),
+				[](unsigned char c) { return (char)std::tolower(c); });
+			for (const auto& entry : std::filesystem::directory_iterator("Data\\PBRTextureSets")) {
+				if (!entry.is_regular_file())
+					continue;
+				std::string fname = entry.path().filename().string();
+				std::string fnameLower = fname;
+				std::transform(fnameLower.begin(), fnameLower.end(), fnameLower.begin(),
+					[](unsigned char c) { return (char)std::tolower(c); });
+				if (!fnameLower.ends_with(".json") || fnameLower.find(baseName) == std::string::npos)
+					continue;
+				std::ifstream file(entry.path());
+				nlohmann::json cfg = nlohmann::json::parse(file, nullptr, false);
+				if (cfg.is_discarded())
+					continue;
+				if (auto glintIt = cfg.find("glintParameters"); glintIt != cfg.end() && glintIt->is_object()) {
+					snowGlintLogDensity = glintIt->value("logMicrofacetDensity", 6.0f);
+					// Same clamps Lighting.hlsl applies (PBR::Constants).
+					snowGlintMicroRoughness = std::clamp(glintIt->value("microfacetRoughness", 1.0f), 0.005f, 0.3f);
+					snowGlintDensityRandomization = std::clamp(glintIt->value("densityRandomization", 5.0f), 0.0f, 5.0f);
+					snowGlintScreenSpaceScale = std::max(1.0f, glintIt->value("screenSpaceScale", 1.0f));
+					if (!glintIt->value("enabled", true))
+						snowGlintLogDensity = 0.0f;  // below the shader's >1.1 gate
+				}
+				snowRoughnessScale = cfg.value("roughnessScale", 0.7f);
+				snowSpecularLevel = cfg.value("specularLevel", 0.02f);
+				logger::info("[SNOW DEFORMATION] PBR config matched: {} (glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",
+					fname, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel);
+				break;
+			}
+		} catch (const std::exception& e) {
+			logger::info("[SNOW DEFORMATION] PBR config scan failed: {}", e.what());
+		}
+	} else {
+		bool ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
+		if (!ok && chosenPath != "Textures\\Landscape\\snow01.dds") {
+			logger::info("[SNOW DEFORMATION] Snow diffuse not loose-file loadable: {}", chosenPath);
+			chosenPath = "Textures\\Landscape\\snow01.dds";
+			ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
+		}
+		logger::info("[SNOW DEFORMATION] Snow diffuse load ({}): {}", ok ? "ok (legacy)" : "missing, using fallback color", chosenPath);
+	}
+}
 
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
@@ -86,6 +190,26 @@ void SnowDeformation::DrawShell()
 		cbData.GridOrigin.y - windowOrigin.y
 	};
 
+	// Snow uv offset folded to the tile period, so shader-side uv math stays
+	// in small numbers (256-unit texture tiling).
+	constexpr float kSnowUVTile = 256.0f;
+	cbData.SnowUVOffset = {
+		std::fmod(cbData.GridOrigin.x, kSnowUVTile),
+		std::fmod(cbData.GridOrigin.y, kSnowUVTile)
+	};
+
+	EnsureShellSnowTextures();
+	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
+	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
+	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
+	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
+	cbData.SnowRoughnessScale = snowRoughnessScale;
+	cbData.SnowGlintParams = { snowGlintLogDensity, snowGlintMicroRoughness, snowGlintDensityRandomization, snowGlintScreenSpaceScale };
+	cbData.SnowSpecularLevel = snowSpecularLevel;
+	// Sparkle: the shell's specular runs TruePBR's glint NDF when its shared
+	// noise texture exists (bound to t20 below for the whole pass).
+	cbData.EnableGlints = globals::features::truePBR.glintsNoiseTexture ? 1.0f : 0.0f;
+
 	shellCB->Update(cbData);
 
 	// Back up the pipeline state we touch so the composite and later game
@@ -133,14 +257,26 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 	// The PS evaluates the terrain/deformation fields for per-pixel coverage
-	// and normals, so the field textures must be bound to BOTH stages. The
-	// depth SRV is a copy (Terrain Blending's blended depth when available),
-	// never the bound DSV, so sampling it here is legal; the PS fades the
-	// shell where it hovers close in front of any geometry so it dissolves
-	// into statics (walkways, mesh roads, rocks).
-	ID3D11ShaderResourceView* shellSRVs[4] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), nullptr, Util::GetCurrentSceneDepthSRV(false) };
+	// and normals, so the field textures must be bound to BOTH stages; the
+	// snow maps and scene depth are PS-only. The depth SRV is a copy (Terrain
+	// Blending's blended depth when available), never the bound DSV, so
+	// sampling it here is legal; the PS fades the shell where it hovers close
+	// in front of any geometry so it dissolves into statics (walkways, mesh
+	// roads, rocks).
+	ID3D11ShaderResourceView* shellSRVs[8] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), nullptr, nullptr, shellSnowNormalSRV.get(), shellSnowRmaosSRV.get() };
 	context->VSSetShaderResources(0, 4, shellSRVs);
-	context->PSSetShaderResources(0, 4, shellSRVs);
+	context->PSSetShaderResources(0, 8, shellSRVs);
+	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
+	// at deferred time is not guaranteed — bind explicitly for this pass.
+	if (globals::features::truePBR.glintsNoiseTexture) {
+		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
+		context->PSSetShaderResources(20, 1, &glintSRV);
+	}
+
+	winrt::com_ptr<ID3D11SamplerState> prevSampler;
+	context->PSGetSamplers(0, 1, prevSampler.put());
+	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
+	context->PSSetSamplers(0, 1, &snowSampler);
 
 	context->VSSetShader(vs, nullptr, 0);
 	context->PSSetShader(ps, nullptr, 0);
@@ -155,9 +291,13 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
-	ID3D11ShaderResourceView* nullSRVs[4] = {};
+	ID3D11ShaderResourceView* nullSRVs[8] = {};
 	context->VSSetShaderResources(0, 4, nullSRVs);
-	context->PSSetShaderResources(0, 4, nullSRVs);
+	context->PSSetShaderResources(0, 8, nullSRVs);
+	ID3D11ShaderResourceView* nullGlintSRV = nullptr;
+	context->PSSetShaderResources(20, 1, &nullGlintSRV);
+	ID3D11SamplerState* restoreSampler = prevSampler.get();
+	context->PSSetSamplers(0, 1, &restoreSampler);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->RSSetState(prevRaster.get());
 	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
