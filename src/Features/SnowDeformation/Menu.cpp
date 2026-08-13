@@ -51,6 +51,9 @@ void SnowDeformation::DrawSettings()
 			snowMasksSizeForUI(),
 			(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
 			(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
+		ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
+			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
+			shellStatMinHeight, shellStatMaxHeight);
 
 		ImGui::TreePop();
 	}

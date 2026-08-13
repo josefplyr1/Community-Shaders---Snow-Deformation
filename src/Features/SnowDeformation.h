@@ -36,6 +36,23 @@ public:
 	/** @brief Skyrim world units per meter (1 unit ≈ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
 
+	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),
+	// cell-anchored so texels never resample as the camera moves. Sized with
+	// margin so a shell grid drawn around the camera never samples past it.
+	static constexpr int kShellWindowDim = 1024;
+	static constexpr float kShellVertexSpacing = 128.0f;
+	static constexpr int kShellTexelsPerCell = 32;
+	static constexpr int kShellWindowCells = kShellWindowDim / kShellTexelsPerCell;
+	/** @brief Height sentinel for window texels with no baked cell data. */
+	static constexpr float kShellMissingHeight = -100000.0f;
+
+	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-vertex snow coverage (0-255). */
+	struct ShellCellData
+	{
+		std::array<float, 33 * 33> height;
+		std::array<uint8_t, 33 * 33> snowness;
+	};
+
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
@@ -123,6 +140,28 @@ public:
 	/** @brief Installs both landscape hooks; the TESObjectLAND detour attaches after TruePBR's so it sees the final quad materials. Implemented in SnowDeformation/TerrainData.cpp. */
 	virtual void PostPostLoad() override;
 
+	/** @brief The terrain data window texture (R32G32: absolute height, snow coverage). */
+	Texture2D* shellTerrainTexture = nullptr;
+
+	/** @brief Bakes one cell's heights and per-vertex snow coverage from LoadedLandData. Called from the TESObjectLAND hook. Implemented in SnowDeformation/TerrainData.cpp. */
+	void BakeShellCell(RE::TESObjectLAND* land);
+
+	/** @brief Recenters and re-uploads the terrain data window when the camera crosses cells or new cells were baked. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
+	void UpdateShellTerrainWindow();
+
+	/** @brief Thread-safe count of baked cells, for the settings UI. */
+	size_t ShellCellCountForUI()
+	{
+		const std::shared_lock lock(shellCellMutex);
+		return shellCells.size();
+	}
+
+	// Diagnostics for the settings UI (written on window rebuild).
+	uint32_t shellStatCellsInWindow = 0;
+	uint32_t shellStatSnowTexels = 0;
+	float shellStatMinHeight = 0.0f;
+	float shellStatMaxHeight = 0.0f;
+
 	/** @brief Caches a "tile is snow material" bitmask per landscape quad material, for the terrain shader's per-tile snow detection. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
 	/** @brief Publishes the cached snow mask for the material about to be drawn via ExtraFeatureDescriptor bits 10-15. */
@@ -148,6 +187,14 @@ protected:
 
 	std::unordered_map<uintptr_t, uint8_t> snowMasks;
 	std::shared_mutex snowMaskMutex;
+
+	/** @brief Baked cells keyed by (cellX << 32) | cellY. */
+	std::unordered_map<uint64_t, ShellCellData> shellCells;
+	std::shared_mutex shellCellMutex;
+	std::atomic<bool> shellDataDirty{ true };
+	int shellWindowCellX = INT_MIN;
+	int shellWindowCellY = INT_MIN;
+	std::vector<float> shellUploadScratch;
 
 	float2 windowOrigin = { 0, 0 };
 	DirectX::XMINT2 pendingScrollDelta = { 0, 0 };
