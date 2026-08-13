@@ -1002,6 +1002,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float3 groundPos = float3(input.WorldPos.xy, pixelTerrain.x - ShellCameraPosAdjust.z);
 		float4 groundClip = mul(CameraViewProj, float4(groundPos, 1.0));
 		float2 maskUV = groundClip.xy / max(groundClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		// The mask only holds values for the surface visible at each pixel.
+		// When something nearer covers the under-point's pixel (an actor
+		// between camera and ground), its mask value would paint the
+		// occluder's screen silhouette onto the snow; fall back to this
+		// pixel's own sample, whose pre-shell surface is the ground below
+		// and carries the occluder's real fire-cast shadow instead.
+		int2 renderDims = int2(SharedData::BufferDim.xy * DynResScale);
+		int2 maskPx = clamp(int2(maskUV * DynResScale * SharedData::BufferDim.xy), int2(0, 0), renderDims - 1);
+		float visibleZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(maskPx, 0)));
+		[flatten] if (visibleZ < groundClip.w - 24.0)
+			maskUV = clusterUV;
 		SnowLights::AccumulatePointLights(input.WorldPos, normalWS, V, viewZ,
 			clusterUV, maskUV, DynResScale, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
