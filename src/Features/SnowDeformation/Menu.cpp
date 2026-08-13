@@ -89,6 +89,26 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttRd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
+			ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
+			if (auto _ttRs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
+			ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+			if (ImGui::IsItemDeactivatedAfterEdit())
+				trenchRangeDirty = true;
+			if (auto _ttRt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+			ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRk = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+			ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
+			if (auto _ttRkf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
 			if (settings.ShowDebugTexture) {

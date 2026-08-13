@@ -218,11 +218,15 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
-	cbData.GridSpacing = kShellGridSpacing;
+	// Shell range: the slider scales the warped grid's inner spacing — the
+	// warp shape is unchanged, so range costs no extra vertices, only
+	// near-field density (8 units at the 375 m default).
+	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
+	cbData.GridSpacing = shellSpacing;
 	cbData.GridDim = kShellGridDim;
 	// The warped grid is camera-centered: snap the center to the grid step
 	// so inner vertices stay texel-stable, then offset by the warped span.
-	const float warpedHalfSpan = ShellWarpedHalfSpan();
+	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
 	cbData.WarpedHalfSpan = warpedHalfSpan;
 	cbData.GridOrigin = {
 		std::floor(cbData.CameraPosAdjust.x / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan,
@@ -232,7 +236,7 @@ void SnowDeformation::DrawShell()
 	cbData.TerrainTexelSize = kShellVertexSpacing;
 	cbData.TerrainDim = kShellWindowDim;
 	cbData.ShellDebugData = shellDataDebug;
-	cbData.DeformInvWorldSize = 1.0f / kWorldSize;
+	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
 	// Keep shader-side sampling math in small grid-local coordinates.
 	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
@@ -269,8 +273,11 @@ void SnowDeformation::DrawShell()
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
-	cbData.SkinFadeStart = kSkinFadeStart;
-	cbData.SkinFadeEnd = kStaticsCaptureRange;
+	// Statics-skin distance dissolve: starts at the blend slider, fully gone
+	// at the Object Snow capture range (floored one meter past the start so
+	// the smoothstep never degenerates when the sliders cross).
+	cbData.SkinFadeStart = settings.RangeSkinsFadeM * kUnitsPerMeter;
+	cbData.SkinFadeEnd = std::max(settings.RangeSkinsM * kUnitsPerMeter, cbData.SkinFadeStart + kUnitsPerMeter);
 	// Field enable gate + window addressing for the t4/t5 samplers; the
 	// center is re-uploaded below once the height pass has recentered.
 	cbData.ObjectLiftCap = kObjectLiftCap;
