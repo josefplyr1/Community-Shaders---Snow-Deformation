@@ -858,6 +858,48 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 
+	// Heightfield self-shadowing: the shell IS a heightfield, so march it
+	// toward the sun and find the horizon this pixel must clear. Hills,
+	// mounds, field raises and the dune undulation all cast soft shadows
+	// onto the snow behind them — contact detail the game's cascades cannot
+	// hold. Geometric growth in the tap distances gives sharp close shadows
+	// and long soft ones at low sun angles.
+	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
+		float sunLen2D = max(length(L.xy), 1e-4);
+		float sunTan = L.z / sunLen2D;
+		float2 stepDir = L.xy / sunLen2D;
+		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float horizonTan = -10.0;
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			float d = kMarchDist[marchI];
+			float2 sampleLocal = gridLocal + stepDir * d;
+			float3 st = SampleTerrain(sampleLocal);
+			float sampleDepth = max(st.y, 0.0);
+			// The march must see the CARVED surface (same floor rule as the
+			// geometry): without the carve, a wide trench reads as ringed by
+			// full-height snow and sits in permanent shadow even facing the
+			// sun.
+			float sampleDeform = saturate(SampleDeformation(sampleLocal));
+			sampleDepth = max(sampleDepth * (1.0 - sampleDeform), min(sampleDepth, kTrenchFloor * smoothstep(0.5, 8.0, sampleDepth)));
+			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			[branch] if (ObjectLiftCap > 0.0)
+			{
+				float sf = SampleObjectHeight(GridOrigin + sampleLocal);
+				[flatten] if (sf > -50000.0)
+					sh = max(sh, sf + sampleDepth);
+			}
+			horizonTan = max(horizonTan, (sh - surfZ) / d);
+		}
+		// Near: a crisp penumbra band. Far: a much wider penumbra plus
+		// attenuated strength — the march's per-texel horizon steps stop
+		// reading as hard-edged blocks on distant snow.
+		float soft = lerp(0.06, 0.35, farShadowT);
+		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+	}
+
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
