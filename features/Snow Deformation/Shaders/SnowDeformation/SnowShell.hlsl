@@ -387,7 +387,7 @@ float ShapeNoise(float2 p)
 static const float kTrenchFloor = 5.0;
 // Melted fire basins keep this much snow above the terrain: the floor stays
 // shell snow, never bare ground, never below the terrain mesh.
-static const float kFireMeltFloor = 2.0;
+static const float kFireMeltFloor = 1.0;
 
 float Undulation(float2 worldXY)
 {

@@ -6,6 +6,22 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+// True if the scenegraph carries a live attached light. A burning torch (held
+// or dropped) has a NiPointLight in its 3D; torch-snuffing mods remove it
+// while keeping the carryable light base form.
+static bool HasActiveLight(RE::NiAVObject* a_obj)
+{
+	if (!a_obj || a_obj->GetAppCulled())
+		return false;
+	if (netimmerse_cast<RE::NiPointLight*>(a_obj))
+		return true;
+	if (auto* node = a_obj->AsNode())
+		for (auto& child : node->GetChildren())
+			if (HasActiveLight(child.get()))
+				return true;
+	return false;
+}
+
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
@@ -442,10 +458,16 @@ void SnowDeformation::RenderObjectHeightMap()
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
 
-						// Dropped torches: carryable light references burn where they lie.
+						// Dropped torches: carryable light references melt where
+						// they lie - but only while actually BURNING. Torch-
+						// snuffing mods keep the light base on the dropped ref
+						// while removing its attached flame light; those still
+						// trench as props, they just stop melting.
 						if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
-							auto pos = a_ref->GetPosition();
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
+							if (HasActiveLight(a_ref->Get3D())) {
+								auto pos = a_ref->GetPosition();
+								staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+							}
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
 
@@ -490,7 +512,7 @@ void SnowDeformation::RenderObjectHeightMap()
 							tes->GetLandHeight(pos, landZ);
 							if (campfire || pos.z - landZ < kGroundFireBand)
 								radius = std::max(radius, kFireClearRadius);
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
@@ -516,7 +538,9 @@ void SnowDeformation::RenderObjectHeightMap()
 				return;
 			auto pos = a_actor->GetPosition();
 			exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, kTorchClearRadius };
-			exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, 0.0f, 1.0f };
+			// Partial melt strength: a full-strength moving basin flattens the
+			// bearer's own trench and berms into a warp that follows them.
+			exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, kCarriedTorchMeltStrength, 1.0f };
 			exclusionCount++;
 		};
 		addCarriedTorch(RE::PlayerCharacter::GetSingleton());

@@ -721,8 +721,10 @@ public:
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
-	/** @brief Melt basin radius for ground-level fires. Generous: the shader's noisy edge and smoothstep put full melt only in the inner ~40%. */
-	static constexpr float kFireClearRadius = 110.0f;
+	/** @brief Melt bowl radius for ground-level fires. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
+	static constexpr float kFireClearRadius = 150.0f;
+	/** @brief Melt strength of a carried torch: a partial thaw around the bearer. Full strength here would flatten trenches and berms wherever the bearer walks. */
+	static constexpr float kCarriedTorchMeltStrength = 0.35f;
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 
@@ -730,7 +732,7 @@ public:
 	struct alignas(16) ExclusionsCB
 	{
 		float4 PosRadius[kMaxExclusions];   ///< xyz = position, w = radius
-		float4 DirExtType[kMaxExclusions];  ///< xy = facing dir, z = forward extent, w = type (0 door, 1 fire)
+		float4 DirExtType[kMaxExclusions];  ///< xy = facing dir, z = forward extent (doors) / melt strength (fires), w = type (0 door, 1 fire)
 		uint ExclusionCount;
 		float pad[3];
 	};

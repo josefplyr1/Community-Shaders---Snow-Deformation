@@ -51,7 +51,7 @@ cbuffer HeightProcessCB : register(b0)
 cbuffer DoorCB : register(b1)
 {
 	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius
-	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // xy = facing, z = forward extent, w = type (0 door, 1 fire)
+	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // xy = facing, z = forward extent (doors) / melt strength (fires), w = type (0 door, 1 fire)
 	uint ExclusionCount;
 	float3 exclusionPad;
 }
@@ -188,10 +188,16 @@ float SampleTerrainHeight(float2 worldXY)
 			}
 			else
 			{
-				// Fire: melt basin with a noise-perturbed edge.
-				float noisyRadius = radius * (0.8 + 0.5 * ExclusionNoise(worldXY));
+				// Fire: wide melt bowl - full melt in the core, then a long
+				// gradual rise (whoever tends the fire also cleared the snow
+				// around it). Two noise octaves: fine wobble plus large-scale
+				// shape irregularity so no two bowls read as stamped circles.
+				// dirExtType.z scales melt strength (carried torches thaw
+				// partially instead of flattening trenches around the bearer).
+				float noisy = 0.7 + 0.35 * ExclusionNoise(worldXY) + 0.35 * ExclusionNoise(worldXY * 0.3);
+				float noisyRadius = radius * noisy;
 				float dist = length(d);
-				float influence = 1.0 - smoothstep(noisyRadius * 0.4, noisyRadius, dist);
+				float influence = (1.0 - smoothstep(noisyRadius * 0.35, noisyRadius, dist)) * dirExtType.z;
 				field = lerp(field, terrain, influence);
 				melt = max(melt, influence);
 			}
