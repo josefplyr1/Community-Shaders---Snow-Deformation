@@ -154,15 +154,15 @@ public:
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
-		float BermHeight = 0.30f;
+		float BermHeight = 0.35f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
-		float ChurnHeight = 4.0f;
+		float ChurnHeight = 5.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
-		float ChurnSize = 1.0f;
+		float ChurnSize = 0.25f;
 		/** @brief Frequency multiplier of the fine-grain normal layer on disturbed snow. */
-		float CrispScale = 5.0f;
+		float CrispScale = 6.0f;
 		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
-		float CrispStrength = 1.6f;
+		float CrispStrength = 1.8f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
