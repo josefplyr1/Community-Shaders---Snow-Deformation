@@ -571,7 +571,13 @@ public:
 		float RoundedDepth;
 		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
 		float VertexCountF;
-		float padStat2;
+		/** @brief >0: capture discards fragments this far above the terrain (fine tier only: keeps roofs/eaves/beams out of the patch raster; the coarse raster keeps them for shelter detection). */
+		float CaptureAltitudeCap;
+
+		/** @brief Terrain window mapping for the capture altitude gate. */
+		float2 TerrainOriginS;
+		float TerrainTexelS;
+		float TerrainDimS;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

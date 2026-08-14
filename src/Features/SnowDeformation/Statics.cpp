@@ -543,7 +543,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Rasterize this frame's captures on top of the scrolled maps: once into
 	// the coarse full-window rasters, once into the fine patch-range tier.
-	auto rasterizeCaptures = [&](float2 a_center, float a_halfExtent, bool a_cull) {
+	auto rasterizeCaptures = [&](float2 a_center, float a_halfExtent, bool a_cull, float a_altitudeCap) {
 		for (const auto& cap : capturedStatics) {
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
@@ -595,6 +595,10 @@ void SnowDeformation::RenderObjectHeightMap()
 			scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 			scb.HeightWindowCenter = a_center;
 			scb.HeightHalfExtent = a_halfExtent;
+			scb.CaptureAltitudeCap = a_altitudeCap;
+			scb.TerrainOriginS = processData.TerrainWindowOrigin;
+			scb.TerrainTexelS = processData.TerrainTexelSize;
+			scb.TerrainDimS = float(processData.TerrainDim);
 			// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 			// reads the same classification the skin uses.
 			ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -621,15 +625,21 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
-	rasterizeCaptures(heightWindowCenter, kHeightMapHalfExtent, false);
+	rasterizeCaptures(heightWindowCenter, kHeightMapHalfExtent, false, 0.0f);
 
-	// Fine pass: tops + skin depth only (RT1 null drops the bottom writes).
+	// Fine pass: tops + skin depth only (RT1 null drops the bottom writes),
+	// altitude-gated so roofs/eaves/beams never overwrite the floor beneath
+	// (their outlines otherwise carve house-shaped holes into the top sheet).
+	ID3D11ShaderResourceView* captureTerrainSRV = shellTerrainTexture->srv.get();
+	context->PSSetShaderResources(0, 1, &captureTerrainSRV);
 	context->ClearRenderTargetView(fineSkinDepth->rtv.get(), skinDepthClear);
 	ID3D11RenderTargetView* fineRTVs[3] = { fineTopRaw[fineCurrent]->rtv.get(), nullptr, fineSkinDepth->rtv.get() };
 	context->OMSetRenderTargets(3, fineRTVs, nullptr);
 	D3D11_VIEWPORT fineViewport{ 0.0f, 0.0f, float(kFineHeightMapDim), float(kFineHeightMapDim), 0.0f, 1.0f };
 	context->RSSetViewports(1, &fineViewport);
-	rasterizeCaptures(fineWindowCenter, kFineHeightMapHalfExtent, true);
+	rasterizeCaptures(fineWindowCenter, kFineHeightMapHalfExtent, true, 200.0f);
+	ID3D11ShaderResourceView* nullCaptureSRV = nullptr;
+	context->PSSetShaderResources(0, 1, &nullCaptureSRV);
 	globals::profiler->EndPass();
 
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
