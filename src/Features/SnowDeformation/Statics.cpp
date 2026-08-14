@@ -10,7 +10,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	if (!settings.EnableSnowDeformation || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+	// No depth-slider gate: the snow cover must exist at ANY slider values
+	// (it replaces the mismatched projected diffuse beneath; sliders only
+	// control thickness and trenching).
+	if (!settings.EnableSnowDeformation)
 		return;
 	// Main world view only: probe/reflection passes must not fill the list.
 	if (!globals::state->inWorld)
@@ -799,7 +802,8 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	if (capturedStatics.empty() || (settings.ObjectsSnowDepth <= 0.01f && settings.SnowMeshesDepth <= 0.01f && settings.RoadMeshesDepth <= 0.01f))
+	// The cover always draws (minimum coat); sliders never disable it.
+	if (capturedStatics.empty())
 		return;
 	if (!EnsureStaticsShaders())
 		return;

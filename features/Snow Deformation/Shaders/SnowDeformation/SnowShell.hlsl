@@ -366,6 +366,20 @@ float Undulation(float2 worldXY)
 	return (n - 0.5) * 2.0 * UndulationAmp;
 }
 
+// Carve profile, shared by the surface (ShellSurfaceZ), the PS shading
+// gradient and the self-shadow march so all three see the same shape:
+// deformation carves the layer toward the trench floor, and the displaced
+// snow piles as an EDGE BERM along the rim; a deeper layer throws a taller
+// berm. The berm band peaks on the lightly-compressed rim slope and dies
+// at both untouched snow and the trench center.
+float CarvedDepthProfile(float deformation, float uncarvedDepth)
+{
+	float floorDepth = min(uncarvedDepth, kTrenchFloor * smoothstep(0.5, 8.0, uncarvedDepth));
+	float carved = max(uncarvedDepth * (1.0 - deformation), floorDepth);
+	float berm = smoothstep(0.02, 0.2, deformation) * (1.0 - smoothstep(0.2, 0.65, deformation));
+	return carved + berm * uncarvedDepth * 0.3;
+}
+
 // Class borders are hard edges in the baked depth/coverage data: a +30
 // snow class meeting a -5 mud class produces a ravine wall along the
 // texture seam. BorderNoise domain-warps where the border falls and
@@ -509,8 +523,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	[flatten] if (depth > 0.0)
 	{
 		float deformation = saturate(SampleDeformation(gridLocal));
-		float floorDepth = min(depth, kTrenchFloor * smoothstep(0.5, 8.0, depth));
-		depth = max(depth * (1.0 - deformation), floorDepth);
+		depth = CarvedDepthProfile(deformation, depth);
 		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 	}
 
@@ -921,19 +934,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 			discard;
 	}
 
-	// Normal = smooth interpolated terrain normal + per-pixel deformation
-	// gradient (central differences at the deformation map's resolution).
+	// Normal = smooth interpolated terrain normal + per-pixel gradient of
+	// the shared carve profile (central differences at the deformation
+	// map's resolution), so trench walls AND the edge berm shade by the
+	// same shape the geometry displaces.
 	const float step = 4.0;
 	float dXP = SampleDeformation(gridLocal + float2(step, 0.0));
 	float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
 	float dYP = SampleDeformation(gridLocal + float2(0.0, step));
 	float dYN = SampleDeformation(gridLocal - float2(0.0, step));
-	float2 deformGradient = float2(dXP - dXN, dYP - dYN) / (2.0 * step);
 
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
-	// z = T + depth*(1-D)  =>  grad z = grad T - depth*grad D
 	float pixelDepth = max(pixelRampDepth, 0.0);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) - pixelDepth * deformGradient;
+	float2 profileGrad = float2(
+		CarvedDepthProfile(saturate(dXP), pixelDepth) - CarvedDepthProfile(saturate(dXN), pixelDepth),
+		CarvedDepthProfile(saturate(dYP), pixelDepth) - CarvedDepthProfile(saturate(dYN), pixelDepth)) / (2.0 * step);
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
@@ -1072,7 +1088,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// full-height snow and sits in permanent shadow even facing the
 			// sun.
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
-			sampleDepth = max(sampleDepth * (1.0 - sampleDeform), min(sampleDepth, kTrenchFloor * smoothstep(0.5, 8.0, sampleDepth)));
+			sampleDepth = CarvedDepthProfile(sampleDeform, sampleDepth);
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{
