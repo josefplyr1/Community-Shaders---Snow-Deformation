@@ -114,6 +114,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
 			if (auto _ttUsp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
+			ImGui::SliderFloat(T(TKEY("relief_depth"), "Relief Depth"), &settings.ReliefDepth, 0.0f, 12.0f, "%.1f units");
+			if (auto _ttRd2 = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Real geometric relief from the snow texture's displacement map, tessellated near the camera. Compressed snow and trench floors stay smooth. 0 disables tessellation."));
 			ImGui::TreePop();
 		}
 

@@ -109,8 +109,8 @@ cbuffer ShellCB : register(b0)
 
 	// PBR displacement companion bound at t8.
 	float HasSnowHeight;
-	// Parallax relief amplitude in snow-UV units.
-	float SnowParallaxAmp;
+	// Tessellated relief amplitude in world units (landscape shell only).
+	float SnowReliefDepth;
 	float2 padShell;
 }
 
@@ -547,40 +547,6 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
 }
 
-// Parallax occlusion; identical recipe to the terrain shell (see the
-// comment there).
-float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
-{
-	float3 pomT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 pomB = cross(normalWS, pomT);
-	float3 viewTS = float3(dot(V, pomT), dot(V, pomB), dot(V, normalWS));
-	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.25) * (SnowParallaxAmp * fade);
-	float2 dx = ddx(uv);
-	float2 dy = ddy(uv);
-
-	const uint kPomSteps = 12;
-	const float stepH = 1.0 / kPomSteps;
-	float2 uvStep = maxOffset * stepH;
-	float rayH = 1.0;
-	float2 uvCur = uv;
-	float hPrev = 1.0;
-	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
-	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
-	{
-		if (rayH <= hSample)
-			break;
-		hPrev = hSample;
-		uvCur -= uvStep;
-		rayH -= stepH;
-		hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
-	}
-	float afterDiff = hSample - rayH;
-	float beforeDiff = (rayH + stepH) - hPrev;
-	float w = saturate(afterDiff / max(afterDiff + beforeDiff, 1e-4));
-	uvCur += uvStep * w;
-	return uvCur - uv;
-}
-
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -888,15 +854,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowUV = lerp(snowUV, (SnowUVOffset + sidePlane) / kSnowUVTile, snowSteepness);
 		snowCellXY = lerp(worldXY, sidePlane, snowSteepness);
 	}
-	// Parallax occlusion over the displacement companion, then the shared
-	// taps: every map rides the displaced position.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
-	[branch] if (HasSnowHeight > 0.5 && bumpFade > 0.001)
-	{
-		float2 pomDelta = SnowParallaxOffset(snowUV, normalWS, -normalize(input.WorldPos), bumpFade);
-		snowUV += pomDelta;
-		snowCellXY += pomDelta * kSnowUVTile;
-	}
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
 
 	// Micro-relief; identical recipe to the terrain shell so ground and

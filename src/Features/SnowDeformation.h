@@ -149,6 +149,8 @@ public:
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
+		/** @brief Tessellated relief depth in world units: near-camera geometric relief from the PBR displacement map. 0 disables the tessellated path entirely. */
+		float ReliefDepth = 4.0f;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -317,8 +319,8 @@ public:
 
 		/** @brief PBR displacement companion bound at t8. */
 		float HasSnowHeight;
-		/** @brief Parallax relief amplitude in snow-UV units (displacementScale scaled to world relief / tile size). */
-		float SnowParallaxAmp;
+		/** @brief Tessellated relief amplitude in world units (0 disables the tessellated path). */
+		float SnowReliefDepth;
 		float2 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -353,6 +355,14 @@ public:
 	ID3D11PixelShader* GetShellPS();
 	ID3D11VertexShader* shellVS = nullptr;
 	ID3D11PixelShader* shellPS = nullptr;
+
+	/** @brief Tessellated-path stages (SNOW_TESS): control-point VS (grid placement only), hull shader (distance-based crack-free factors) and domain shader (full surface evaluation + displacement-map relief). Active when Relief Depth > 0. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11VertexShader* GetShellTessVS();
+	ID3D11HullShader* GetShellHS();
+	ID3D11DomainShader* GetShellDS();
+	ID3D11VertexShader* shellTessVS = nullptr;
+	ID3D11HullShader* shellHS = nullptr;
+	ID3D11DomainShader* shellDS = nullptr;
 
 	ConstantBuffer* shellCB = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;

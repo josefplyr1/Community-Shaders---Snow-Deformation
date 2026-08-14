@@ -30,6 +30,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowMoundSteepness,
 	UndulationStrength,
 	UndulationSpacing,
+	ReliefDepth,
 	TrenchFloorFade,
 	RangeShellM,
 	RangeTrenchesM,
@@ -345,6 +346,15 @@ void SnowDeformation::ClearShaderCache()
 	if (shellVS)
 		shellVS->Release();
 	shellVS = nullptr;
+	if (shellTessVS)
+		shellTessVS->Release();
+	shellTessVS = nullptr;
+	if (shellHS)
+		shellHS->Release();
+	shellHS = nullptr;
+	if (shellDS)
+		shellDS->Release();
+	shellDS = nullptr;
 	if (shellShadowVS)
 		shellShadowVS->Release();
 	shellShadowVS = nullptr;

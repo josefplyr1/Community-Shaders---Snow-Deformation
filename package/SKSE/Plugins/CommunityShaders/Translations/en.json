@@ -1365,6 +1365,8 @@
     "feature.snow_deformation.refill_only_snowing_tooltip": "Compressed snow only recovers while the current weather is snowing. Trails and trenches persist through clear weather.",
     "feature.snow_deformation.refill_time": "Snow Refill Time",
     "feature.snow_deformation.refill_time_tooltip": "Time for compressed snow to fully recover. 0 disables refilling.",
+    "feature.snow_deformation.relief_depth": "Relief Depth",
+    "feature.snow_deformation.relief_depth_tooltip": "Real geometric relief from the snow texture's displacement map, tessellated near the camera. Compressed snow and trench floors stay smooth. 0 disables tessellation.",
     "feature.snow_deformation.reload_texture": "Reload",
     "feature.snow_deformation.render_distance": "Render Distance",
     "feature.snow_deformation.render_distance_tooltip": "How far each snow system reaches. Higher = more VRAM and GPU cost.",

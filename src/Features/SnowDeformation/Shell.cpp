@@ -187,6 +187,33 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 	return shellPS;
 }
 
+ID3D11VertexShader* SnowDeformation::GetShellTessVS()
+{
+	if (!shellTessVS) {
+		logger::debug("Compiling SnowShell tess control-point VS");
+		shellTessVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_TESS", "" } }, "vs_5_0"));
+	}
+	return shellTessVS;
+}
+
+ID3D11HullShader* SnowDeformation::GetShellHS()
+{
+	if (!shellHS) {
+		logger::debug("Compiling SnowShell HS");
+		shellHS = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "hs_5_0"));
+	}
+	return shellHS;
+}
+
+ID3D11DomainShader* SnowDeformation::GetShellDS()
+{
+	if (!shellDS) {
+		logger::debug("Compiling SnowShell DS");
+		shellDS = static_cast<ID3D11DomainShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
+	}
+	return shellDS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
 {
 	if (!depthSyncCS) {
@@ -264,9 +291,10 @@ void SnowDeformation::DrawShell()
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
-	// Relief amplitude: displacementScale mapped to ~6 world units of full
-	// relief, expressed in snow-UV units (tile = 256 world units).
-	cbData.SnowParallaxAmp = snowDisplacementScale * 6.0f / 256.0f;
+	// Tessellated relief amplitude, straight from the slider (world units;
+	// the PBR config's displacementScale is deliberately not multiplied in,
+	// the slider is authoritative).
+	cbData.SnowReliefDepth = std::max(settings.ReliefDepth, 0.0f);
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -472,11 +500,40 @@ void SnowDeformation::DrawShell()
 	ID3D11SamplerState* shellSamplers[2] = { shellSnowSampler.get(), shellLinearSampler.get() };
 	context->PSSetSamplers(0, 2, shellSamplers);
 
-	context->VSSetShader(vs, nullptr, 0);
 	context->PSSetShader(ps, nullptr, 0);
 
+	// Tessellated path: 4-control-point patches through the hull/domain
+	// stages, so near-camera snow renders the deformation map and the PBR
+	// displacement relief as real geometry. The domain shader runs the full
+	// surface evaluation, so it needs the same field textures and CB the
+	// legacy VS reads, plus the height map and its sampler.
+	auto* tessVS = settings.ReliefDepth > 0.01f ? GetShellTessVS() : nullptr;
+	auto* tessHS = settings.ReliefDepth > 0.01f ? GetShellHS() : nullptr;
+	auto* tessDS = settings.ReliefDepth > 0.01f ? GetShellDS() : nullptr;
+	const bool tessellate = tessVS && tessHS && tessDS;
 	globals::profiler->BeginPass("SnowDeformation::Shell");
-	context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+	if (tessellate) {
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+		context->VSSetShader(tessVS, nullptr, 0);
+		context->HSSetShader(tessHS, nullptr, 0);
+		context->DSSetShader(tessDS, nullptr, 0);
+		context->HSSetConstantBuffers(0, 1, cbs);
+		context->DSSetConstantBuffers(0, 1, cbs);
+		context->DSSetShaderResources(0, 6, shellSRVs);
+		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
+		context->DSSetShaderResources(8, 1, &dsHeightSRV);
+		context->DSSetShaderResources(11, 2, objectCapSRVs);
+		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
+		context->DSSetSamplers(0, 1, &dsSampler);
+		context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+		// The statics pass and everything after run the normal pipeline.
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	} else {
+		context->VSSetShader(vs, nullptr, 0);
+		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+	}
 	globals::profiler->EndPass();
 
 	// Post-shell depth copy (Terrain Blending's technique adapted): the main
@@ -512,6 +569,17 @@ void SnowDeformation::DrawShell()
 	DrawCapturedStatics();
 
 	// Restore everything we changed.
+	if (tessellate) {
+		// The DS held our field textures; the deformation map is UAV-written
+		// next Prepass and must not linger on a DS slot.
+		ID3D11ShaderResourceView* nullDSSRVs[13] = {};
+		context->DSSetShaderResources(0, 13, nullDSSRVs);
+		ID3D11Buffer* nullStageCB = nullptr;
+		context->DSSetConstantBuffers(0, 1, &nullStageCB);
+		context->HSSetConstantBuffers(0, 1, &nullStageCB);
+		ID3D11SamplerState* nullDSSampler = nullptr;
+		context->DSSetSamplers(0, 1, &nullDSSampler);
+	}
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);
 	ID3D11Buffer* nullCB = nullptr;

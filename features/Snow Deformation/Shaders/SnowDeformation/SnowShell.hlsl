@@ -115,8 +115,8 @@ cbuffer ShellCB : register(b0)
 
 	// PBR displacement companion bound at t8.
 	float HasSnowHeight;
-	// Parallax relief amplitude in snow-UV units.
-	float SnowParallaxAmp;
+	// Tessellated relief amplitude in world units (0 disables the path).
+	float SnowReliefDepth;
 	float2 padShell;
 }
 
@@ -515,7 +515,50 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	return terrainHeight + depth;
 }
 
-#ifdef VSHADER
+// Shared vertex tail for the legacy VS and the tessellated domain shader:
+// smooth per-vertex terrain normal, coverage alpha, debug plane, camera-
+// relative transform and output packing.
+VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float terrainHeight)
+{
+	// Smooth terrain normal per-vertex: wide 32-unit differences bridge the
+	// 128-unit data texels, and interpolation removes the faceting of the
+	// per-pixel piecewise-constant gradient.
+	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
+	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
+	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
+	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
+	float3 terrainNormal = normalize(float3(-(hxp - hxn) / 64.0, -(hyp - hyn) / 64.0, 1.0));
+
+	// Coverage alpha drives both geometry taper and edge dithering in the PS.
+	float taper = smoothstep(0.0, 0.6, coverage);
+	float2 edgeDelta = abs(gridLocal - WarpedHalfSpan);
+	float edgeFade = saturate((WarpedHalfSpan - max(edgeDelta.x, edgeDelta.y)) / 2048.0);
+	float coverageAlpha = taper * edgeFade;
+
+	// Data debug: conforming plane well above the sampled terrain height,
+	// colored by the sampled values.
+	if (ShellDebugData != 0)
+		z = terrainHeight + 200.0;
+
+	float3 absolutePos = float3(GridOrigin + gridLocal, z);
+
+	// Shader world space is camera-relative; previous frame uses its own adjust.
+	float3 rel = absolutePos - ShellCameraPosAdjust.xyz;
+	float3 prevRel = absolutePos - ShellCameraPreviousPosAdjust.xyz;
+
+	VS_OUTPUT vsout;
+	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	vsout.WorldPos = rel;
+	vsout.GridLocal = gridLocal;
+	vsout.Snowness = coverage;
+	vsout.DebugHeight = terrainHeight;
+	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
+	return vsout;
+}
+
+#if defined(VSHADER) && !defined(SNOW_TESS)
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
@@ -572,42 +615,130 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
 #endif
 
-	// Smooth terrain normal per-vertex: wide 32-unit differences bridge the
-	// 128-unit data texels, and interpolation removes the faceting of the
-	// per-pixel piecewise-constant gradient.
-	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
-	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
-	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
-	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
-	float3 terrainNormal = normalize(float3(-(hxp - hxn) / 64.0, -(hyp - hyn) / 64.0, 1.0));
+	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+}
+#endif
 
-	// Coverage alpha drives both geometry taper and edge dithering in the PS.
-	float taper = smoothstep(0.0, 0.6, coverage);
-	float2 edgeDelta = abs(gridLocal - WarpedHalfSpan);
-	float edgeFade = saturate((WarpedHalfSpan - max(edgeDelta.x, edgeDelta.y)) / 2048.0);
-	float coverageAlpha = taper * edgeFade;
+// ---- Tessellated path (SNOW_TESS): near-camera vertex density so the
+// deformation map's full resolution and the PBR displacement relief render
+// as real geometry. The control-point VS does grid placement only; the
+// domain shader runs the full surface evaluation per generated vertex.
 
-	// Data debug: conforming plane well above the sampled terrain height,
-	// colored by the sampled values.
-	if (ShellDebugData != 0)
-		z = terrainHeight + 200.0;
+struct TessControlPoint
+{
+	float2 GridLocal : TEXCOORD0;
+};
 
-	float3 absolutePos = float3(absXY, z);
+#if defined(VSHADER) && defined(SNOW_TESS)
+TessControlPoint main(uint vertexID : SV_VertexID)
+{
+	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = vertexID / 4;
+	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
+	float2 gridPos = float2(quadXY) + kPatchCorners[vertexID % 4];
+	// Same warped placement + world-anchored ring snapping as the legacy VS;
+	// corners depend only on grid coordinates, so adjacent patches share
+	// their edge vertices exactly.
+	float2 u = gridPos - (float)GridDim * 0.5;
+	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
+	float2 absXY = GridOrigin + gridLocal;
+	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
+	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
+	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
+	absXY = lerp(absXY, snapped, snapT);
 
-	// Shader world space is camera-relative; previous frame uses its own adjust.
-	float3 rel = absolutePos - ShellCameraPosAdjust.xyz;
-	float3 prevRel = absolutePos - ShellCameraPreviousPosAdjust.xyz;
+	TessControlPoint cp;
+	cp.GridLocal = absXY - GridOrigin;
+	return cp;
+}
+#endif
 
-	VS_OUTPUT vsout;
-	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	vsout.WorldPos = rel;
-	vsout.GridLocal = gridLocal;
-	vsout.Snowness = coverage;
-	vsout.DebugHeight = terrainHeight;
-	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
-	return vsout;
+#if defined(HULLSHADER) || defined(DOMAINSHADER)
+struct TessFactors
+{
+	float Edge[4] : SV_TessFactor;
+	float Inside[2] : SV_InsideTessFactor;
+};
+
+// Detail reach: full kTessMax within kTessNear/kTessMax units, factor 1 by
+// kTessNear. Matches the relief fade band so tessellation is never spent
+// where the displacement has already faded out.
+static const float kTessNear = 1600.0;
+static const float kTessMax = 8.0;
+#endif
+
+#ifdef HULLSHADER
+// Edge factor from the edge midpoint's camera distance, computed from the
+// shared corners only, so both patches on an edge agree (crack-free).
+float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
+{
+	float2 midAbs = GridOrigin + 0.5 * (gridLocalA + gridLocalB);
+	float dist = length(midAbs - ShellCameraPosAdjust.xy);
+	return clamp(kTessNear / max(dist, 32.0), 1.0, kTessMax);
+}
+
+TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
+{
+	TessFactors f;
+	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
+	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
+	f.Edge[0] = EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal);
+	f.Edge[1] = EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal);
+	f.Edge[2] = EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal);
+	f.Edge[3] = EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal);
+	float inner = max(max(f.Edge[0], f.Edge[1]), max(f.Edge[2], f.Edge[3]));
+	f.Inside[0] = inner;
+	f.Inside[1] = inner;
+	return f;
+}
+
+[domain("quad")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(4)]
+[patchconstantfunc("PatchConstants")]
+TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputControlPointID)
+{
+	return patch[i];
+}
+#endif
+
+#ifdef DOMAINSHADER
+[domain("quad")]
+VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
+{
+	float2 gridLocal = lerp(
+		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
+		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
+
+	float coverage;
+	float terrainHeight;
+	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+
+	// Real relief from the PBR displacement map, replacing the parallax
+	// approximation: sampled at the same snow UV the PS shades with, so the
+	// normal map's shading and the geometry describe the same surface.
+	// Gated by local depth (thin cover and carved floors stay flat), by the
+	// deformation (compressed snow is smooth), and faded with the same
+	// distance band as the micro-normal.
+	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
+	{
+		float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
+		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
+		float depthAbove = z - terrainHeight;
+		[branch] if (reliefFade > 0.001 && depthAbove > 0.5)
+		{
+			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+			// Coarser mips with distance: vertex density falls below texel
+			// density out there and full-res sampling shimmers.
+			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
+			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
+			float carve = saturate(SampleDeformation(gridLocal));
+			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
+		}
+	}
+
+	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
 }
 #endif
 
@@ -677,44 +808,6 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
 	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
-}
-
-// Parallax occlusion: march the view ray through the PBR displacement map
-// so grazing light reveals real relief, the same depth mechanic PBR ground
-// uses. Returns the UV offset for every material sample. V points surface
-// to camera; normalWS is the geometric (pre-bump) normal.
-float2 SnowParallaxOffset(float2 uv, float3 normalWS, float3 V, float fade)
-{
-	float3 pomT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 pomB = cross(normalWS, pomT);
-	float3 viewTS = float3(dot(V, pomT), dot(V, pomB), dot(V, normalWS));
-	// Grazing clamp: bounds the total march so relief cannot smear.
-	float2 maxOffset = viewTS.xy / max(viewTS.z, 0.25) * (SnowParallaxAmp * fade);
-	float2 dx = ddx(uv);
-	float2 dy = ddy(uv);
-
-	const uint kPomSteps = 12;
-	const float stepH = 1.0 / kPomSteps;
-	float2 uvStep = maxOffset * stepH;
-	float rayH = 1.0;
-	float2 uvCur = uv;
-	float hPrev = 1.0;
-	float hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
-	[loop] for (uint pomI = 0; pomI < kPomSteps; pomI++)
-	{
-		if (rayH <= hSample)
-			break;
-		hPrev = hSample;
-		uvCur -= uvStep;
-		rayH -= stepH;
-		hSample = SnowHeightMap.SampleGrad(SnowSampler, uvCur, dx, dy).x;
-	}
-	// Linear intersection refine between the last two samples.
-	float afterDiff = hSample - rayH;
-	float beforeDiff = (rayH + stepH) - hPrev;
-	float w = saturate(afterDiff / max(afterDiff + beforeDiff, 1e-4));
-	uvCur += uvStep * w;
-	return uvCur - uv;
 }
 
 struct PS_OUTPUT
@@ -853,14 +946,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-	[branch] if (HasSnowHeight > 0.5 && bumpFade > 0.001)
-	{
-		float2 pomDelta = SnowParallaxOffset(snowUV, normalWS, -normalize(input.WorldPos), bumpFade);
-		snowUV += pomDelta;
-		// The anti-tiling lattice follows the same shift so cells stay
-		// coherent with the displaced texture.
-		worldXYPS += pomDelta * kSnowUVTile;
-	}
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
