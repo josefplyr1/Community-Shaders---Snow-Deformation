@@ -333,9 +333,10 @@ Texture2D<float> ObjectSkinDepth : register(t12);
 
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
-// One texel of the object height raster in world units; must match
-// kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
-static const float kHeightTexel = 4.0;
+// One texel of the FINE object height raster the patch samples, in world
+// units; must match kFineHeightMapHalfExtent * 2 / kFineHeightMapDim
+// (SnowDeformation.h).
+static const float kHeightTexel = 1.0;
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
 // object edges; MAX both ignores them and keeps the patch on the highest

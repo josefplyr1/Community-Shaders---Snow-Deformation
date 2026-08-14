@@ -299,12 +299,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
+	if (!heightScrollOneCS)
+		heightScrollOneCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollOneCS"));
 	if (!heightCombineCS)
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightConeCS)
 		heightConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeCS"));
 
-	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
+	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightScrollOneCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
 		return false;
@@ -367,6 +369,26 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth = new Texture2D(skinDepthDesc, "SnowDeformation::HeightSkinDepth");
 	heightSkinDepth->CreateSRV(skinDepthSrvDesc);
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
+
+	// Fine tier: same descs at the fine dimension.
+	D3D11_TEXTURE2D_DESC fineDesc = heightDesc;
+	fineDesc.Width = kFineHeightMapDim;
+	fineDesc.Height = kFineHeightMapDim;
+	auto makeFineTexture = [&](const char* a_name) {
+		auto* texture = new Texture2D(fineDesc, a_name);
+		texture->CreateSRV(heightSrvDesc);
+		texture->CreateRTV(heightRtvDesc);
+		texture->CreateUAV(heightUavDesc);
+		return texture;
+	};
+	fineTopRaw[0] = makeFineTexture("SnowDeformation::FineTopRaw0");
+	fineTopRaw[1] = makeFineTexture("SnowDeformation::FineTopRaw1");
+	D3D11_TEXTURE2D_DESC fineSkinDesc = skinDepthDesc;
+	fineSkinDesc.Width = kFineHeightMapDim;
+	fineSkinDesc.Height = kFineHeightMapDim;
+	fineSkinDepth = new Texture2D(fineSkinDesc, "SnowDeformation::FineSkinDepth");
+	fineSkinDepth->CreateSRV(skinDepthSrvDesc);
+	fineSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
 void SnowDeformation::RenderObjectHeightMap()
@@ -481,11 +503,109 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, 2, nullCsSRVs);
 	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+
+	// Fine tier scroll (tops only), then restore the coarse constants for
+	// the combine/cone chain below.
+	constexpr float fineTexel = kFineHeightMapHalfExtent * 2.0f / kFineHeightMapDim;
+	float2 fineCenter = {
+		std::floor(eye.x / fineTexel) * fineTexel,
+		std::floor(eye.y / fineTexel) * fineTexel
+	};
+	{
+		HeightProcessCB fineData = processData;
+		fineData.ScrollDelta = {
+			(int)std::lround((fineCenter.x - fineWindowCenter.x) / fineTexel),
+			-(int)std::lround((fineCenter.y - fineWindowCenter.y) / fineTexel)
+		};
+		fineData.ClearAll = fineMapValid ? 0u : 1u;
+		fineData.HeightWindowCenter = fineCenter;
+		fineData.HeightHalfExtent = kFineHeightMapHalfExtent;
+		heightProcessCB->Update(fineData);
+		fineWindowCenter = fineCenter;
+		fineMapValid = true;
+
+		uint finePrevious = fineCurrent;
+		fineCurrent ^= 1;
+		ID3D11ShaderResourceView* fineSRV = fineTopRaw[finePrevious]->srv.get();
+		ID3D11UnorderedAccessView* fineUAV = fineTopRaw[fineCurrent]->uav.get();
+		context->CSSetShaderResources(0, 1, &fineSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &fineUAV, nullptr);
+		context->CSSetShader(heightScrollOneCS, nullptr, 0);
+		context->Dispatch((kFineHeightMapDim + 7) / 8, (kFineHeightMapDim + 7) / 8, 1);
+		context->CSSetShaderResources(0, 2, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+		heightProcessCB->Update(processData);
+	}
+
 	ID3D11Buffer* nullProcessCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	// Rasterize this frame's captures on top of the scrolled maps.
+	// Rasterize this frame's captures on top of the scrolled maps: once into
+	// the coarse full-window rasters, once into the fine patch-range tier.
+	auto rasterizeCaptures = [&](float2 a_center, float a_halfExtent, bool a_cull) {
+		for (const auto& cap : capturedStatics) {
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			// The fine window is a quarter of the capture range; skip objects
+			// that cannot touch it (600 units covers any captured mesh radius).
+			if (a_cull &&
+				(std::abs(cap.world.translate.x - a_center.x) > a_halfExtent + 600.0f ||
+					std::abs(cap.world.translate.y - a_center.y) > a_halfExtent + 600.0f))
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape)
+				continue;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				continue;
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				continue;
+
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				continue;
+
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto layoutIt = staticsILCache.find(descKey);
+			if (layoutIt == staticsILCache.end() || !layoutIt->second)
+				continue;  // layouts are created by the skin pass; reuse only
+			context->IASetInputLayout(layoutIt->second.get());
+
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				continue;
+			UINT offset = 0;
+			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+			StaticsCB scb{};
+			const auto& rot = cap.world.rotate;
+			const float scale = cap.world.scale;
+			scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
+			scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
+			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+			scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+			scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+			scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+			scb.HeightWindowCenter = a_center;
+			scb.HeightHalfExtent = a_halfExtent;
+			// Flat/rounded stats for the skin-depth output (RT2): the raster VS
+			// reads the same classification the skin uses.
+			ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
+			context->VSSetShaderResources(10, 1, &rasterSmoothSRV);
+			scb.HasSmoothedNormals = rasterSmoothSRV ? 1.0f : 0.0f;
+			staticsCB->Update(scb);
+
+			context->DrawIndexed(indexCount, 0, 0);
+		}
+	};
+
 	const float skinDepthClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
 	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
@@ -501,60 +621,15 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
-	for (const auto& cap : capturedStatics) {
-		auto* geometry = cap.geometry.get();
-		if (!geometry)
-			continue;
-		auto triShape = geometry->AsTriShape();
-		if (!triShape)
-			continue;
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-			continue;
-		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0)
-			continue;
+	rasterizeCaptures(heightWindowCenter, kHeightMapHalfExtent, false);
 
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-			continue;
-
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto layoutIt = staticsILCache.find(descKey);
-		if (layoutIt == staticsILCache.end() || !layoutIt->second)
-			continue;  // layouts are created by the skin pass; reuse only
-		context->IASetInputLayout(layoutIt->second.get());
-
-		UINT stride = uint32_t(descKey & 0xF) * 4;
-		if (stride == 0)
-			continue;
-		UINT offset = 0;
-		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-
-		StaticsCB scb{};
-		const auto& rot = cap.world.rotate;
-		const float scale = cap.world.scale;
-		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
-		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
-		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
-		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
-		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
-		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
-		// reads the same classification the skin uses.
-		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
-		context->VSSetShaderResources(10, 1, &rasterSmoothSRV);
-		scb.HasSmoothedNormals = rasterSmoothSRV ? 1.0f : 0.0f;
-		staticsCB->Update(scb);
-
-		context->DrawIndexed(indexCount, 0, 0);
-	}
+	// Fine pass: tops + skin depth only (RT1 null drops the bottom writes).
+	context->ClearRenderTargetView(fineSkinDepth->rtv.get(), skinDepthClear);
+	ID3D11RenderTargetView* fineRTVs[3] = { fineTopRaw[fineCurrent]->rtv.get(), nullptr, fineSkinDepth->rtv.get() };
+	context->OMSetRenderTargets(3, fineRTVs, nullptr);
+	D3D11_VIEWPORT fineViewport{ 0.0f, 0.0f, float(kFineHeightMapDim), float(kFineHeightMapDim), 0.0f, 1.0f };
+	context->RSSetViewports(1, &fineViewport);
+	rasterizeCaptures(fineWindowCenter, kFineHeightMapHalfExtent, true);
 	globals::profiler->EndPass();
 
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
@@ -1005,7 +1080,7 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetShaderResources(1, 1, &stageDeformSRV);
 			ID3D11ShaderResourceView* stageHeightSRV = shellSnowHeightSRV.get();
 			context->DSSetShaderResources(8, 1, &stageHeightSRV);
-			ID3D11ShaderResourceView* patchStageSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+			ID3D11ShaderResourceView* patchStageSRVs[2] = { fineTopRaw[fineCurrent]->srv.get(), fineSkinDepth->srv.get() };
 			context->HSSetShaderResources(11, 2, patchStageSRVs);
 			context->DSSetShaderResources(11, 2, patchStageSRVs);
 			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
@@ -1018,18 +1093,18 @@ void SnowDeformation::DrawCapturedStatics()
 
 		StaticsCB scb{};
 		// WorldRow0.xy = snapped patch origin (256 quads x 8 units = +-1024
-		// around the height-window center, which tracks the camera).
+		// around the FINE height window, which the patch samples exclusively.
 		scb.WorldRow0 = {
-			std::floor((heightWindowCenter.x - 1024.0f) / 8.0f) * 8.0f,
-			std::floor((heightWindowCenter.y - 1024.0f) / 8.0f) * 8.0f, 0.0f, 0.0f
+			std::floor((fineWindowCenter.x - 1024.0f) / 8.0f) * 8.0f,
+			std::floor((fineWindowCenter.y - 1024.0f) / 8.0f) * 8.0f, 0.0f, 0.0f
 		};
 		scb.ObjectsDepth = settings.ObjectsSnowDepth;
 		scb.RoundedDepth = settings.SnowMeshesDepth;
-		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.HeightWindowCenter = fineWindowCenter;
+		scb.HeightHalfExtent = kFineHeightMapHalfExtent;
 		staticsCB->Update(scb);
 
-		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+		ID3D11ShaderResourceView* patchSRVs[2] = { fineTopRaw[fineCurrent]->srv.get(), fineSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
 		if (tessellatePatch) {
 			context->Draw(256 * 256 * 4, 0);
