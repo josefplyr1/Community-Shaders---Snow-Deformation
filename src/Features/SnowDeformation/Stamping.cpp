@@ -48,6 +48,24 @@ static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
 // Limb stamps below this carve fraction are invisible; skip them.
 static constexpr float kMinLimbCarve = 0.05f;
+// Skeletons carry bones that are hidden or never composed for this race
+// (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
+// world transform at the origin. A capsule anchored on one combs a trench
+// across the world, so both segment endpoints must be live and near the
+// actor (dragons are the far-endpoint ceiling).
+static constexpr float kMaxLimbEndpointDistance = 1024.0f;
+// Runaway-skeleton caps on the bone cache.
+static constexpr size_t kMaxCachedFeet = 8;
+static constexpr size_t kMaxCachedLimbs = 32;
+
+static bool LimbEndpointValid(const RE::NiTransform& a_world, const RE::NiPoint3& a_actorPos)
+{
+	if (a_world.scale < 0.01f)
+		return false;
+	const float dx = a_world.translate.x - a_actorPos.x;
+	const float dy = a_world.translate.y - a_actorPos.y;
+	return dx * dx + dy * dy < kMaxLimbEndpointDistance * kMaxLimbEndpointDistance;
+}
 
 // Case-insensitive substring/prefix tests for skeleton bone names.
 static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
@@ -128,19 +146,20 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 	const bool controlNode = NameStartsWith(name, "CME ") || NameStartsWith(name, "MOV ");
 	if (!controlNode &&
 		(NameContains(name, "foot") || NameContains(name, "hoof") || NameContains(name, "paw"))) {
-		a_out.feet.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
+		if (a_out.feet.size() < kMaxCachedFeet)
+			a_out.feet.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
 		// The shin: ancestor (calf) joint down to the ankle.
-		if (a_ancestor)
+		if (a_ancestor && a_out.limbs.size() < kMaxCachedLimbs)
 			a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(a_ancestor), RE::NiPointer<RE::NiAVObject>(node),
 				a_ancestorRadius });
 		return;
 	}
 	if (!controlNode) {
 		if (const auto* spec = MatchLimb(name)) {
-			if (a_ancestor)
+			if (a_ancestor && a_out.limbs.size() < kMaxCachedLimbs)
 				a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(a_ancestor), RE::NiPointer<RE::NiAVObject>(node),
 					std::min(a_ancestorRadius, spec->radius) });
-			if (spec->terminal || !a_ancestor)
+			if ((spec->terminal || !a_ancestor) && a_out.limbs.size() < kMaxCachedLimbs)
 				a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(node),
 					spec->radius });
 			for (auto& child : node->GetChildren())
@@ -231,7 +250,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				bones = &cache;
 		}
 
-		if (!isDead && bones) {
+		// Living actors need matched feet to take the bone path: a limbs-only
+		// match (creature spines/necks) would steal the collision-shape
+		// fallback while its high segments carve nothing.
+		if (!isDead && bones && !bones->feet.empty()) {
 			{
 				uint32_t footIndex = 0;
 				for (const auto& foot : bones->feet) {
@@ -242,7 +264,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (!footNode)
 						continue;
 					const auto& footWorld = footNode->world;
-					const float boneScale = footWorld.scale > 0.01f ? footWorld.scale : 1.0f;
+					if (footWorld.scale < 0.01f)
+						continue;
+					const float boneScale = footWorld.scale;
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
 					// discrete print instead of dragging from the previous one.
@@ -301,7 +325,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					continue;
 				const auto& aWorld = nodeA->world;
 				const auto& bWorld = nodeB->world;
-				const float boneScale = aWorld.scale > 0.01f ? aWorld.scale : 1.0f;
+				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
+					continue;
+				const float boneScale = aWorld.scale;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
 					kMinStampShapeRadius, kMaxStampShapeRadius);
 				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
@@ -336,7 +362,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					continue;
 				const auto& aWorld = nodeA->world;
 				const auto& bWorld = nodeB->world;
-				const float boneScale = aWorld.scale > 0.01f ? aWorld.scale : 1.0f;
+				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
+					continue;
+				const float boneScale = aWorld.scale;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
 					kMinStampShapeRadius, kMaxStampShapeRadius);
 				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;
