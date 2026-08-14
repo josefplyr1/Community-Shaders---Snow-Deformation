@@ -163,6 +163,12 @@ public:
 		float CrispScale = 6.0f;
 		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
 		float CrispStrength = 1.8f;
+		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
+		float ObjBermHeight = 0.35f;
+		float ObjChurnHeight = 5.0f;
+		float ObjChurnSize = 0.25f;
+		float ObjCrispScale = 6.0f;
+		float ObjCrispStrength = 1.8f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
@@ -344,6 +350,15 @@ public:
 		float CrispScaleV;
 		/** @brief Strength of the disturbed-snow fine-grain normal layer. */
 		float CrispStrengthV;
+
+		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). */
+		float ObjBermHeightAmp;
+		float ObjChurnHeightAmp;
+		float ObjChurnSizeScale;
+		float ObjCrispScaleV;
+
+		float ObjCrispStrengthV;
+		float3 padObjDetail;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

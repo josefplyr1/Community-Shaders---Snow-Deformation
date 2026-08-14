@@ -301,6 +301,11 @@ void SnowDeformation::DrawShell()
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	cbData.CrispScaleV = std::clamp(settings.CrispScale, 1.0f, 8.0f);
 	cbData.CrispStrengthV = std::clamp(settings.CrispStrength, 0.0f, 3.0f);
+	cbData.ObjBermHeightAmp = std::clamp(settings.ObjBermHeight, 0.0f, 1.0f);
+	cbData.ObjChurnHeightAmp = std::clamp(settings.ObjChurnHeight, 0.0f, 8.0f);
+	cbData.ObjChurnSizeScale = std::clamp(settings.ObjChurnSize, 0.25f, 4.0f);
+	cbData.ObjCrispScaleV = std::clamp(settings.ObjCrispScale, 1.0f, 8.0f);
+	cbData.ObjCrispStrengthV = std::clamp(settings.ObjCrispStrength, 0.0f, 3.0f);
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;

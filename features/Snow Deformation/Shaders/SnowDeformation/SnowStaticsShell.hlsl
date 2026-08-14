@@ -119,6 +119,14 @@ cbuffer ShellCB : register(b0)
 	float ChurnSizeScale;
 	float CrispScaleV;
 	float CrispStrengthV;
+
+	float ObjBermHeightAmp;
+	float ObjChurnHeightAmp;
+	float ObjChurnSizeScale;
+	float ObjCrispScaleV;
+
+	float ObjCrispStrengthV;
+	float3 padObjDetail;
 }
 
 cbuffer StaticCB : register(b1)
@@ -184,6 +192,61 @@ float SampleDeformation(float2 gridLocal)
 	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// ---- Object trench detail (berm shading, churn, crisp grain) ----
+// The landscape shell's recipes with the independent Obj* knobs. Berm is
+// shading-only on objects: skin topology is the source mesh's (no vertices
+// to carry a ridge) and a geometry berm would straddle the patch/skin
+// height seam.
+
+// 17 taps on two staggered rings; see the landscape shell's BermField.
+static const float2 kBermTaps[16] = {
+	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
+	float2(-18.0, 0.0), float2(-12.73, -12.73), float2(0.0, -18.0), float2(12.73, -12.73),
+	float2(36.96, 15.31), float2(15.31, 36.96), float2(-15.31, 36.96), float2(-36.96, 15.31),
+	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
+};
+
+float BermField(float2 gridLocal)
+{
+	float b = SampleDeformation(gridLocal);
+	[unroll] for (int i = 0; i < 16; i++)
+		b += SampleDeformation(gridLocal + kBermTaps[i]);
+	return saturate(b / 17.0);
+}
+
+float BermShape(float bermDeform)
+{
+	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
+}
+
+float ShapeNoiseHash(float2 cell)
+{
+	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float ShapeNoise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return lerp(lerp(ShapeNoiseHash(i), ShapeNoiseHash(i + float2(1, 0)), f.x),
+		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
+}
+
+float ChurnNoise(float2 worldXY)
+{
+	float s = max(ObjChurnSizeScale, 0.05);
+	float n = ShapeNoise(worldXY / (16.0 * s)) * 0.65 + ShapeNoise(worldXY / (7.0 * s)) * 0.35;
+	return (n - 0.5) * 2.0;
+}
+
+float ChurnWeight(float deformation, float bermDeform)
+{
+	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));
 }
 
 #ifdef PATCH
@@ -482,15 +545,32 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// inside one texel, which the interpolated depth alone never sees.
 		float floorMin = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(1.0, 4.0, skinDepth) * smoothstep(0.25, 2.0, skinEdgeMin);
 		depth = max(depth, floorMin);
+
+		// Churn: broken lumps on the carved walls. The room factor keeps the
+		// dig under 80% of the cover above the minimum floor even at the
+		// slider maximum, so lumps can never expose the object beneath; fully
+		// trampled floors (depth = floorMin) stay smooth by the same term.
+		float churnW = smoothstep(0.05, 0.5, deform) * saturate((depth - floorMin) / 10.0);
+		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
+			depth += ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW;
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
 		// Carved-surface shading normal from the SMOOTH deformation gradient;
 		// the geometry carries the shape, this rounds the shading with the
-		// same curve the depth uses.
+		// same curve the depth uses. The churn term shades at vertex rate:
+		// dense patch vertices sit 1-2 units apart near the camera.
 		float2 grad = float2(
 			SampleDeformationSmooth(gridLocal + float2(4.0, 0.0)) - SampleDeformationSmooth(gridLocal - float2(4.0, 0.0)),
 			SampleDeformationSmooth(gridLocal + float2(0.0, 4.0)) - SampleDeformationSmooth(gridLocal - float2(0.0, 4.0))) / 8.0;
-		v.NormalWS = normalize(float3(grad * skinDepth * 0.6, 1.0));
+		float2 churnGrad = float2(0.0, 0.0);
+		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
+		{
+			const float cs = 3.0;
+			churnGrad = float2(
+				ChurnNoise(worldXY + float2(cs, 0.0)) - ChurnNoise(worldXY - float2(cs, 0.0)),
+				ChurnNoise(worldXY + float2(0.0, cs)) - ChurnNoise(worldXY - float2(0.0, cs))) / (2.0 * cs) * ObjChurnHeightAmp * churnW;
+		}
+		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
@@ -1276,14 +1356,40 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
 
+	// Object trench detail: shading-only berm ridge along trails, plus the
+	// disturbance weight for the crisp grain below. The landscape shell's
+	// recipes with the independent Obj* knobs; geometry berm waits for the
+	// skin rework.
+	float bermC = 0.0;
+	[branch] if (ObjBermHeightAmp > 0.005 || ObjCrispStrengthV > 0.01)
+		bermC = BermField(trenchGridLocal);
+	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
+	{
+		const float bStep = 4.0;
+		float2 bermGrad = float2(
+			BermShape(BermField(trenchGridLocal + float2(bStep, 0.0))) - BermShape(BermField(trenchGridLocal - float2(bStep, 0.0))),
+			BermShape(BermField(trenchGridLocal + float2(0.0, bStep))) - BermShape(BermField(trenchGridLocal - float2(0.0, bStep)))) / (2.0 * bStep);
+		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
+		normalWS = normalize(normalWS + float3(-bermGrad * bermDepth * ObjBermHeightAmp, 0.0));
+	}
+	float disturb = ChurnWeight(pixelDeform, bermC) * ObjCrispStrengthV;
+	disturb *= 1.0 - smoothstep(300.0, 1000.0, pixelDist);
+
 	// Micro-relief; identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
 	// gate: bending the normal first would jitter the up-facing test into
-	// speckled edges.
+	// speckled edges. Disturbed snow layers in a finer-repeat tap of the
+	// same map (crisp grain), weighted by the disturbance itself.
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
+		[branch] if (disturb > 0.01)
+		{
+			SnowTaps crispTaps = ComputeSnowTaps(snowUV * max(ObjCrispScaleV, 1.0), snowCellXY);
+			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
+			texN.xy += crispN * disturb;
+		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;
 		float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
@@ -1303,6 +1409,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
+		// No second frequency to layer in the luminance fallback; deepen the
+		// relief instead.
+		bumpGrad *= 1.0 + 0.8 * disturb;
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 

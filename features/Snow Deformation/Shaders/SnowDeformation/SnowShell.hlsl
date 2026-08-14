@@ -125,6 +125,14 @@ cbuffer ShellCB : register(b0)
 	float ChurnSizeScale;
 	float CrispScaleV;
 	float CrispStrengthV;
+
+	float ObjBermHeightAmp;
+	float ObjChurnHeightAmp;
+	float ObjChurnSizeScale;
+	float ObjCrispScaleV;
+
+	float ObjCrispStrengthV;
+	float3 padObjDetail;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
