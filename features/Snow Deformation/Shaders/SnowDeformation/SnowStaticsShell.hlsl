@@ -415,8 +415,14 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// here), so the patch sinks to the object's own surface at full
 		// trample. Sunk slightly below the skin's nominal surface so the
 		// untrampled rim tucks under the skin instead of z-fighting it.
+		// The tuck is depth-precision-aware: a fixed 0.4 vanishes into
+		// z-buffer precision at grazing angles and range, so carved floors
+		// sink deeper with distance; walls and rims (low deform) keep the
+		// tight tuck.
 		float depth = skinDepth * (1.0 - deform);
-		v.WorldAbs = float3(worldXY, top + depth - 0.4);
+		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
+		float sink = 0.4 + deform * camDist * 0.004;
+		v.WorldAbs = float3(worldXY, top + depth - sink);
 
 		// Carved-surface shading normal from the SMOOTH deformation gradient;
 		// the geometry carries the shape, this rounds the shading with the
