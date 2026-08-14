@@ -408,6 +408,26 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	[flatten] if (minNeighborTop < 1e8)
 		top = min(top, minNeighborTop + 16.0);
 
+	// Untrenchable band around much-taller structures: the raster smear
+	// leaves elevated plateaus hugging walls that evade both the slope
+	// kill (locally flat) and the neighbor clamp (all neighbors on the
+	// plateau). Any surface towering over this vertex within the band
+	// kills it outright. The height threshold is the building detector:
+	// houses, walls and cliffs tower by hundreds of units; benches and
+	// low rocks can never trigger it.
+	static const float2 kTallRays[8] = {
+		{ 24.0, 0.0 }, { 17.0, 17.0 }, { 0.0, 24.0 }, { -17.0, 17.0 },
+		{ -24.0, 0.0 }, { -17.0, -17.0 }, { 0.0, -24.0 }, { 17.0, -17.0 }
+	};
+	bool nearTall = false;
+	[unroll] for (uint tallI = 0; tallI < 8; tallI++)
+	{
+		float tallTop = PatchTop(worldXY + kTallRays[tallI]);
+		[flatten] if (tallTop > -50000.0 && (tallTop - top) > 100.0)
+			nearTall = true;
+	}
+	rim = rim || nearTall;
+
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
 	// radius 12 the rays sit 22.5 degrees apart, so even the thinnest trail
