@@ -139,6 +139,10 @@ Texture2D<float> ObjectBottoms : register(t5);
 // depth.
 Texture2D<float> ObjectTopsRaw : register(t11);
 Texture2D<float> ObjectSkinDepthMap : register(t12);
+
+// Blurred deformation (BermBlurCS, ~16-unit texels): the edge berm's
+// shape input. Same world window as the deformation map.
+Texture2D<float> BermFieldMap : register(t13);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
@@ -376,36 +380,82 @@ float CarveProfile(float deformation, float uncarvedDepth)
 }
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
-// a deeper layer throws a taller berm. The shape input is the BLURRED
-// deformation (BermField): two sample rings reach ~48 units past the
-// trail edge, and the outer ring's small per-tap weight gives the hill
-// a long, gentle outer tail instead of a knife along the stamp falloff.
-static const float kBermAmp = 0.175;
+// a deeper layer throws a taller berm. The shape input is the BermField
+// texture: a wide Gaussian blur of the deformation map (BermBlurCS, once
+// per frame). Sparse in-shader ring taps cannot substitute — between the
+// rings the field goes piecewise-constant, and every flat stretch prints
+// a plateau on the hill.
+static const float kBermAmp = 0.22;
 
 // The rise must still be CLIMBING at ~0.5 (the field value right at
 // the trail edge) or its flattened top smears into a plateau there; the
-// cut starting at 0.5 then caps it into a narrow rounded crest against
-// the rim, descending steadily outward from the top. Tail reaches zero
+// cut starting at 0.5 then caps it into a rounded crest against the
+// rim, descending steadily outward from the top. Tail reaches zero
 // with zero slope (no normal-map seam where the berm ends).
 float BermShape(float bermDeform)
 {
 	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
 }
 
+float SampleBermBilinear(float2 t, float2 dims)
+{
+	t = clamp(t, 0.0, dims - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = BermFieldMap.Load(int3(t0.x, t0.y, 0));
+	float s10 = BermFieldMap.Load(int3(t1.x, t0.y, 0));
+	float s01 = BermFieldMap.Load(int3(t0.x, t1.y, 0));
+	float s11 = BermFieldMap.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// B-spline bicubic of the berm field (SampleDeformation's recipe): the PS
+// differentiates this for shading, so the gradient must be crease-free
+// across the field's coarse texels.
 float BermField(float2 gridLocal)
 {
-	// Inner ring on the axes, outer ring on the diagonals: quasi-isotropic
-	// at 9 taps.
-	float b = SampleDeformation(gridLocal);
-	b += SampleDeformation(gridLocal + float2(24.0, 0.0));
-	b += SampleDeformation(gridLocal - float2(24.0, 0.0));
-	b += SampleDeformation(gridLocal + float2(0.0, 24.0));
-	b += SampleDeformation(gridLocal - float2(0.0, 24.0));
-	b += SampleDeformation(gridLocal + float2(34.0, 34.0));
-	b += SampleDeformation(gridLocal + float2(34.0, -34.0));
-	b += SampleDeformation(gridLocal + float2(-34.0, 34.0));
-	b += SampleDeformation(gridLocal + float2(-34.0, -34.0));
-	return saturate(b / 9.0);
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	BermFieldMap.GetDimensions(dims.x, dims.y);
+	float2 t = uv * dims - 0.5;
+	float2 i = floor(t);
+	float2 f = t - i;
+
+	float2 f2 = f * f;
+	float2 f3 = f2 * f;
+	float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+	float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+	float2 w3 = f3 / 6.0;
+
+	float2 g0 = w0 + w1;
+	float2 g1 = w2 + w3;
+	float2 h0 = i - 1.0 + w1 / g0;
+	float2 h1 = i + 1.0 + w3 / g1;
+
+	float v00 = SampleBermBilinear(float2(h0.x, h0.y), dims);
+	float v10 = SampleBermBilinear(float2(h1.x, h0.y), dims);
+	float v01 = SampleBermBilinear(float2(h0.x, h1.y), dims);
+	float v11 = SampleBermBilinear(float2(h1.x, h1.y), dims);
+
+	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
+}
+
+// Cheap bilinear variant for the self-shadow march (value-only use).
+float BermFieldFast(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+	float2 dims;
+	BermFieldMap.GetDimensions(dims.x, dims.y);
+	return SampleBermBilinear(uv * dims - 0.5, dims);
 }
 
 // Class borders are hard edges in the baked depth/coverage data: a +30
@@ -1123,7 +1173,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// full-height snow and sits in permanent shadow even facing the
 			// sun.
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * kBermAmp;
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(BermFieldFast(sampleLocal)) * sampleDepth * kBermAmp;
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{
