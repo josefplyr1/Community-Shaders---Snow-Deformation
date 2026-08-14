@@ -111,7 +111,9 @@ cbuffer ShellCB : register(b0)
 	float HasSnowHeight;
 	// Tessellated relief amplitude in world units (landscape shell only).
 	float SnowReliefDepth;
-	float2 padShell;
+	// Statics debug view: object snow renders decision variables as colors.
+	float StaticsDebugView;
+	float padShell;
 }
 
 cbuffer StaticCB : register(b1)
@@ -336,10 +338,15 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float t01 = PatchTop(base + float2(0.0, 8.0));
 		float t11 = PatchTop(base + float2(8.0, 8.0));
 		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
-		// A sentinel lattice corner poisons the bilinear; near the footprint
-		// edge fall back to the center sample (max-of-4 ignores sentinels)
-		// and let the kill logic decide.
-		[flatten] if (min(min(t00, t10), min(t01, t11)) < -50000.0)
+		// A sentinel lattice corner poisons the bilinear, and a large drop
+		// across the cell (roof or wall edge) would interpolate vertices
+		// midway down the facade, which the rim test then kills erratically
+		// at tessellated density (sawtooth facade teeth). Both fall back to
+		// the center sample so the whole cell resolves like the legacy grid
+		// and dies or lives coherently.
+		float tMin = min(min(t00, t10), min(t01, t11));
+		float tMax = max(max(t00, t10), max(t01, t11));
+		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
 			top = PatchTop(worldXY);
 		float s00 = PatchSkinDepth(base);
 		float s10 = PatchSkinDepth(base + float2(8.0, 0.0));
@@ -449,8 +456,10 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.WorldPos = float3(0.0, 0.0, 0.0);
 	vsout.NormalWS = v.NormalWS;
 	vsout.GridLocal = v.GridLocal;
-	vsout.Coverage = 1.0;
-	vsout.Flat = 0.0;
+	// Debug view: smuggle the decision data through the PS interpolants the
+	// patch does not otherwise use for shading.
+	vsout.Coverage = StaticsDebugView != 0.0 ? v.Deform : 1.0;
+	vsout.Flat = StaticsDebugView != 0.0 ? saturate(v.SkinDepth / 8.0) : 0.0;
 	[branch] if (v.Killed > 0.5)
 	{
 		// NaN position: the rasterizer culls every primitive touching it,
@@ -795,8 +804,14 @@ TessControlPoint main(InputPatch<TessControlPoint, 3> patch, uint i : SV_OutputC
 VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const OutputPatch<TessControlPoint, 3> patch)
 {
 	float3 worldAbs = patch[0].WorldAbs * bary.x + patch[1].WorldAbs * bary.y + patch[2].WorldAbs * bary.z;
-	float3 normalWS = normalize(patch[0].NormalWS * bary.x + patch[1].NormalWS * bary.y + patch[2].NormalWS * bary.z);
-	float3 inflateWS = normalize(patch[0].InflateWS * bary.x + patch[1].InflateWS * bary.y + patch[2].InflateWS * bary.z);
+	// Guarded normalization: control points with opposing normals (hard
+	// mesh edges) interpolate to near-zero vectors whose normalization
+	// explodes into arbitrary directions; those regions also get no relief.
+	float3 nSum = patch[0].NormalWS * bary.x + patch[1].NormalWS * bary.y + patch[2].NormalWS * bary.z;
+	float3 iSum = patch[0].InflateWS * bary.x + patch[1].InflateWS * bary.y + patch[2].InflateWS * bary.z;
+	float interpHealth = min(length(nSum), length(iSum));
+	float3 normalWS = nSum / max(length(nSum), 1e-3);
+	float3 inflateWS = iSum / max(length(iSum), 1e-3);
 	float3 cfd = patch[0].CoverageFlatDepth * bary.x + patch[1].CoverageFlatDepth * bary.y + patch[2].CoverageFlatDepth * bary.z;
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 
@@ -814,7 +829,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
 			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
 			float carve = saturate(SampleDeformation(gridLocal));
-			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(cfd.z / 6.0) * (1.0 - carve) * saturate(inflateWS.z));
+			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(cfd.z / 6.0) * (1.0 - carve) * saturate(inflateWS.z) * smoothstep(0.3, 0.7, interpHealth));
 		}
 	}
 
@@ -1180,6 +1195,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// turning blank white.
 	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
+	// Debug view: full visibility; the dither must not hide geometry the
+	// diagnosis needs to see.
+	[branch] if (StaticsDebugView != 0.0)
+		coverageAlpha = 1.0;
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
@@ -1337,6 +1356,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
 	}
 	float3 preLit = ambientPart + directDiffuse;
+
+	// Debug view: decision data as flat colors. Patch: R = trample,
+	// G = skin depth (packed by FinishPatchVertex). Skins: teal, brightness
+	// by up-facing coverage. Absent pixels = absent geometry.
+	[branch] if (StaticsDebugView != 0.0)
+	{
+#ifdef PATCH
+		preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
+#else
+		preLit = float3(0.1, 0.4 + 0.5 * saturate(input.Coverage), 0.9);
+#endif
+	}
 
 	float stochasticBlend = (screenNoise * screenNoise) < coverageAlpha ? 1.0 : 0.0;
 

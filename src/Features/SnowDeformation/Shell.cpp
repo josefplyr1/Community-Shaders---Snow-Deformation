@@ -266,6 +266,7 @@ void SnowDeformation::DrawShell()
 	cbData.TerrainTexelSize = kShellVertexSpacing;
 	cbData.TerrainDim = kShellWindowDim;
 	cbData.ShellDebugData = shellDataDebug;
+	cbData.StaticsDebugView = staticsDebugView ? 1.0f : 0.0f;
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
 	// Keep shader-side sampling math in small grid-local coordinates.

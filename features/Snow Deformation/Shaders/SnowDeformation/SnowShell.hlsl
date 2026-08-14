@@ -117,7 +117,9 @@ cbuffer ShellCB : register(b0)
 	float HasSnowHeight;
 	// Tessellated relief amplitude in world units (0 disables the path).
 	float SnowReliefDepth;
-	float2 padShell;
+	// Statics debug view: object snow renders decision variables as colors.
+	float StaticsDebugView;
+	float padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);

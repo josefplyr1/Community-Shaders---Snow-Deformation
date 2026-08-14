@@ -1390,6 +1390,8 @@
     "feature.snow_deformation.snow_texture_path_tooltip": "DDS path (relative to Data) for the shell's snow diffuse. Point it at the modlist's snow texture, then press Reload.",
     "feature.snow_deformation.stamp_radius": "Stamp Radius",
     "feature.snow_deformation.stamp_radius_tooltip": "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually.",
+    "feature.snow_deformation.statics_debug_view": "Object Snow Debug View",
+    "feature.snow_deformation.statics_debug_view_tooltip": "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent.",
     "feature.snow_deformation.trail_irregularity": "Trail Irregularity",
     "feature.snow_deformation.trail_irregularity_tooltip": "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles.",
     "feature.snow_deformation.trench_sharpness": "Trench Wall Sharpness",

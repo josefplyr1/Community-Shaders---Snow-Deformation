@@ -154,6 +154,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttPlane = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 
+			ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
+			if (auto _ttSdv = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
+
 			ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));

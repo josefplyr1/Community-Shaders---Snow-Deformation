@@ -321,7 +321,9 @@ public:
 		float HasSnowHeight;
 		/** @brief Tessellated relief amplitude in world units (0 disables the tessellated path). */
 		float SnowReliefDepth;
-		float2 padShell;
+		/** @brief Statics debug view: object snow renders decision variables as colors (patch: R=deform G=skinDepth/8; skin: teal tint by coverage), dithering disabled. */
+		float StaticsDebugView;
+		float padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -374,6 +376,9 @@ public:
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
 	bool shellDataDebug = false;
+
+	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
+	bool staticsDebugView = false;
 
 	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
