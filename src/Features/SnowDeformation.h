@@ -504,9 +504,9 @@ public:
 
 	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
 	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
-	/** @brief Frame latch for the once-per-frame atlas copy; index incremented in Prepass. */
+	/** @brief Frame index incremented in Prepass; per-slice latches so each light's slice is copied once per frame. */
 	uint64_t pointShadowFrameIndex = 0;
-	uint64_t pointShadowCaptureFrame = 0;
+	uint64_t pointShadowSliceFrame[kPointShadowMaxLights] = {};
 
 	/** @brief Called from State::Draw while the game renders a LOCAL light's shadow mask (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live (renderTarget reads -1 once the engine returns the maps) and PS t4 genuinely holds the local atlas. Copies the atlas once per frame and snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
 	void CapturePointShadowMask();
@@ -671,6 +671,10 @@ public:
 	ID3D11DomainShader* staticsDS = nullptr;
 	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
 	ID3D11VertexShader* patchVS = nullptr;
+	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
+	ID3D11VertexShader* patchTessVS = nullptr;
+	ID3D11HullShader* patchHS = nullptr;
+	ID3D11DomainShader* patchDS = nullptr;
 	ID3D11PixelShader* patchPS = nullptr;
 	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */
 	winrt::com_ptr<ID3DBlob> staticsVSBlob;

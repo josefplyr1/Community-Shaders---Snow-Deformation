@@ -125,7 +125,7 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr)
+static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr)
 {
 	struct ShaderInclude : public ID3DInclude
 	{
@@ -158,6 +158,7 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 	D3D_SHADER_MACRO macros[] = {
 		{ a_stageDefine, "" },
 		{ a_extraDefine ? a_extraDefine : "DX11", "" },
+		{ a_extraDefine2 ? a_extraDefine2 : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -248,6 +249,30 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
 				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
+		}
+	}
+	if (!patchTessVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_TESS"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchTessVS)))
+				Util::SetResourceName(patchTessVS, "SnowDeformation::TrenchPatchTessVS");
+		}
+	}
+	if (!patchHS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "hs_5_0", "HULLSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateHullShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchHS)))
+				Util::SetResourceName(patchHS, "SnowDeformation::TrenchPatchHS");
+		}
+	}
+	if (!patchDS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ds_5_0", "DOMAINSHADER", "PATCH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateDomainShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchDS)))
+				Util::SetResourceName(patchDS, "SnowDeformation::TrenchPatchDS");
 		}
 	}
 
@@ -948,7 +973,35 @@ void SnowDeformation::DrawCapturedStatics()
 	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
 	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 1.0f || settings.RoadMeshesDepth > 1.0f)) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
-		context->VSSetShader(patchVS, nullptr, 0);
+		// Tessellated patch: quad patches with trench-aware factors, so the
+		// object trenches pick up the same wall smoothness and rim relief as
+		// the landscape shell. Self-sufficient bindings, same rationale as
+		// the skins.
+		const bool tessellatePatch = settings.ReliefDepth > 0.01f && patchTessVS && patchHS && patchDS;
+		if (tessellatePatch) {
+			context->VSSetShader(patchTessVS, nullptr, 0);
+			context->HSSetShader(patchHS, nullptr, 0);
+			context->DSSetShader(patchDS, nullptr, 0);
+			ID3D11Buffer* cb0 = shellCB->CB();
+			context->HSSetConstantBuffers(0, 1, &cb0);
+			context->DSSetConstantBuffers(0, 1, &cb0);
+			ID3D11Buffer* patchCB1 = staticsCB->CB();
+			context->HSSetConstantBuffers(1, 1, &patchCB1);
+			context->DSSetConstantBuffers(1, 1, &patchCB1);
+			ID3D11ShaderResourceView* stageDeformSRV = GetDeformationSRV();
+			context->HSSetShaderResources(1, 1, &stageDeformSRV);
+			context->DSSetShaderResources(1, 1, &stageDeformSRV);
+			ID3D11ShaderResourceView* stageHeightSRV = shellSnowHeightSRV.get();
+			context->DSSetShaderResources(8, 1, &stageHeightSRV);
+			ID3D11ShaderResourceView* patchStageSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+			context->HSSetShaderResources(11, 2, patchStageSRVs);
+			context->DSSetShaderResources(11, 2, patchStageSRVs);
+			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
+			context->DSSetSamplers(0, 1, &dsSampler);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+		} else {
+			context->VSSetShader(patchVS, nullptr, 0);
+		}
 		context->PSSetShader(patchPS, nullptr, 0);
 
 		StaticsCB scb{};
@@ -966,7 +1019,14 @@ void SnowDeformation::DrawCapturedStatics()
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
-		context->Draw(256 * 256 * 6, 0);
+		if (tessellatePatch) {
+			context->Draw(256 * 256 * 4, 0);
+			context->HSSetShader(nullptr, nullptr, 0);
+			context->DSSetShader(nullptr, nullptr, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		} else {
+			context->Draw(256 * 256 * 6, 0);
+		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);

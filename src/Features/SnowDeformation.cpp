@@ -382,6 +382,15 @@ void SnowDeformation::ClearShaderCache()
 	if (patchVS)
 		patchVS->Release();
 	patchVS = nullptr;
+	if (patchTessVS)
+		patchTessVS->Release();
+	patchTessVS = nullptr;
+	if (patchHS)
+		patchHS->Release();
+	patchHS = nullptr;
+	if (patchDS)
+		patchDS->Release();
+	patchDS = nullptr;
 	if (patchPS)
 		patchPS->Release();
 	patchPS = nullptr;

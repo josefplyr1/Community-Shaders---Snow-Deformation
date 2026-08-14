@@ -261,7 +261,7 @@ Texture2D<float> ObjectTopRaw : register(t11);
 Texture2D<float> ObjectSkinDepth : register(t12);
 #endif
 
-#if defined(VSHADER) && defined(PATCH)
+#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
 // object edges; MAX both ignores them and keeps the patch on the highest
@@ -295,32 +295,33 @@ float PatchSkinDepth(float2 worldXY)
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
 
-// Trench patch (PATCH define): the landscape shell's recipe applied to objects; a dense
-// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
-// the top-down object height raster and carved per vertex by the
-// deformation map. real geometry: real silhouettes, floors that hold at
-// every camera angle, no parallax. The skin dithers itself away over
-// trails to hand off (see the PS).
-VS_OUTPUT main(uint vertexID : SV_VertexID)
+// Patch surface evaluation, shared by the legacy VS and the tessellated
+// domain shader. dense = tessellated call sites: generated vertices sit a
+// unit or two apart, so the trail-margin test uses a cheap 5-tap cross
+// instead of the 16-ray star the coarse 8-unit grid needs.
+struct PatchVertex
 {
-	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	uint quadIndex = vertexID / 6;
-	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kCorners[vertexID % 6];
-	// WorldRow0.xy carries the snapped patch origin (see the CPU fill).
-	float2 worldXY = WorldRow0.xy + gridXY * 8.0;
+	float3 WorldAbs;
+	float2 GridLocal;
+	float3 NormalWS;
+	float SkinDepth;
+	float Deform;
+	float Killed;
+};
+
+PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
+{
+	PatchVertex v;
+	v.WorldAbs = float3(worldXY, 0.0);
+	v.GridLocal = worldXY - GridOrigin;
+	v.NormalWS = float3(0.0, 0.0, 1.0);
+	v.SkinDepth = 0.0;
+	v.Deform = 0.0;
+	v.Killed = 1.0;
 
 	float top = PatchTop(worldXY);
 	float skinDepth = PatchSkinDepth(worldXY);
-	float2 gridLocal = worldXY - GridOrigin;
-
-	VS_OUTPUT vsout;
-	vsout.CurrentClip = float4(0.0, 0.0, 0.0, 1.0);
-	vsout.PreviousClip = float4(0.0, 0.0, 0.0, 1.0);
-	vsout.WorldPos = float3(0.0, 0.0, 0.0);
-	vsout.NormalWS = float3(0.0, 0.0, 1.0);
-	vsout.GridLocal = gridLocal;
-	vsout.Coverage = 1.0;
-	vsout.Flat = 0.0;
+	float2 gridLocal = v.GridLocal;
 
 	// Rim test: a vertex whose column towers over any neighbor column is
 	// the top edge of a tall structure (roof or wall rim); its triangles
@@ -349,57 +350,214 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// triangles at rock rims).
 	bool rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
 
-	// Neighborhood trample test: the patch lives only around trails,
-	// sampled with a 1.5-cell margin as a 16-ray star. At radius 12 the
-	// rays sit 22.5 degrees apart (~4.7-unit arc gaps), so even the
-	// thinnest trail we can produce (a small rolling prop) cannot slip
-	// between rays: every triangle touching a trench edge keeps ALL its
-	// vertices (cardinal-only taps dropped diagonal-neighbor vertices and
-	// shed triangles at trench edges).
-	static const float2 kAliveRays[16] = {
-		{ 12.0, 0.0 }, { 11.09, 4.59 }, { 8.49, 8.49 }, { 4.59, 11.09 },
-		{ 0.0, 12.0 }, { -4.59, 11.09 }, { -8.49, 8.49 }, { -11.09, 4.59 },
-		{ -12.0, 0.0 }, { -11.09, -4.59 }, { -8.49, -8.49 }, { -4.59, -11.09 },
-		{ 0.0, -12.0 }, { 4.59, -11.09 }, { 8.49, -8.49 }, { 11.09, -4.59 }
-	};
+	// Neighborhood trample test: the patch lives only around trails. The
+	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
+	// radius 12 the rays sit 22.5 degrees apart, so even the thinnest trail
+	// cannot slip between rays); dense tessellated vertices sit a unit or
+	// two apart and a 5-tap cross covers their footprint.
 	float aliveDeform = SampleDeformation(gridLocal);
-	[unroll] for (uint rayI = 0; rayI < 16; rayI++)
-		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
-
-	[branch] if (top < -50000.0 || skinDepth < 1.0 || rim || aliveDeform < 0.005)
-	{
-		float nan = asfloat(0x7fc00000);
-		vsout.Position = float4(nan, nan, nan, nan);
-		return vsout;
+	if (dense) {
+		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(6.0, 0.0)));
+		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(6.0, 0.0)));
+		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(0.0, 6.0)));
+		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(0.0, 6.0)));
+	} else {
+		static const float2 kAliveRays[16] = {
+			{ 12.0, 0.0 }, { 11.09, 4.59 }, { 8.49, 8.49 }, { 4.59, 11.09 },
+			{ 0.0, 12.0 }, { -4.59, 11.09 }, { -8.49, 8.49 }, { -11.09, 4.59 },
+			{ -12.0, 0.0 }, { -11.09, -4.59 }, { -8.49, -8.49 }, { -4.59, -11.09 },
+			{ 0.0, -12.0 }, { 4.59, -11.09 }, { 8.49, -8.49 }, { 11.09, -4.59 }
+		};
+		[unroll] for (uint rayI = 0; rayI < 16; rayI++)
+			aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
 	}
 
-	// Bicubic, like the landscape shell; rounded trench walls.
-	float deform = saturate(SampleDeformationSmooth(gridLocal));
+	// Single-return structure: an early return inside a [branch] trips
+	// fxc's X4000 and CI enforces zero warnings.
+	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && aliveDeform >= 0.005)
+	{
+		// Bicubic, like the landscape shell; rounded trench walls.
+		float deform = saturate(SampleDeformationSmooth(gridLocal));
 
-	// Full carve: unlike the landscape shell, object trenches keep no
-	// minimum snow floor (no terrain-window approximation holes to cover
-	// here), so the patch sinks to the object's own surface at full
-	// trample. Sunk slightly below the skin's nominal surface so the
-	// untrampled rim tucks under the skin instead of z-fighting it.
-	float depth = skinDepth * (1.0 - deform);
-	float3 worldAbs = float3(worldXY, top + depth - 0.4);
+		// Full carve: unlike the landscape shell, object trenches keep no
+		// minimum snow floor (no terrain-window approximation holes to cover
+		// here), so the patch sinks to the object's own surface at full
+		// trample. Sunk slightly below the skin's nominal surface so the
+		// untrampled rim tucks under the skin instead of z-fighting it.
+		float depth = skinDepth * (1.0 - deform);
+		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
-	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
-	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
-	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	vsout.WorldPos = rel;
-	// Carved-surface shading normal from the SMOOTH deformation gradient;
-	// the 8-unit geometry carries the shape, this rounds the shading with
-	// the same curve the depth uses.
-	float2 grad = float2(
-		SampleDeformationSmooth(gridLocal + float2(4.0, 0.0)) - SampleDeformationSmooth(gridLocal - float2(4.0, 0.0)),
-		SampleDeformationSmooth(gridLocal + float2(0.0, 4.0)) - SampleDeformationSmooth(gridLocal - float2(0.0, 4.0))) / 8.0;
-	vsout.NormalWS = normalize(float3(grad * skinDepth * 0.6, 1.0));
+		// Carved-surface shading normal from the SMOOTH deformation gradient;
+		// the geometry carries the shape, this rounds the shading with the
+		// same curve the depth uses.
+		float2 grad = float2(
+			SampleDeformationSmooth(gridLocal + float2(4.0, 0.0)) - SampleDeformationSmooth(gridLocal - float2(4.0, 0.0)),
+			SampleDeformationSmooth(gridLocal + float2(0.0, 4.0)) - SampleDeformationSmooth(gridLocal - float2(0.0, 4.0))) / 8.0;
+		v.NormalWS = normalize(float3(grad * skinDepth * 0.6, 1.0));
+		v.SkinDepth = skinDepth;
+		v.Deform = deform;
+		v.Killed = 0.0;
+	}
+	return v;
+}
+
+// Packs a finished patch vertex into the PS interpolants.
+VS_OUTPUT FinishPatchVertex(PatchVertex v)
+{
+	VS_OUTPUT vsout;
+	vsout.CurrentClip = float4(0.0, 0.0, 0.0, 1.0);
+	vsout.PreviousClip = float4(0.0, 0.0, 0.0, 1.0);
+	vsout.WorldPos = float3(0.0, 0.0, 0.0);
+	vsout.NormalWS = v.NormalWS;
+	vsout.GridLocal = v.GridLocal;
+	vsout.Coverage = 1.0;
+	vsout.Flat = 0.0;
+	[branch] if (v.Killed > 0.5)
+	{
+		// NaN position: the rasterizer culls every primitive touching it,
+		// the same kill the legacy grid used.
+		float nan = asfloat(0x7fc00000);
+		vsout.Position = float4(nan, nan, nan, nan);
+	}
+	else
+	{
+		float3 rel = v.WorldAbs - ShellCameraPosAdjust.xyz;
+		float3 prevRel = v.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
+		vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+		vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+		vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+		vsout.WorldPos = rel;
+	}
 	return vsout;
 }
-#elif defined(VSHADER)
+#endif
+
+#if defined(VSHADER) && defined(PATCH) && !defined(SNOW_TESS)
+// Trench patch (PATCH define): the landscape shell's recipe applied to objects; a dense
+// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
+// the top-down object height raster and carved per vertex by the
+// deformation map. real geometry: real silhouettes, floors that hold at
+// every camera angle, no parallax. The skin dithers itself away over
+// trails to hand off (see the PS).
+VS_OUTPUT main(uint vertexID : SV_VertexID)
+{
+	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = vertexID / 6;
+	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kCorners[vertexID % 6];
+	// WorldRow0.xy carries the snapped patch origin (see the CPU fill).
+	float2 worldXY = WorldRow0.xy + gridXY * 8.0;
+	return FinishPatchVertex(BuildPatchVertex(worldXY, false));
+}
+#elif defined(VSHADER) && defined(PATCH)
+// Tessellated patch control points: placement only.
+struct TessControlPointPatch
+{
+	float2 WorldXY : TEXCOORD0;
+};
+
+TessControlPointPatch main(uint vertexID : SV_VertexID)
+{
+	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = vertexID / 4;
+	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kPatchCorners[vertexID % 4];
+	TessControlPointPatch cp;
+	cp.WorldXY = WorldRow0.xy + gridXY * 8.0;
+	return cp;
+}
+#endif
+
+#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
+struct TessControlPointPatch
+{
+	float2 WorldXY : TEXCOORD0;
+};
+
+struct TessFactorsPatch
+{
+	float Edge[4] : SV_TessFactor;
+	float Inside[2] : SV_InsideTessFactor;
+};
+#endif
+
+#if defined(HULLSHADER) && defined(PATCH)
+// Same trench-aware quad factors as the landscape shell: the patch IS the
+// trench layer, so deformed edges get extended detail reach.
+float PatchEdgeTessFactor(float2 worldA, float2 worldB)
+{
+	float2 mid = 0.5 * (worldA + worldB);
+	float dist = length(mid - ShellCameraPosAdjust.xy);
+	float deform = max(max(SampleDeformation(worldA - GridOrigin), SampleDeformation(worldB - GridOrigin)), SampleDeformation(mid - GridOrigin));
+	float reach = 1600.0 * lerp(1.0, 3.0, smoothstep(0.02, 0.25, deform));
+	return clamp(reach / max(dist, 32.0), 1.0, 8.0);
+}
+
+TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
+{
+	TessFactorsPatch f;
+	// Cull patches with no live corner (off the footprint or untrampled);
+	// the cheap kill terms only, the domain shader kills per vertex.
+	bool anyLive = false;
+	[unroll] for (uint i = 0; i < 4; i++)
+	{
+		float2 w = patch[i].WorldXY;
+		if (PatchTop(w) > -50000.0 && PatchSkinDepth(w) >= 1.0)
+			anyLive = true;
+	}
+	if (!anyLive) {
+		f.Edge[0] = f.Edge[1] = f.Edge[2] = f.Edge[3] = 0.0;
+		f.Inside[0] = f.Inside[1] = 0.0;
+		return f;
+	}
+	f.Edge[0] = PatchEdgeTessFactor(patch[0].WorldXY, patch[3].WorldXY);
+	f.Edge[1] = PatchEdgeTessFactor(patch[0].WorldXY, patch[1].WorldXY);
+	f.Edge[2] = PatchEdgeTessFactor(patch[1].WorldXY, patch[2].WorldXY);
+	f.Edge[3] = PatchEdgeTessFactor(patch[3].WorldXY, patch[2].WorldXY);
+	float inner = max(max(f.Edge[0], f.Edge[1]), max(f.Edge[2], f.Edge[3]));
+	f.Inside[0] = inner;
+	f.Inside[1] = inner;
+	return f;
+}
+
+[domain("quad")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(4)]
+[patchconstantfunc("PatchConstants")]
+TessControlPointPatch main(InputPatch<TessControlPointPatch, 4> patch, uint i : SV_OutputControlPointID)
+{
+	return patch[i];
+}
+#endif
+
+#if defined(DOMAINSHADER) && defined(PATCH)
+[domain("quad")]
+VS_OUTPUT main(TessFactorsPatch factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPointPatch, 4> patch)
+{
+	float2 worldXY = lerp(
+		lerp(patch[0].WorldXY, patch[1].WorldXY, domainUV.x),
+		lerp(patch[3].WorldXY, patch[2].WorldXY, domainUV.x), domainUV.y);
+	PatchVertex v = BuildPatchVertex(worldXY, true);
+
+	// Relief on the uncarved rim, so the patch's snow lip matches the
+	// tessellated skin it tucks under; carved floors stay smooth.
+	[branch] if (v.Killed < 0.5 && HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
+	{
+		float camDist = length(v.WorldAbs - ShellCameraPosAdjust.xyz);
+		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
+		[branch] if (reliefFade > 0.001)
+		{
+			float2 snowUV = (SnowUVOffset + v.GridLocal) / kSnowUVTile;
+			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
+			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
+			v.WorldAbs.z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(v.SkinDepth / 6.0) * (1.0 - v.Deform);
+		}
+	}
+
+	return FinishPatchVertex(v);
+}
+#endif
+
+#if defined(VSHADER) && !defined(PATCH)
 // Skin surface evaluation, shared by the legacy VS and the tessellated
 // control-point VS: object -> world transform, pillow inflation and the
 // class/up-facing depth logic.
@@ -541,7 +699,7 @@ TessControlPoint main(VS_INPUT input)
 #endif
 #endif
 
-#if defined(HULLSHADER) || defined(DOMAINSHADER)
+#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
 struct TessControlPoint
 {
 	float3 WorldAbs : TEXCOORD0;
@@ -557,7 +715,7 @@ struct TessFactors
 };
 #endif
 
-#ifdef HULLSHADER
+#if defined(HULLSHADER) && !defined(PATCH)
 // Edge factor from edge length over a distance-scaled target triangle
 // size: object triangles vary from centimeters to many meters, so a pure
 // distance rule would waste factors on tiny triangles and starve huge
@@ -593,7 +751,7 @@ TessControlPoint main(InputPatch<TessControlPoint, 3> patch, uint i : SV_OutputC
 }
 #endif
 
-#ifdef DOMAINSHADER
+#if defined(DOMAINSHADER) && !defined(PATCH)
 [domain("tri")]
 VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const OutputPatch<TessControlPoint, 3> patch)
 {
