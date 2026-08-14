@@ -26,6 +26,75 @@ static constexpr float kCorpseStillSpeed = 0.5f;
 static constexpr float kStampDepthReference = 30.0f;
 static constexpr float kStampDepthScaleMin = 0.65f;
 static constexpr float kStampDepthScaleMax = 1.2f;
+// Per-foot stamping: a foot bone higher than this above the actor's ground
+// reference is in swing phase and does not stamp. Scaled by the bone's world
+// scale (giants, scaled races). The ankle joint sits ~8 units above the sole
+// on humanoids, so the band leaves ~7 units of stride tolerance.
+static constexpr float kFootPlantBand = 15.0f;
+// The toe bone marks the ball of the foot; the print capsule extends past it
+// by this fraction of the heel-toe length (the capsule end caps add the
+// rounded heel and toe tips on top).
+static constexpr float kFootToeExtend = 0.2f;
+// Print half-width as a fraction of the extended heel-toe length.
+static constexpr float kFootWidthRatio = 0.22f;
+// Circular print radius (at bone scale 1) for feet without a toe bone (hooves).
+static constexpr float kHoofRadius = 7.0f;
+// Below ~1.5 deformation texels a print aliases away; snow prints collapse
+// wider than the foot anyway.
+static constexpr float kMinFootStampRadius = 5.0f;
+// Trail keys for foot stamps set this bit so they never collide with Havok
+// shape traversal indices when an actor switches paths (death, fallback).
+static constexpr uint64_t kFootKeyBit = 0x8000;
+
+// Case-insensitive substring/prefix tests for skeleton bone names.
+static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
+{
+	const char* hay = a_name.c_str();
+	if (!hay)
+		return false;
+	const size_t needleLen = strlen(a_needle);
+	for (const char* p = hay; *p; ++p)
+		if (_strnicmp(p, a_needle, needleLen) == 0)
+			return true;
+	return false;
+}
+
+static bool NameStartsWith(const RE::BSFixedString& a_name, const char* a_prefix)
+{
+	const char* hay = a_name.c_str();
+	return hay && _strnicmp(hay, a_prefix, strlen(a_prefix)) == 0;
+}
+
+static RE::NiAVObject* FindToeBone(RE::NiNode* a_node)
+{
+	for (auto& child : a_node->GetChildren()) {
+		auto* node = child.get() ? child.get()->AsNode() : nullptr;
+		if (!node)
+			continue;
+		if (NameContains(node->name, "toe"))
+			return node;
+		if (auto* deeper = FindToeBone(node))
+			return deeper;
+	}
+	return nullptr;
+}
+
+// Bones only (NiNode): skinned geometry like "FemaleFeet" must not match.
+// CME/MOV prefixes are XPMSSE control nodes mirroring bone names.
+static void CollectFootBones(RE::NiAVObject* a_obj, std::vector<SnowDeformation::FootBones::Foot>& a_out)
+{
+	auto* node = a_obj ? a_obj->AsNode() : nullptr;
+	if (!node)
+		return;
+	const auto& name = node->name;
+	if (!NameStartsWith(name, "CME ") && !NameStartsWith(name, "MOV ") &&
+		(NameContains(name, "foot") || NameContains(name, "hoof") || NameContains(name, "paw"))) {
+		a_out.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
+		return;
+	}
+	for (auto& child : node->GetChildren())
+		CollectFootBones(child.get(), a_out);
+}
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
@@ -34,9 +103,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	std::unordered_map<uint64_t, float2> currentPositions;
 	corpseMoundSpheres.clear();
 
-	// Stamps come from actors' Havok collision shapes (Util::GetShapeBound
-	// over TraverseScenegraphCollision), so feet, legs and ragdoll limbs
-	// carve individually.
+	// Living actors stamp heel-to-toe capsules from skeleton foot bones
+	// (discrete alternating prints); skeletons without foot bones, corpses
+	// and props stamp their Havok collision shapes (Util::GetShapeBound over
+	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
 	auto addStamps = [&](RE::ActorHandle a_handle) {
 		if (stampCount >= kMaxStamps)
 			return;
@@ -63,6 +133,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (corpseRestStates.size() > 512 && !corpseRestStates.contains(formID))
 				corpseRestStates.clear();
 			rest = &corpseRestStates[formID];
+			// Corpses imprint with their collision shapes, not feet.
+			footBoneCache.erase(formID);
 		} else {
 			// Reanimated: back to living rules.
 			corpseRestStates.erase(formID);
@@ -88,6 +160,75 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float depthScale = std::clamp(
 			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
+
+		if (!isDead && settings.PerFootStamping) {
+			if (footBoneCache.size() > 512 && !footBoneCache.contains(formID))
+				footBoneCache.clear();
+			auto& cache = footBoneCache[formID];
+			if (cache.root.get() != root) {
+				cache.root = RE::NiPointer<RE::NiAVObject>(root);
+				cache.feet.clear();
+				CollectFootBones(root, cache.feet);
+			}
+			if (!cache.feet.empty()) {
+				uint32_t footIndex = 0;
+				for (const auto& foot : cache.feet) {
+					const uint32_t thisIndex = footIndex++;
+					if (stampCount >= kMaxStamps)
+						break;
+					auto* footNode = foot.node.get();
+					if (!footNode)
+						continue;
+					const auto& footWorld = footNode->world;
+					const float boneScale = footWorld.scale > 0.01f ? footWorld.scale : 1.0f;
+					// Absence from the trail map is the lifted latch: a foot in
+					// swing phase drops out, so its next plant starts a fresh
+					// discrete print instead of dragging from the previous one.
+					if (footWorld.translate.z - groundZ > kFootPlantBand * boneScale)
+						continue;
+
+					float2 heel = { footWorld.translate.x, footWorld.translate.y };
+					float2 tip = heel;
+					float radius = kHoofRadius * boneScale;
+					if (auto* toeNode = foot.toe.get()) {
+						const auto& toePos = toeNode->world.translate;
+						float2 dir = { toePos.x - heel.x, toePos.y - heel.y };
+						const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+						if (len > 2.0f) {
+							const float extend = 1.0f + kFootToeExtend;
+							tip = { heel.x + dir.x * extend, heel.y + dir.y * extend };
+							radius = len * extend * kFootWidthRatio;
+						}
+					}
+					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
+						kMinFootStampRadius, kMaxStampShapeRadius);
+
+					// A continuously planted heel can still slide (shuffles,
+					// slopes); the capsule then covers drag plus foot length.
+					float2 segStart = heel;
+					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
+					auto it = stampPrevPositions.find(key);
+					if (it != stampPrevPositions.end()) {
+						float2 delta = { heel.x - it->second.x, heel.y - it->second.y };
+						if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
+							segStart = it->second;
+					}
+					currentPositions[key] = heel;
+
+					float4 stamp{};
+					stamp.x = tip.x;
+					stamp.y = tip.y;
+					stamp.z = 1.0f;
+					stamp.w = radius;
+					perFrameData.Stamps[stampCount] = stamp;
+					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f, 0.0f };
+					stampCount++;
+				}
+				return;
+			}
+			// No recognizable foot bones: collision-shape fallback below.
+		}
+
 		uint32_t shapeIndex = 0;
 		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;

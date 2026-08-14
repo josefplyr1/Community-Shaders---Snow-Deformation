@@ -29,6 +29,14 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
+		ImGui::Checkbox(T(TKEY("per_foot_stamping"), "Per-Foot Stamping"), &settings.PerFootStamping);
+		if (auto _ttFoot = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Living actors stamp from their skeleton's foot bones: heel-to-toe prints that alternate with the stride instead of a swept trench. Creatures without recognizable foot bones fall back to collision shapes; corpses and props are unaffected."));
+		if (settings.PerFootStamping) {
+			ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
+			if (auto _ttFw = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
+		}
 		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
 		if (auto _ttSharp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));

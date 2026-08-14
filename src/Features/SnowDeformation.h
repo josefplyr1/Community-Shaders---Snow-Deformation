@@ -105,12 +105,28 @@ public:
 		std::array<std::array<uint8_t, 33 * 33>, kSnowClassCount> classWeights;
 	};
 
+	/** @brief Cached foot bones per living actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). */
+	struct FootBones
+	{
+		RE::NiPointer<RE::NiAVObject> root;
+		struct Foot
+		{
+			RE::NiPointer<RE::NiAVObject> node;
+			RE::NiPointer<RE::NiAVObject> toe;
+		};
+		std::vector<Foot> feet;
+	};
+
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
 		bool ShowDebugTexture = false;
 		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size). */
 		float StampRadius = 10.0f;
+		/** @brief Living actors stamp heel-to-toe capsules from skeleton foot bones (real alternating footprints). Skeletons without recognizable foot bones fall back to collision shapes; corpses and props always use shapes. */
+		bool PerFootStamping = true;
+		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
+		float FootPrintScale = 1.5f;
 		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
 		float TrenchWallSharpness = 50.0f;
 		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
@@ -782,6 +798,8 @@ public:
 protected:
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
+
+	std::unordered_map<uint32_t, FootBones> footBoneCache;
 
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;
