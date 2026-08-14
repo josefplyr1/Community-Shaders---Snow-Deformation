@@ -53,6 +53,9 @@ static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
 // Limb stamps below this carve fraction are invisible; skip them.
 static constexpr float kMinLimbCarve = 0.05f;
+// Prop stamps floor here so small dropped items (daggers, gems) stay visible
+// at deformation-texel resolution.
+static constexpr float kMinPropStampRadius = 5.0f;
 // Skeletons carry bones that are hidden or never composed for this race
 // (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
 // world transform at the origin. A capsule anchored on one combs a trench
@@ -182,6 +185,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
 	corpseMoundSpheres.clear();
+	stampStats = {};
 
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
 	// (discrete alternating prints); skeletons without foot bones, corpses
@@ -330,6 +334,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f, 0.0f };
 					stampCount++;
+					stampStats.feet++;
 				}
 			}
 
@@ -364,6 +369,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
 				stampCount++;
+				stampStats.limbs++;
 			}
 			return;
 		}
@@ -426,6 +432,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
 				stampCount++;
+				stampStats.limbs++;
 			}
 		}
 
@@ -489,6 +496,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 				stampCount++;
+				stampStats.shapes++;
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
@@ -552,6 +560,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// Gate on the 3D root's world transform, not the reference
 			// position: Havok moves the scene graph every frame while the
 			// reference position lags until the body settles.
+			stampStats.propRefs++;
 			const auto position = root->world.translate;
 			const uint32_t formID = a_ref->formID;
 			auto prevIt = propPrevPositions.find(formID);
@@ -563,6 +572,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// of resetting every frame.
 			const bool propMoved = position.GetSquaredDistance(prevIt->second) >= kStampMovementGate * kStampMovementGate;
 			currentPropPositions[formID] = propMoved ? position : prevIt->second;
+			if (propMoved)
+				stampStats.propMovers++;
 			if (!propMoved)
 				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
 			if (stampCount >= kMaxStamps)
@@ -585,7 +596,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						return RE::BSVisit::BSVisitControl::kStop;
 					if (centerPos.z - radius > groundZ + kStampSurfaceBand)
 						return RE::BSVisit::BSVisitControl::kContinue;
-					if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
+					// Small item shapes (daggers, gems) are real: floored at
+					// stamp time instead of skipped like actor shapes.
+					if (radius > kMaxStampShapeRadius)
 						return RE::BSVisit::BSVisitControl::kContinue;
 
 					// Props share the (formID << 16 | shape) keyspace with
@@ -605,10 +618,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = current.x;
 					stamp.y = current.y;
 					stamp.z = 1.0f;
-					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
+					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 					stampCount++;
+					stampStats.props++;
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
@@ -634,10 +648,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = current.x;
 					stamp.y = current.y;
 					stamp.z = 1.0f;
-					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
+					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
 					stampCount++;
+					stampStats.props++;
 				}
 			}
 			return RE::BSContainer::ForEachResult::kContinue;

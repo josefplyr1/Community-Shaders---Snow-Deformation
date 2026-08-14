@@ -212,6 +212,11 @@ void SnowDeformation::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
 
+			// Diagnostics: plain text by existing convention (no i18n).
+			ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (prop refs %u, movers %u)",
+				stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
+				stampStats.propRefs, stampStats.propMovers);
+
 			ImGui::TreePop();
 		}
 

@@ -808,6 +808,18 @@ protected:
 
 	std::unordered_map<uint32_t, StampBones> stampBoneCache;
 
+	/** @brief Per-frame stamp diagnostics for the menu (rebuilt in GatherStamps). */
+	struct StampStats
+	{
+		uint feet = 0;
+		uint limbs = 0;
+		uint shapes = 0;
+		uint props = 0;
+		uint propRefs = 0;
+		uint propMovers = 0;
+	};
+	StampStats stampStats;
+
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;
 
