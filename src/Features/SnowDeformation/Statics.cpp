@@ -971,7 +971,12 @@ void SnowDeformation::DrawCapturedStatics()
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through
 	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
-	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 1.0f || settings.RoadMeshesDepth > 1.0f)) {
+	// Per-class trenching emerges from the raster: each captured object
+	// writes its own class depth into the skin-depth raster, so a class at
+	// 0 produces dead patch texels for its objects only. The pass gate just
+	// needs ANY class active (the old > 1 threshold silently disabled the
+	// whole patch at depth 1).
+	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as

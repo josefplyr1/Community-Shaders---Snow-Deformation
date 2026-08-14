@@ -323,6 +323,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 
 	float top;
 	float skinDepth;
+	float skinEdgeMin;
 	[branch] if (dense)
 	{
 		// Tessellated vertices sample BETWEEN the 8-unit raster texels,
@@ -353,11 +354,14 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float s01 = PatchSkinDepth(base + float2(0.0, 8.0));
 		float s11 = PatchSkinDepth(base + float2(8.0, 8.0));
 		skinDepth = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		// Weakest lattice corner: a footprint boundary crossing this cell.
+		skinEdgeMin = min(min(s00, s10), min(s01, s11));
 	}
 	else
 	{
 		top = PatchTop(worldXY);
 		skinDepth = PatchSkinDepth(worldXY);
+		skinEdgeMin = skinDepth;
 	}
 	float2 gridLocal = v.GridLocal;
 
@@ -469,7 +473,9 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// The minimum floor tapers away where the raster data thins (the
 		// footprint boundary): held at full strength there, the raised
 		// floor ends in an 8-unit staircase rim along the footprint edge.
-		float floorMin = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(1.0, 4.0, skinDepth);
+		// The weakest-corner term catches boundaries that jump 0-to-full
+		// inside one texel, which the interpolated depth alone never sees.
+		float floorMin = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(1.0, 4.0, skinDepth) * smoothstep(0.25, 2.0, skinEdgeMin);
 		depth = max(depth, floorMin);
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
@@ -705,7 +711,10 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	// featureless flat sheet.
 	[flatten] if (isFlat > 0.5)
 		inflateWS = float3(0.0, 0.0, 1.0);
-	float depthBase = lerp(RoundedDepth, ObjectsDepth, isFlat);
+	// Minimum coat: at depth 0 the skin sits coincident with its own source
+	// mesh and z-fights itself invisible; the snow cover stays visible as a
+	// thin coat no matter the class sliders.
+	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), 1.0);
 
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 
