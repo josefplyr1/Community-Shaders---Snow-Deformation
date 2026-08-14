@@ -377,24 +377,30 @@ float CarveProfile(float deformation, float uncarvedDepth)
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
 // a deeper layer throws a taller berm. The shape input is the BLURRED
-// deformation (BermField), which extends the hill ~10 units beyond the
-// trail edge and rounds its crest instead of a knife along the stamp
-// falloff.
+// deformation (BermField): two sample rings reach ~24 units past the
+// trail edge, and the outer ring's small per-tap weight gives the hill
+// a long, gentle outer tail instead of a knife along the stamp falloff.
 static const float kBermAmp = 0.35;
 
 float BermShape(float bermDeform)
 {
-	return smoothstep(0.01, 0.25, bermDeform) * (1.0 - smoothstep(0.25, 0.8, bermDeform));
+	return smoothstep(0.005, 0.3, bermDeform) * (1.0 - smoothstep(0.3, 0.85, bermDeform));
 }
 
 float BermField(float2 gridLocal)
 {
+	// Inner ring on the axes, outer ring on the diagonals: quasi-isotropic
+	// at 9 taps.
 	float b = SampleDeformation(gridLocal);
-	b += SampleDeformation(gridLocal + float2(10.0, 0.0));
-	b += SampleDeformation(gridLocal - float2(10.0, 0.0));
-	b += SampleDeformation(gridLocal + float2(0.0, 10.0));
-	b += SampleDeformation(gridLocal - float2(0.0, 10.0));
-	return saturate(b * 0.2);
+	b += SampleDeformation(gridLocal + float2(12.0, 0.0));
+	b += SampleDeformation(gridLocal - float2(12.0, 0.0));
+	b += SampleDeformation(gridLocal + float2(0.0, 12.0));
+	b += SampleDeformation(gridLocal - float2(0.0, 12.0));
+	b += SampleDeformation(gridLocal + float2(17.0, 17.0));
+	b += SampleDeformation(gridLocal + float2(17.0, -17.0));
+	b += SampleDeformation(gridLocal + float2(-17.0, 17.0));
+	b += SampleDeformation(gridLocal + float2(-17.0, -17.0));
+	return saturate(b / 9.0);
 }
 
 // Class borders are hard edges in the baked depth/coverage data: a +30
@@ -967,12 +973,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 profileGrad = float2(
 		CarveProfile(saturate(dXP), pixelDepth) - CarveProfile(saturate(dXN), pixelDepth),
 		CarveProfile(saturate(dYP), pixelDepth) - CarveProfile(saturate(dYN), pixelDepth)) / (2.0 * step);
-	// Berm shading: analytic slope of the blurred berm field. The blur
-	// halves the field's gradient relative to the raw deformation taps.
-	float2 deformGradient = float2(dXP - dXN, dYP - dYN) / (2.0 * step);
-	float bermD = BermField(gridLocal);
-	float bermSlope = (BermShape(saturate(bermD + 0.05)) - BermShape(saturate(bermD - 0.05))) / 0.1;
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + deformGradient * 0.5 * bermSlope * pixelDepth * kBermAmp;
+	// Berm shading: numerical gradient of the SAME blurred hill the
+	// geometry displaces by, so the light/shadow break sits on the hill's
+	// true flanks (the analytic shortcut put the terminator on the crest).
+	float2 bermGrad = float2(
+		BermShape(BermField(gridLocal + float2(step, 0.0))) - BermShape(BermField(gridLocal - float2(step, 0.0))),
+		BermShape(BermField(gridLocal + float2(0.0, step))) - BermShape(BermField(gridLocal - float2(0.0, step)))) / (2.0 * step);
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * kBermAmp;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
