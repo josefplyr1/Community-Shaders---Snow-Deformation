@@ -5,7 +5,7 @@
 // refill is applied, and this frame's actor stamps are max-blended in.
 // Texel value = normalized depression depth (0 = untouched, 1 = ground).
 
-#define MAX_STAMPS 128
+#define MAX_STAMPS 256
 
 cbuffer PerFrame : register(b0)
 {

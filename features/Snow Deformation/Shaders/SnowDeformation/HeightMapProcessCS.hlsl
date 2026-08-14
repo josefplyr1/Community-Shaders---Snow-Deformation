@@ -41,7 +41,7 @@ cbuffer HeightProcessCB : register(b0)
 	uint CorpseSphereCount;  // resting dead actors' collision spheres
 	float CorpseMoundCap;    // max mound height above terrain
 	float2 padH;
-	float4 CorpseSpheres[32];  // xyz world center, w radius
+	float4 CorpseSpheres[64];  // xyz world center, w radius
 }
 
 #define MAX_EXCLUSIONS 96

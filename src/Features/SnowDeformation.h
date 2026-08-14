@@ -32,7 +32,7 @@ public:
 	// the resolution doubles with HighDetailTrenches, so trench detail coarsens
 	// with range and sharpens with the quality toggle.
 	static constexpr uint kTextureDim = 2048;
-	static constexpr uint kMaxStamps = 128;
+	static constexpr uint kMaxStamps = 256;
 
 	/** @brief Skyrim world units per meter (1 unit ≈ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -105,8 +105,8 @@ public:
 		std::array<std::array<uint8_t, 33 * 33>, kSnowClassCount> classWeights;
 	};
 
-	/** @brief Cached foot bones per living actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). */
-	struct FootBones
+	/** @brief Cached stamp bones per actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). Feet stamp heel-to-toe prints; limbs are joint-to-joint segments (nearest matched ancestor to bone) that carve when inside the snow layer. */
+	struct StampBones
 	{
 		RE::NiPointer<RE::NiAVObject> root;
 		struct Foot
@@ -115,6 +115,13 @@ public:
 			RE::NiPointer<RE::NiAVObject> toe;
 		};
 		std::vector<Foot> feet;
+		struct Limb
+		{
+			RE::NiPointer<RE::NiAVObject> a;
+			RE::NiPointer<RE::NiAVObject> b;
+			float radius;
+		};
+		std::vector<Limb> limbs;
 	};
 
 	struct Settings
@@ -637,7 +644,7 @@ public:
 	static constexpr float kObjectLiftCap = 150.0f;
 	/** @brief Corpse burial: mounds cap this far above the terrain (a mammoth makes a bump, not a hill), from at most this many resting collision spheres per frame. */
 	static constexpr float kCorpseMoundCap = 20.0f;
-	static constexpr uint kMaxCorpseSpheres = 32;
+	static constexpr uint kMaxCorpseSpheres = 64;
 
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
@@ -799,7 +806,7 @@ protected:
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
 
-	std::unordered_map<uint32_t, FootBones> footBoneCache;
+	std::unordered_map<uint32_t, StampBones> stampBoneCache;
 
 	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
 	std::vector<float4> corpseMoundSpheres;

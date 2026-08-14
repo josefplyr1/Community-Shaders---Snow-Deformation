@@ -31,7 +31,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
 		ImGui::Checkbox(T(TKEY("per_foot_stamping"), "Per-Foot Stamping"), &settings.PerFootStamping);
 		if (auto _ttFoot = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Living actors stamp from their skeleton's foot bones: heel-to-toe prints that alternate with the stride instead of a swept trench. Creatures without recognizable foot bones fall back to collision shapes; corpses and props are unaffected."));
+			ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Actors stamp from their skeleton bones: heel-to-toe foot prints that alternate with the stride, plus limb segments that carve as deep as they reach into the snow layer (wading legs connect the prints in deep snow). Corpses imprint body-shaped from the same bones. Skeletons without recognizable bones fall back to collision shapes; props are unaffected."));
 		if (settings.PerFootStamping) {
 			ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
 			if (auto _ttFw = Util::HoverTooltipWrapper())

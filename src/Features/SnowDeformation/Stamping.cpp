@@ -42,9 +42,12 @@ static constexpr float kHoofRadius = 7.0f;
 // Below ~1.5 deformation texels a print aliases away; snow prints collapse
 // wider than the foot anyway.
 static constexpr float kMinFootStampRadius = 5.0f;
-// Trail keys for foot stamps set this bit so they never collide with Havok
-// shape traversal indices when an actor switches paths (death, fallback).
+// Trail keys for foot/limb stamps set these bits so they never collide with
+// Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
+static constexpr uint64_t kLimbKeyBit = 0x4000;
+// Limb stamps below this carve fraction are invisible; skip them.
+static constexpr float kMinLimbCarve = 0.05f;
 
 // Case-insensitive substring/prefix tests for skeleton bone names.
 static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
@@ -79,21 +82,74 @@ static RE::NiAVObject* FindToeBone(RE::NiNode* a_node)
 	return nullptr;
 }
 
+// Body bones stamped as joint-to-joint segments. A bone node sits at its
+// PROXIMAL joint, so the segment (nearest matched ancestor -> bone) spans the
+// ancestor's flesh; min() of the two class radii keeps shoulder/hip joins from
+// inheriting torso thickness. Terminal classes get an extra sphere for the
+// mass beyond the last joint (skull, fingers).
+struct LimbSpec
+{
+	const char* substr;
+	float radius;
+	bool terminal;
+};
+static constexpr LimbSpec kLimbSpecs[] = {
+	{ "pelvis", 11.0f, true },
+	{ "spine", 10.0f, false },
+	{ "thigh", 7.0f, false },
+	{ "calf", 5.5f, false },
+	{ "upperarm", 5.5f, false },
+	{ "forearm", 4.5f, false },
+	{ "hand", 4.5f, true },
+	{ "neck", 5.0f, false },
+	{ "head", 8.5f, true },
+	{ "tail", 4.0f, false },
+};
+
+static const LimbSpec* MatchLimb(const RE::BSFixedString& a_name)
+{
+	for (const auto& spec : kLimbSpecs)
+		if (NameContains(a_name, spec.substr))
+			return &spec;
+	return nullptr;
+}
+
 // Bones only (NiNode): skinned geometry like "FemaleFeet" must not match.
-// CME/MOV prefixes are XPMSSE control nodes mirroring bone names.
-static void CollectFootBones(RE::NiAVObject* a_obj, std::vector<SnowDeformation::FootBones::Foot>& a_out)
+// CME/MOV prefixes are XPMSSE control nodes mirroring bone names; they fail
+// the match but stay on the recursion path (XPMSSE inserts them as parents
+// of the real bones).
+static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor, float a_ancestorRadius,
+	SnowDeformation::StampBones& a_out)
 {
 	auto* node = a_obj ? a_obj->AsNode() : nullptr;
 	if (!node)
 		return;
 	const auto& name = node->name;
-	if (!NameStartsWith(name, "CME ") && !NameStartsWith(name, "MOV ") &&
+	const bool controlNode = NameStartsWith(name, "CME ") || NameStartsWith(name, "MOV ");
+	if (!controlNode &&
 		(NameContains(name, "foot") || NameContains(name, "hoof") || NameContains(name, "paw"))) {
-		a_out.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
+		a_out.feet.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
+		// The shin: ancestor (calf) joint down to the ankle.
+		if (a_ancestor)
+			a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(a_ancestor), RE::NiPointer<RE::NiAVObject>(node),
+				a_ancestorRadius });
 		return;
 	}
+	if (!controlNode) {
+		if (const auto* spec = MatchLimb(name)) {
+			if (a_ancestor)
+				a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(a_ancestor), RE::NiPointer<RE::NiAVObject>(node),
+					std::min(a_ancestorRadius, spec->radius) });
+			if (spec->terminal || !a_ancestor)
+				a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(node),
+					spec->radius });
+			for (auto& child : node->GetChildren())
+				CollectStampBones(child.get(), node, spec->radius, a_out);
+			return;
+		}
+	}
 	for (auto& child : node->GetChildren())
-		CollectFootBones(child.get(), a_out);
+		CollectStampBones(child.get(), a_ancestor, a_ancestorRadius, a_out);
 }
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
@@ -133,8 +189,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (corpseRestStates.size() > 512 && !corpseRestStates.contains(formID))
 				corpseRestStates.clear();
 			rest = &corpseRestStates[formID];
-			// Corpses imprint with their collision shapes, not feet.
-			footBoneCache.erase(formID);
 		} else {
 			// Reanimated: back to living rules.
 			corpseRestStates.erase(formID);
@@ -157,22 +211,30 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (const auto tesGround = RE::TES::GetSingleton())
 				tesGround->GetLandHeight(position, groundZ);
 
-		const float depthScale = std::clamp(
-			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
+		const float nominalDepth = std::max(
+			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
+		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 
-		if (!isDead && settings.PerFootStamping) {
-			if (footBoneCache.size() > 512 && !footBoneCache.contains(formID))
-				footBoneCache.clear();
-			auto& cache = footBoneCache[formID];
+		StampBones* bones = nullptr;
+		if (settings.PerFootStamping) {
+			if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
+				stampBoneCache.clear();
+			auto& cache = stampBoneCache[formID];
 			if (cache.root.get() != root) {
 				cache.root = RE::NiPointer<RE::NiAVObject>(root);
 				cache.feet.clear();
-				CollectFootBones(root, cache.feet);
+				cache.limbs.clear();
+				CollectStampBones(root, nullptr, 0.0f, cache);
 			}
-			if (!cache.feet.empty()) {
+			if (!cache.feet.empty() || !cache.limbs.empty())
+				bones = &cache;
+		}
+
+		if (!isDead && bones) {
+			{
 				uint32_t footIndex = 0;
-				for (const auto& foot : cache.feet) {
+				for (const auto& foot : bones->feet) {
 					const uint32_t thisIndex = footIndex++;
 					if (stampCount >= kMaxStamps)
 						break;
@@ -224,13 +286,103 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f, 0.0f };
 					stampCount++;
 				}
-				return;
 			}
-			// No recognizable foot bones: collision-shape fallback below.
+
+			// Limb segments carve to the fraction their underside reaches
+			// into the nominal snow layer: wading legs connect the prints in
+			// deep snow, shallow snow keeps prints discrete. No trail latch:
+			// per-frame segment stamps stay continuous at any speed.
+			for (const auto& limb : bones->limbs) {
+				if (stampCount >= kMaxStamps)
+					break;
+				auto* nodeA = limb.a.get();
+				auto* nodeB = limb.b.get();
+				if (!nodeA || !nodeB)
+					continue;
+				const auto& aWorld = nodeA->world;
+				const auto& bWorld = nodeB->world;
+				const float boneScale = aWorld.scale > 0.01f ? aWorld.scale : 1.0f;
+				const float radius = std::clamp(limb.radius * boneScale * depthScale,
+					kMinStampShapeRadius, kMaxStampShapeRadius);
+				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
+				const float carve = std::min(1.0f - heightAbove / nominalDepth, 1.0f);
+				if (carve < kMinLimbCarve)
+					continue;
+
+				float4 stamp{};
+				stamp.x = bWorld.translate.x;
+				stamp.y = bWorld.translate.y;
+				stamp.z = carve;
+				stamp.w = radius;
+				perFrameData.Stamps[stampCount] = stamp;
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
+				stampCount++;
+			}
+			return;
+		}
+
+		// Corpses with cached bones imprint body-shaped: the same limb
+		// segments, run through the shape path's settle latch per limb.
+		const bool useCorpseBones = isDead && bones && !bones->limbs.empty();
+		if (useCorpseBones) {
+			uint32_t limbIndex = 0;
+			for (const auto& limb : bones->limbs) {
+				const uint32_t thisIndex = limbIndex++;
+				if (stampCount >= kMaxStamps)
+					break;
+				auto* nodeA = limb.a.get();
+				auto* nodeB = limb.b.get();
+				if (!nodeA || !nodeB)
+					continue;
+				const auto& aWorld = nodeA->world;
+				const auto& bWorld = nodeB->world;
+				const float boneScale = aWorld.scale > 0.01f ? aWorld.scale : 1.0f;
+				const float radius = std::clamp(limb.radius * boneScale * depthScale,
+					kMinStampShapeRadius, kMaxStampShapeRadius);
+				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;
+				const float halfLen = aWorld.translate.GetDistance(bWorld.translate) * 0.5f;
+
+				float2 current = { center.x, center.y };
+				const uint64_t key = (uint64_t(formID) << 16) | (kLimbKeyBit | uint64_t(thisIndex & 0x3FFF));
+				auto it = stampPrevPositions.find(key);
+				float sqDelta = 0.0f;
+				if (it != stampPrevPositions.end()) {
+					float2 delta = { current.x - it->second.x, current.y - it->second.y };
+					sqDelta = delta.x * delta.x + delta.y * delta.y;
+				}
+				const bool firstSight = (it == stampPrevPositions.end());
+				const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
+				anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
+				anyShapeWoken |= woken;
+				if (firstSight || (rest->settled && !woken)) {
+					// First sight baselines only; settled corpses keep the
+					// frozen anchor and feed the burial mounds instead.
+					currentPositions[key] = firstSight ? current : it->second;
+					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
+						corpseMoundSpheres.push_back({ center.x, center.y, center.z, halfLen + radius });
+					continue;
+				}
+				currentPositions[key] = current;
+
+				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
+				const float carve = std::clamp(1.0f - heightAbove / nominalDepth, 0.0f, 1.0f);
+				if (carve < kMinLimbCarve)
+					continue;
+
+				float4 stamp{};
+				stamp.x = bWorld.translate.x;
+				stamp.y = bWorld.translate.y;
+				stamp.z = carve;
+				stamp.w = radius;
+				perFrameData.Stamps[stampCount] = stamp;
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
+				stampCount++;
+			}
 		}
 
 		uint32_t shapeIndex = 0;
-		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+		if (!useCorpseBones)
+			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
 			if (Util::GetShapeBound(a_object, centerPos, radius)) {
