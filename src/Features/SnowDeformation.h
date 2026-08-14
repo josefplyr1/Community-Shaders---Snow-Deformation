@@ -710,7 +710,7 @@ public:
 
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
 
-	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger); campfires get noisy-edged full clears. Applied in CombineCS before the cone transform, so surrounding snow re-slopes into every clearing at the angle of repose. */
+	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger) that fade coverage to bare ground. Fires get noisy-edged MELT BASINS instead: the shell's depth thins toward a small floor that never vanishes and never sinks below terrain (negative values in the shelter-mask channel; see CombineCS). */
 	static constexpr uint kMaxExclusions = 96;
 	static constexpr float kDoorClearRadius = 110.0f;
 	static constexpr float kDoorForwardExtent = 70.0f;
@@ -721,7 +721,10 @@ public:
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
-	static constexpr float kFireClearRadius = 70.0f;
+	/** @brief Melt basin radius for ground-level fires. Generous: the shader's noisy edge and smoothstep put full melt only in the inner ~40%. */
+	static constexpr float kFireClearRadius = 110.0f;
+	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
+	static constexpr float kGroundFireBand = 40.0f;
 
 	/** @brief Layout must match DoorCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) ExclusionsCB

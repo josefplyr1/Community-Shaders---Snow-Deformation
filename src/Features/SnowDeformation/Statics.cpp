@@ -460,29 +460,37 @@ void SnowDeformation::RenderObjectHeightMap()
 						else if (auto* movable = base->As<RE::BGSMovableStatic>())
 							modelPath = movable->GetModel();
 						bool campfire = false;
-						bool brazier = false;
+						bool otherHeat = false;
 						if (modelPath && modelPath[0]) {
 							std::string lowered(modelPath);
 							std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 								[](unsigned char c) { return (char)std::tolower(c); });
-							campfire = lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos;
-							brazier = lowered.find("brazier") != std::string::npos;
+							// fxfire covers the vanilla flame ACTIs at campsites
+							// and hearths, so heat works without the Survival
+							// plugin present.
+							campfire = lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos ||
+						               lowered.find("fxfire") != std::string::npos;
+							otherHeat = lowered.find("brazier") != std::string::npos;
 						}
-						if (campfire) {
-							auto pos = a_ref->GetPosition();
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, kFireClearRadius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
-						} else if (brazier || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
-							// Braziers, sconces, forges: melt radius from the
-							// object's own footprint.
+						if (campfire || otherHeat || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
+							// Raised heat (brazier bowls, sconces, forges) melts
+							// a spot sized from the object's own footprint;
+							// GROUND-level fires melt a full campfire basin
+							// regardless of model size (the flame ACTI at a fire
+							// pit is tiny, and its origin can sit above the logs).
 							float halfExtent = 20.0f;
 							if (auto* bound = base->As<RE::TESBoundObject>()) {
 								float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
 								float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
 								halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
 							}
+							float radius = std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
 							auto pos = a_ref->GetPosition();
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax) },
-								{ 0.0f, 1.0f, 0.0f, 1.0f } });
+							float landZ = pos.z;
+							tes->GetLandHeight(pos, landZ);
+							if (campfire || pos.z - landZ < kGroundFireBand)
+								radius = std::max(radius, kFireClearRadius);
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});

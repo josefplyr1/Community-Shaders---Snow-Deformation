@@ -10,9 +10,11 @@
 //            show a structure floating well above the ground (walkways,
 //            roofs, bridges), the ground beneath is sheltered from snowfall
 //            (no snow under roofs).
-//            Exclusion zones (doors, campfires) clear the field and add to
-//            the mask before the cone runs, so surrounding snow re-slopes
-//            into every clearing at the angle of repose.
+//            Exclusion zones: doors clear the field and add to the mask
+//            (coverage fades to bare ground); fires write NEGATIVE mask
+//            values instead - a melt fraction that thins the shell's depth
+//            toward a floor, so fire pits keep a thin snow floor that never
+//            vanishes or sinks below terrain.
 // ConeCS     angle of repose: iterative min-plus cone transform. No point of
 //            the field may rise steeper than SlopePerUnit from its
 //            neighbors, so thin or tall features barely lift the field while
@@ -139,6 +141,7 @@ float SampleTerrainHeight(float2 worldXY)
 	float terrain = SampleTerrainHeight(worldXY);
 	float field = terrain;
 	float suppress = 0.0;
+	float melt = 0.0;
 
 	// Shelter only: grounded object tops deliberately do NOT raise the field
 	// (an object-top "blanket" lift was tried and removed; it produced seams
@@ -154,11 +157,13 @@ float SampleTerrainHeight(float2 worldXY)
 			suppress = 1.0;  // floating structure: bare ground beneath
 	}
 
-	// Exclusion zones: pull the field back to terrain and suppress snow.
-	// Doors use an ELLIPSE stretched along their facing axis (both ways;
-	// the recess and the doorstep); campfires use a noisy-edged circle for
-	// an organic melt ring. Z-gated (300) so upper-floor doors do not clear
-	// ground snow far below, while sunken cave entrances still qualify.
+	// Exclusion zones: pull the field back to terrain, then either suppress
+	// snow (doors: coverage fades to bare ground) or melt it (fires: depth
+	// thins toward a floor). Doors use an ELLIPSE stretched along their
+	// facing axis (both ways; the recess and the doorstep); fires use a
+	// noisy-edged circle for an organic melt basin. Z-gated (300) so
+	// upper-floor doors do not clear ground snow far below, while sunken
+	// cave entrances still qualify.
 	for (uint exclusionI = 0; exclusionI < ExclusionCount; exclusionI++) {
 		float3 center = ExclusionPosRadius[exclusionI].xyz;
 		float radius = ExclusionPosRadius[exclusionI].w;
@@ -166,7 +171,6 @@ float SampleTerrainHeight(float2 worldXY)
 		[branch] if (abs(center.z - terrain) < 300.0)
 		{
 			float2 d = worldXY - center.xy;
-			float influence;
 			[branch] if (dirExtType.w < 0.5)
 			{
 				// Door: symmetric ellipse, long axis along the facing, edge
@@ -178,17 +182,19 @@ float SampleTerrainHeight(float2 worldXY)
 				float b = radius * 0.85;
 				float e = sqrt((u * u) / (a * a) + (v * v) / (b * b));
 				e /= 0.8 + 0.4 * ExclusionNoise(worldXY);
-				influence = 1.0 - smoothstep(0.45, 1.0, e);
+				float influence = 1.0 - smoothstep(0.45, 1.0, e);
+				field = lerp(field, terrain, influence);
+				suppress = max(suppress, influence);
 			}
 			else
 			{
-				// Campfire: melt ring with a noise-perturbed edge.
+				// Fire: melt basin with a noise-perturbed edge.
 				float noisyRadius = radius * (0.8 + 0.5 * ExclusionNoise(worldXY));
 				float dist = length(d);
-				influence = 1.0 - smoothstep(noisyRadius * 0.4, noisyRadius, dist);
+				float influence = 1.0 - smoothstep(noisyRadius * 0.4, noisyRadius, dist);
+				field = lerp(field, terrain, influence);
+				melt = max(melt, influence);
 			}
-			field = lerp(field, terrain, influence);
-			suppress = max(suppress, influence);
 		}
 	}
 
@@ -228,7 +234,10 @@ float SampleTerrainHeight(float2 worldXY)
 	}
 
 	OutA[dtid.xy] = field;
-	OutB[dtid.xy] = suppress;
+	// One mask channel, two signals: positive = shelter/door suppression
+	// (coverage kill), negative = fire melt fraction (depth reduction).
+	// Shelter wins where both apply - bare ground has nothing to melt.
+	OutB[dtid.xy] = suppress > 0.001 ? suppress : -melt;
 }
 
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).

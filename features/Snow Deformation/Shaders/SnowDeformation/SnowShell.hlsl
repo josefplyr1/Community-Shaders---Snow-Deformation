@@ -315,9 +315,10 @@ float SampleObjectBottom(float2 worldXY)
 	float2 dims;
 	bool valid;
 	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	// t5 is a 0-1 suppression MASK: outside the window there is no shelter
-	// knowledge, so nothing is suppressed. (A raw-height sentinel here
-	// zeroed the VS coverage on every out-of-window vertex, flipping the
+	// t5 is a signed MASK: positive 0-1 = shelter/door suppression, negative
+	// = fire melt fraction. Outside the window there is no knowledge, so
+	// nothing is suppressed or melted. (A raw-height sentinel here zeroed
+	// the VS coverage on every out-of-window vertex, flipping the
 	// bare-submerge term on all distant shell geometry.)
 	if (!valid)
 		return 0.0;
@@ -384,6 +385,9 @@ float ShapeNoise(float2 p)
 // terrain window's bilinear approximation error so the real landscape mesh
 // never pokes through a floor.
 static const float kTrenchFloor = 5.0;
+// Melted fire basins keep this much snow above the terrain: the floor stays
+// shell snow, never bare ground, never below the terrain mesh.
+static const float kFireMeltFloor = 2.0;
 
 float Undulation(float2 worldXY)
 {
@@ -575,9 +579,15 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
 			terrainHeight = max(terrainHeight, field);
 		}
-		// Suppression is smooth (0-1), so sheltered clearings fade at their
-		// edges instead of cutting.
-		coverage *= saturate(1.0 - SampleObjectBottom(worldXY));
+		// The mask carries two signals. Positive = shelter/door suppression,
+		// smooth 0-1, so sheltered clearings fade at their edges instead of
+		// cutting. Negative = fire melt fraction: depth thins toward
+		// kFireMeltFloor (coverage untouched), so fire basins keep a thin
+		// snow floor instead of fading to bare ground.
+		float shelterMask = SampleObjectBottom(worldXY);
+		coverage *= saturate(1.0 - shelterMask);
+		float melt = saturate(-shelterMask);
+		rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
 	}
 
 	// Fade toward the grid boundary so the shell melts into the terrain.
