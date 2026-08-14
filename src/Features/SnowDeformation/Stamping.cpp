@@ -37,6 +37,9 @@ static constexpr float kFootPlantBand = 15.0f;
 // relative-to-lowest-foot (the lowest foot of a grounded skeleton is
 // planted). Tighter than the absolute band: swing feet pass close by.
 static constexpr float kFootRelativeBand = 10.0f;
+// Big feet articulate proportionally higher (and spread across slopes), so
+// the relative band also grows with the foot's own length.
+static constexpr float kFootRelativeLenFactor = 0.6f;
 // The toe bone marks the ball of the foot; the print capsule extends past it
 // by this fraction of the heel-toe length (the capsule end caps add the
 // rounded heel and toe tips on top).
@@ -301,21 +304,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (footWorld.scale < 0.01f)
 						continue;
 					const float boneScale = footWorld.scale;
-					// Absence from the trail map is the lifted latch: a foot in
-					// swing phase drops out, so its next plant starts a fresh
-					// discrete print instead of dragging from the previous one.
-					const float plantRef = groundRefStarved ? minFootZ : groundZ;
-					const float plantBand = (groundRefStarved ? kFootRelativeBand : kFootPlantBand) * boneScale;
-					if (footWorld.translate.z - plantRef > plantBand)
-						continue;
 
 					float2 heel = { footWorld.translate.x, footWorld.translate.y };
 					float2 tip = heel;
 					// Toeless feet size off the parent-bone distance: a fixed
 					// hoof radius turns mammoth feet into dots.
+					float footLen = 2.0f * kHoofRadius * boneScale;
 					float radius = kHoofRadius * boneScale;
-					if (auto* parentNode = footNode->parent)
-						radius = std::max(radius, 0.2f * footWorld.translate.GetDistance(parentNode->world.translate));
+					if (auto* parentNode = footNode->parent) {
+						const float parentDist = footWorld.translate.GetDistance(parentNode->world.translate);
+						footLen = std::max(footLen, parentDist);
+						radius = std::max(radius, 0.2f * parentDist);
+					}
 					if (auto* toeNode = foot.toe.get()) {
 						const auto& toePos = toeNode->world.translate;
 						float2 dir = { toePos.x - heel.x, toePos.y - heel.y };
@@ -324,10 +324,21 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 							const float extend = 1.0f + kFootToeExtend;
 							tip = { heel.x + dir.x * extend, heel.y + dir.y * extend };
 							radius = len * extend * kFootWidthRatio;
+							footLen = len * extend;
 						}
 					}
 					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
 						kMinFootStampRadius, kMaxStampShapeRadius);
+
+					// Absence from the trail map is the lifted latch: a foot in
+					// swing phase drops out, so its next plant starts a fresh
+					// discrete print instead of dragging from the previous one.
+					const float plantRef = groundRefStarved ? minFootZ : groundZ;
+					const float plantBand = groundRefStarved ?
+					                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
+					                            kFootPlantBand * boneScale;
+					if (footWorld.translate.z - plantRef > plantBand)
+						continue;
 
 					// A continuously planted heel can still slide (shuffles,
 					// slopes); the capsule then covers drag plus foot length.
