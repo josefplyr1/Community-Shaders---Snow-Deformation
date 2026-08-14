@@ -136,7 +136,9 @@ cbuffer StaticCB : register(b1)
 
 Texture2D<float> DeformationMap : register(t1);
 
-#ifdef PSHADER
+// The domain shader samples the displacement companion for tessellated
+// relief, so the material block is visible to it as well as the PS.
+#if defined(PSHADER) || defined(DOMAINSHADER)
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy taken before the shell pass (see SnowShell.hlsl).
@@ -144,7 +146,7 @@ Texture2D<float> SceneDepth : register(t3);
 // TruePBR snow companion maps (see SnowShell.hlsl); inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
-// Displacement companion (_p): parallax occlusion relief.
+// Displacement companion (_p): tessellated relief.
 Texture2D<float> SnowHeightMap : register(t8);
 // Depth after the terrain shell drew (its surface included); the skin's
 // view-ray reference for cross-fading into the landscape shell.
@@ -398,7 +400,20 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	return vsout;
 }
 #elif defined(VSHADER)
-VS_OUTPUT main(VS_INPUT input)
+// Skin surface evaluation, shared by the legacy VS and the tessellated
+// control-point VS: object -> world transform, pillow inflation and the
+// class/up-facing depth logic.
+struct SkinVertex
+{
+	float3 WorldAbs;
+	float3 NormalWS;
+	float3 InflateWS;
+	float Coverage;
+	float Flat;
+	float Depth;
+};
+
+SkinVertex BuildSkinVertex(VS_INPUT input)
 {
 	float3 posMS = input.Position.xyz;
 	float3 nrmMS = input.Normal.xyz * 2.0 - 1.0;
@@ -464,6 +479,148 @@ VS_OUTPUT main(VS_INPUT input)
 
 	worldAbs += inflateWS * depth;
 
+	SkinVertex v;
+	v.WorldAbs = worldAbs;
+	// Displaced snow shades by the smooth surface it forms, not the flat
+	// face beneath; undisplaced vertices keep the raw normal. flat meshes
+	// always shade by the raw normal; the smoothed-normal lerp stamps an
+	// identical shading gradient onto every plank instance.
+	v.NormalWS = isFlat > 0.5 ? nrmWS : normalize(lerp(nrmWS, inflateWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
+	v.InflateWS = inflateWS;
+	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
+	// pixel. Thresholding in the VS makes low-poly rocks flip whole FACES
+	// between snowed and bare (blocky patches); thresholding the interpolated
+	// normal instead varies smoothly across faces.
+	v.Coverage = nrmWS.z;
+	v.Flat = isFlat;
+	v.Depth = depth;
+	return v;
+}
+
+#if !defined(SNOW_TESS)
+VS_OUTPUT main(VS_INPUT input)
+{
+	SkinVertex v = BuildSkinVertex(input);
+
+	float3 rel = v.WorldAbs - ShellCameraPosAdjust.xyz;
+	float3 prevRel = v.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
+
+	VS_OUTPUT vsout;
+	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	vsout.WorldPos = rel;
+	vsout.NormalWS = v.NormalWS;
+	vsout.Coverage = v.Coverage;
+	vsout.GridLocal = v.WorldAbs.xy - GridOrigin;
+	vsout.Flat = v.Flat;
+	return vsout;
+}
+#else
+// Tessellated control-point VS: full skin evaluation, no clip transform;
+// the domain shader displaces and projects.
+struct TessControlPoint
+{
+	float3 WorldAbs : TEXCOORD0;
+	float3 NormalWS : TEXCOORD1;
+	float3 InflateWS : TEXCOORD2;
+	// x = raw-normal coverage, y = flat class, z = inflated depth.
+	float3 CoverageFlatDepth : TEXCOORD3;
+};
+
+TessControlPoint main(VS_INPUT input)
+{
+	SkinVertex v = BuildSkinVertex(input);
+	TessControlPoint cp;
+	cp.WorldAbs = v.WorldAbs;
+	cp.NormalWS = v.NormalWS;
+	cp.InflateWS = v.InflateWS;
+	cp.CoverageFlatDepth = float3(v.Coverage, v.Flat, v.Depth);
+	return cp;
+}
+#endif
+#endif
+
+#if defined(HULLSHADER) || defined(DOMAINSHADER)
+struct TessControlPoint
+{
+	float3 WorldAbs : TEXCOORD0;
+	float3 NormalWS : TEXCOORD1;
+	float3 InflateWS : TEXCOORD2;
+	float3 CoverageFlatDepth : TEXCOORD3;
+};
+
+struct TessFactors
+{
+	float Edge[3] : SV_TessFactor;
+	float Inside : SV_InsideTessFactor;
+};
+#endif
+
+#ifdef HULLSHADER
+// Edge factor from edge length over a distance-scaled target triangle
+// size: object triangles vary from centimeters to many meters, so a pure
+// distance rule would waste factors on tiny triangles and starve huge
+// ones. Shared mesh edges carry identical control points on both sides,
+// so the symmetric rule is crack-free.
+float EdgeTessFactor(float3 worldA, float3 worldB)
+{
+	float3 mid = 0.5 * (worldA + worldB);
+	float dist = length(mid - ShellCameraPosAdjust.xyz);
+	float targetLen = max(4.0, dist * 0.01);
+	return clamp(length(worldA - worldB) / targetLen, 1.0, 16.0);
+}
+
+TessFactors PatchConstants(InputPatch<TessControlPoint, 3> patch)
+{
+	TessFactors f;
+	// Tri-domain edge order: edge i is opposite control point i.
+	f.Edge[0] = EdgeTessFactor(patch[1].WorldAbs, patch[2].WorldAbs);
+	f.Edge[1] = EdgeTessFactor(patch[2].WorldAbs, patch[0].WorldAbs);
+	f.Edge[2] = EdgeTessFactor(patch[0].WorldAbs, patch[1].WorldAbs);
+	f.Inside = max(max(f.Edge[0], f.Edge[1]), f.Edge[2]);
+	return f;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("PatchConstants")]
+TessControlPoint main(InputPatch<TessControlPoint, 3> patch, uint i : SV_OutputControlPointID)
+{
+	return patch[i];
+}
+#endif
+
+#ifdef DOMAINSHADER
+[domain("tri")]
+VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const OutputPatch<TessControlPoint, 3> patch)
+{
+	float3 worldAbs = patch[0].WorldAbs * bary.x + patch[1].WorldAbs * bary.y + patch[2].WorldAbs * bary.z;
+	float3 normalWS = normalize(patch[0].NormalWS * bary.x + patch[1].NormalWS * bary.y + patch[2].NormalWS * bary.z);
+	float3 inflateWS = normalize(patch[0].InflateWS * bary.x + patch[1].InflateWS * bary.y + patch[2].InflateWS * bary.z);
+	float3 cfd = patch[0].CoverageFlatDepth * bary.x + patch[1].CoverageFlatDepth * bary.y + patch[2].CoverageFlatDepth * bary.z;
+	float2 gridLocal = worldAbs.xy - GridOrigin;
+
+	// Relief from the displacement map, same recipe as the landscape shell:
+	// top-projected snow UV, gated by the inflated depth (bare and thin
+	// spots stay put), carved smooth by deformation, biased to up-facing
+	// surfaces, faded with the micro-normal distance band.
+	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
+	{
+		float camDist = length(worldAbs - ShellCameraPosAdjust.xyz);
+		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
+		[branch] if (reliefFade > 0.001 && cfd.z > 0.5)
+		{
+			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
+			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
+			float carve = saturate(SampleDeformation(gridLocal));
+			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(cfd.z / 6.0) * (1.0 - carve) * saturate(inflateWS.z));
+		}
+	}
+
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
 
@@ -472,18 +629,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	// Displaced snow shades by the smooth surface it forms, not the flat
-	// face beneath; undisplaced vertices keep the raw normal. flat meshes
-	// always shade by the raw normal; the smoothed-normal lerp stamps an
-	// identical shading gradient onto every plank instance.
-	vsout.NormalWS = isFlat > 0.5 ? nrmWS : normalize(lerp(nrmWS, inflateWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
-	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
-	// pixel. Thresholding in the VS makes low-poly rocks flip whole FACES
-	// between snowed and bare (blocky patches); thresholding the interpolated
-	// normal instead varies smoothly across faces.
-	vsout.Coverage = nrmWS.z;
+	vsout.NormalWS = normalWS;
+	vsout.Coverage = cfd.x;
 	vsout.GridLocal = gridLocal;
-	vsout.Flat = isFlat;
+	vsout.Flat = cfd.y;
 	return vsout;
 }
 #endif

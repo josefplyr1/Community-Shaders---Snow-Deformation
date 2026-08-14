@@ -568,10 +568,11 @@ void SnowDeformation::DrawShell()
 	// Inherits this pass's bindings (b0, t0-t9, s0, b4-b6, RTs, depth).
 	DrawCapturedStatics();
 
-	// Restore everything we changed.
-	if (tessellate) {
-		// The DS held our field textures; the deformation map is UAV-written
-		// next Prepass and must not linger on a DS slot.
+	// Restore everything we changed. DS/HS state is cleared unconditionally:
+	// the statics pass binds its own DS resources even when the landscape
+	// tessellation is unavailable, and the deformation map is UAV-written
+	// next Prepass so it must not linger on a DS slot.
+	{
 		ID3D11ShaderResourceView* nullDSSRVs[13] = {};
 		context->DSSetShaderResources(0, 13, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;

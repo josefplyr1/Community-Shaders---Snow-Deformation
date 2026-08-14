@@ -367,6 +367,15 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsVS)
 		staticsVS->Release();
 	staticsVS = nullptr;
+	if (staticsTessVS)
+		staticsTessVS->Release();
+	staticsTessVS = nullptr;
+	if (staticsHS)
+		staticsHS->Release();
+	staticsHS = nullptr;
+	if (staticsDS)
+		staticsDS->Release();
+	staticsDS = nullptr;
 	if (staticsPS)
 		staticsPS->Release();
 	staticsPS = nullptr;

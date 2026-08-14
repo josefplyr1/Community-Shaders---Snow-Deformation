@@ -197,6 +197,32 @@ bool SnowDeformation::EnsureStaticsShaders()
 			}
 		}
 	}
+	// Tessellated skin stages: optional (legacy path remains the fallback),
+	// so failures here never set staticsShadersFailed.
+	if (!staticsTessVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SNOW_TESS"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsTessVS)))
+				Util::SetResourceName(staticsTessVS, "SnowDeformation::StaticsShellTessVS");
+		}
+	}
+	if (!staticsHS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "hs_5_0", "HULLSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateHullShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsHS)))
+				Util::SetResourceName(staticsHS, "SnowDeformation::StaticsShellHS");
+		}
+	}
+	if (!staticsDS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ds_5_0", "DOMAINSHADER"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateDomainShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsDS)))
+				Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
+		}
+	}
 	if (!staticsPS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
@@ -756,11 +782,34 @@ void SnowDeformation::DrawCapturedStatics()
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
 
-	context->VSSetShader(staticsVS, nullptr, 0);
 	context->PSSetShader(staticsPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
+
+	// Tessellated skins: 3-control-point patches with the same index data;
+	// the hull shader subdivides by edge length and distance, the domain
+	// shader adds displacement-map relief along the inflate normal. The DS
+	// binds its needs directly so the path is self-sufficient even if the
+	// landscape shell's tessellation is unavailable.
+	const bool tessellateSkins = settings.ReliefDepth > 0.01f && staticsTessVS && staticsHS && staticsDS;
+	if (tessellateSkins) {
+		context->VSSetShader(staticsTessVS, nullptr, 0);
+		context->HSSetShader(staticsHS, nullptr, 0);
+		context->DSSetShader(staticsDS, nullptr, 0);
+		ID3D11Buffer* cb0 = shellCB->CB();
+		context->HSSetConstantBuffers(0, 1, &cb0);
+		context->DSSetConstantBuffers(0, 1, &cb0);
+		ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
+		context->DSSetShaderResources(1, 1, &dsDeformSRV);
+		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
+		context->DSSetShaderResources(8, 1, &dsHeightSRV);
+		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
+		context->DSSetSamplers(0, 1, &dsSampler);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+	} else {
+		context->VSSetShader(staticsVS, nullptr, 0);
+	}
 
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
@@ -876,6 +925,13 @@ void SnowDeformation::DrawCapturedStatics()
 		context->DrawIndexed(indexCount, 0, 0);
 	}
 	globals::profiler->EndPass();
+
+	// The trench patch and everything after run the normal pipeline.
+	if (tessellateSkins) {
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	}
 
 	// Leave IA clean, mirroring DrawShell's convention (game state manager
 	// rebinds via DIRTY_RENDERTARGET).

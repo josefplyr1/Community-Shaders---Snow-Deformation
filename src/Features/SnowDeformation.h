@@ -150,7 +150,7 @@ public:
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
 		/** @brief Tessellated relief depth in world units: near-camera geometric relief from the PBR displacement map. 0 disables the tessellated path entirely. */
-		float ReliefDepth = 4.0f;
+		float ReliefDepth = 12.0f;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -665,6 +665,10 @@ public:
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
+	/** @brief Tessellated skin stages (optional; legacy path is the fallback): control-point VS, hull (edge-length/distance factors) and domain (displacement-map relief along the inflate normal). */
+	ID3D11VertexShader* staticsTessVS = nullptr;
+	ID3D11HullShader* staticsHS = nullptr;
+	ID3D11DomainShader* staticsDS = nullptr;
 	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
 	ID3D11VertexShader* patchVS = nullptr;
 	ID3D11PixelShader* patchPS = nullptr;
