@@ -636,26 +636,11 @@ public:
 	bool heightMapValid = false;
 	float2 heightWindowCenter = { 0, 0 };
 
-	// Fine height tier for the trench patch: 1-unit texels over exactly the
-	// patch's +-1024 range, so the top sheet resolves object edges without
-	// paying full-window resolution (a global raster this fine would cost
-	// ~0.5 GB). Tops scroll like the coarse pair; skin depth re-rasters per
-	// frame. The shell and every other consumer keep the coarse raster.
-	static constexpr uint kFineHeightMapDim = 2048;
-	static constexpr float kFineHeightMapHalfExtent = 1024.0f;
-	Texture2D* fineTopRaw[2] = { nullptr, nullptr };
-	Texture2D* fineSkinDepth = nullptr;
-	uint fineCurrent = 0;
-	bool fineMapValid = false;
-	float2 fineWindowCenter = { 0, 0 };
-
 	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
-	/** @brief Single-channel scroll for the fine tier (tops only). */
-	ID3D11ComputeShader* heightScrollOneCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;
 

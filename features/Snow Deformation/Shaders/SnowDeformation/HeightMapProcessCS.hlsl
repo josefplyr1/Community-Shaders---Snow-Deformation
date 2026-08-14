@@ -127,24 +127,6 @@ float SampleTerrainHeight(float2 worldXY)
 	OutB[dtid.xy] = bottom;
 }
 
-// Single-channel scroll for the fine height tier (patch top sheet): tops
-// only, no bottoms pair to carry.
-[numthreads(8, 8, 1)] void ScrollOneCS(uint3 dtid
-									   : SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-
-	float top = -100000.0;
-	if (!ClearAll) {
-		int2 src = int2(dtid.xy) + ScrollDelta;
-		if (all(src >= 0) && all(src < int2(dims)))
-			top = InA[uint2(src)] - GhostDecay;
-	}
-	OutA[dtid.xy] = top;
-}
-
 // InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
 									 : SV_DispatchThreadID) {

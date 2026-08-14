@@ -425,9 +425,6 @@ void SnowDeformation::ClearShaderCache()
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;
-	if (heightScrollOneCS)
-		heightScrollOneCS->Release();
-	heightScrollOneCS = nullptr;
 	if (heightCombineCS)
 		heightCombineCS->Release();
 	heightCombineCS = nullptr;
@@ -564,9 +561,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	const uint64_t heights = TextureBytes(texOf(heightTopRaw[0])) + TextureBytes(texOf(heightTopRaw[1])) +
 	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
 	                         TextureBytes(texOf(heightTopFiltered)) + TextureBytes(texOf(heightBottomFiltered)) +
-	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth)) +
-	                         TextureBytes(texOf(fineTopRaw[0])) + TextureBytes(texOf(fineTopRaw[1])) +
-	                         TextureBytes(texOf(fineSkinDepth));
+	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
 	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get()) + TextureBytes(shadowEsramCopyTex.get());
 	const uint64_t pointCopy = TextureBytes(pointShadowAtlasCopyTex.get());
 	const uint64_t sceneCopies = TextureBytes(shellDepthCopyTex.get());
