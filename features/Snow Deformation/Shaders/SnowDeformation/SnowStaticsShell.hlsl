@@ -387,6 +387,16 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// boulder crests do not lose their trench-edge vertices (small notch
 	// triangles at rock rims).
 	bool rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
+	// Facade slope kill: tall walls whose raster drop is SMEARED over
+	// several texels evade the single-step rim threshold (the debug view
+	// showed the patch draped down building walls as sawtooth sheets). A
+	// steep central gradient marks them regardless of how the drop is
+	// distributed; trench-bearing boulder tops stay under the threshold.
+	[flatten] if (topXP > -50000.0 && topXN > -50000.0 && topYP > -50000.0 && topYN > -50000.0)
+	{
+		float2 topGrad = float2(topXP - topXN, topYP - topYN) / 16.0;
+		rim = rim || length(topGrad) > 1.2;
+	}
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
@@ -417,21 +427,18 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// Bicubic, like the landscape shell; rounded trench walls.
 		float deform = saturate(SampleDeformationSmooth(gridLocal));
 
-		// Full carve: unlike the landscape shell, object trenches keep no
-		// minimum snow floor (no terrain-window approximation holes to cover
-		// here), so the patch sinks to the object's own surface at full
-		// trample. Sunk slightly below the skin's nominal surface so the
-		// untrampled rim tucks under the skin instead of z-fighting it.
-		// The tuck is depth-precision-aware: a fixed 0.4 vanishes into
-		// z-buffer precision at grazing angles and range. The extra sink
-		// engages ONLY where the remaining snow depth is already inside the
-		// precision band (fully trampled floors hugging the object); real
-		// snow floors keep their exact legacy position.
+		// Minimum snow floor: the legacy full-carve sank trampled floors
+		// under the object, which the coarse 8-unit grid's interpolation
+		// happened to hide; dense tessellated evaluation honors the sink
+		// exactly and erased whole road-trail floors. Trampled floors now
+		// hold a thin snow cover ABOVE the object, precision-padded with
+		// distance so neither side ever z-fights; exposing the object
+		// through worn floors is the Trench Floor See-Through slider's job.
 		float depth = skinDepth * (1.0 - deform);
 		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
-		float precisionPad = camDist * 0.004;
-		float extra = max(0.0, precisionPad - depth);
-		v.WorldAbs = float3(worldXY, top + depth - 0.4 - extra);
+		float floorMin = min(skinDepth, 0.8 + camDist * 0.004);
+		depth = max(depth, floorMin);
+		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
 		// Carved-surface shading normal from the SMOOTH deformation gradient;
 		// the geometry carries the shape, this rounds the shading with the
