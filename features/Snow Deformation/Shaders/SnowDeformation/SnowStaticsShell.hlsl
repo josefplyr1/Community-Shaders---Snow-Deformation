@@ -394,8 +394,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// distributed; trench-bearing boulder tops stay under the threshold.
 	[flatten] if (topXP > -50000.0 && topXN > -50000.0 && topYP > -50000.0 && topYN > -50000.0)
 	{
+		// 0.5 (~27 degrees): the whole smeared flank dies, not just its
+		// steep core; the surviving band was the jagged wall-base sheath.
+		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
+		// under this; steep flanks belong to the skin.
 		float2 topGrad = float2(topXP - topXN, topYP - topYN) / 16.0;
-		rim = rim || length(topGrad) > 1.2;
+		rim = rim || length(topGrad) > 0.5;
 	}
 	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
 	// still samples tops partway up the smeared ramp and rises as a jagged
