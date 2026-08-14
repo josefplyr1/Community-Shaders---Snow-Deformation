@@ -7,6 +7,12 @@
 
 #define MAX_STAMPS 256
 
+// Upwind supply sample distance for wind-biased refill, in texels.
+#define DRIFT_FETCH_TEXELS 3.0
+// Refill multiplier at full supply and full wind; interior texels with a
+// carved upwind neighbor stall, so the average fill rate stays near uniform.
+#define DRIFT_GAIN 2.0
+
 cbuffer PerFrame : register(b0)
 {
 	float2 WindowOrigin;
@@ -22,7 +28,9 @@ cbuffer PerFrame : register(b0)
 	float StampFalloffStart;
 	// Fraction-of-radius noise wobbling each stamp's edge.
 	float StampNoiseAmp;
-	float2 padStamp;
+	// Unit wind direction (world XY, blowing toward) times wind strength
+	// 0-1; zero = uniform refill.
+	float2 WindBias;
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth, w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule segment start)
@@ -71,7 +79,23 @@ float StampNoise(float2 p)
 			deformation = PreviousDeformation[uint2(sourcePixel)];
 		}
 
-		deformation = max(deformation - RefillAmount, 0.0);
+		// Wind-biased refill: recovery scales with the intact snow a few
+		// texels upwind (the drift supply), so carved areas fill from their
+		// upwind edge and the fill front marches downwind. Calm weather
+		// falls back to uniform refill.
+		float refill = RefillAmount;
+		float windStrength = length(WindBias);
+		[branch] if (refill > 0.0 && windStrength > 0.001)
+		{
+			int2 upwindPixel = sourcePixel - int2(round(WindBias / windStrength * DRIFT_FETCH_TEXELS));
+			float upwindDeformation = deformation;
+			[branch] if (all(upwindPixel >= 0) && all(upwindPixel < int2(dims)))
+			{
+				upwindDeformation = PreviousDeformation[uint2(upwindPixel)];
+			}
+			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
+		}
+		deformation = max(deformation - refill, 0.0);
 	}
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;

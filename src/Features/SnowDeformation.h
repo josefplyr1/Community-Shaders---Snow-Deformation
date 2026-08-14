@@ -231,7 +231,8 @@ public:
 		float StampFalloffStart;
 		/** @brief Fraction-of-radius noise wobbling each stamp's edge. */
 		float StampNoiseAmp;
-		float2 padStamp;
+		/** @brief Unit wind direction (world XY, blowing toward) times wind strength 0-1; zero = uniform refill. */
+		float2 WindBias;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */

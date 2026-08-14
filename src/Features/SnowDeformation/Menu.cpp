@@ -2,6 +2,7 @@
 
 #include <imgui_stdlib.h>
 
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.snow_deformation."
@@ -212,6 +213,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
 		ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
 			settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");
+		if (auto* sky = RE::Sky::GetSingleton())
+			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
+				Util::Units::RadiansToDegrees(sky->windAngle));
 		ImGui::Text("Exclusion zones: %u (Survival heat list %s)", statExclusionCount,
 			survivalHeatSources ? "found" : "absent");
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",

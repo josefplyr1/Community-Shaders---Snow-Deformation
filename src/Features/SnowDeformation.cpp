@@ -326,6 +326,14 @@ void SnowDeformation::Prepass()
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
 	perFrameData.RefillAmount = deltaTime / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
 
+	// Wind bias for the refill: the engine's live blended wind (derived from
+	// the weather records), so drifting accumulation tracks transitions.
+	perFrameData.WindBias = { 0.0f, 0.0f };
+	if (auto* sky = RE::Sky::GetSingleton()) {
+		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
+		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
+	}
+
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
