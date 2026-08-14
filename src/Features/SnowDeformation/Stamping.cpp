@@ -1,5 +1,6 @@
 #include "Features/SnowDeformation.h"
 
+#include "Globals.h"
 #include "Utils/ActorUtils.h"
 #include "Utils/Game.h"
 
@@ -56,6 +57,11 @@ static constexpr float kMinLimbCarve = 0.05f;
 // Prop stamps floor here so small dropped items (daggers, gems) stay visible
 // at deformation-texel resolution.
 static constexpr float kMinPropStampRadius = 5.0f;
+// Props descending faster than this are in flight and do not stamp. Support
+// is judged by fall speed, not land height: props resting on statics
+// (roads, bridges, snow drifts) sit far above the land, and the old
+// land-height band starved their stamps there.
+static constexpr float kPropFallSpeed = 300.0f;
 // Skeletons carry bones that are hidden or never composed for this race
 // (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
 // world transform at the origin. A capsule anchored on one combs a trench
@@ -579,9 +585,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (stampCount >= kMaxStamps)
 				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors
 
-			// Ground = land height, so mid-air flight paths do not carve.
+			// Fast-falling props must not carve under their arc; supported
+			// ones stamp wherever they lie, including on top of statics.
+			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
+			if ((position.z - prevIt->second.z) / dt < -kPropFallSpeed)
+				return RE::BSContainer::ForEachResult::kContinue;
+
 			float groundZ = position.z;
 			tes->GetLandHeight(position, groundZ);
+			// Band reference: whichever is higher, the land or the prop's own
+			// root — elevated resting surfaces keep their stamps.
+			const float supportZ = std::max(groundZ, position.z);
 
 			const float depthScale = std::clamp(
 				GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
@@ -594,7 +608,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					const uint32_t thisIndex = shapeIndex++;
 					if (stampCount >= kMaxStamps)
 						return RE::BSVisit::BSVisitControl::kStop;
-					if (centerPos.z - radius > groundZ + kStampSurfaceBand)
+					if (centerPos.z - radius > supportZ + kStampSurfaceBand)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					// Small item shapes (daggers, gems) are real: floored at
 					// stamp time instead of skipped like actor shapes.
@@ -632,7 +646,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (shapeIndex == 0 && stampCount < kMaxStamps) {
 				const auto& bound = root->worldBound;
 				float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
-				if (bound.center.z - radius <= groundZ + kStampSurfaceBand) {
+				if (bound.center.z - radius <= supportZ + kStampSurfaceBand) {
 					float2 current = { bound.center.x, bound.center.y };
 					float2 previous = current;
 					const uint64_t key = (uint64_t(formID) << 16) | 0xFFFFull;
