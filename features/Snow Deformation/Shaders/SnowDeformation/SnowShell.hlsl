@@ -368,16 +368,33 @@ float Undulation(float2 worldXY)
 
 // Carve profile, shared by the surface (ShellSurfaceZ), the PS shading
 // gradient and the self-shadow march so all three see the same shape:
-// deformation carves the layer toward the trench floor, and the displaced
-// snow piles as an EDGE BERM along the rim; a deeper layer throws a taller
-// berm. The berm band peaks on the lightly-compressed rim slope and dies
-// at both untouched snow and the trench center.
-float CarvedDepthProfile(float deformation, float uncarvedDepth)
+// deformation carves the layer toward the trench floor.
+float CarveProfile(float deformation, float uncarvedDepth)
 {
 	float floorDepth = min(uncarvedDepth, kTrenchFloor * smoothstep(0.5, 8.0, uncarvedDepth));
-	float carved = max(uncarvedDepth * (1.0 - deformation), floorDepth);
-	float berm = smoothstep(0.02, 0.2, deformation) * (1.0 - smoothstep(0.2, 0.65, deformation));
-	return carved + berm * uncarvedDepth * 0.3;
+	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
+}
+
+// Edge berm: displaced snow piles as a rounded hill along the trench rim;
+// a deeper layer throws a taller berm. The shape input is the BLURRED
+// deformation (BermField), which extends the hill ~10 units beyond the
+// trail edge and rounds its crest instead of a knife along the stamp
+// falloff.
+static const float kBermAmp = 0.35;
+
+float BermShape(float bermDeform)
+{
+	return smoothstep(0.01, 0.25, bermDeform) * (1.0 - smoothstep(0.25, 0.8, bermDeform));
+}
+
+float BermField(float2 gridLocal)
+{
+	float b = SampleDeformation(gridLocal);
+	b += SampleDeformation(gridLocal + float2(10.0, 0.0));
+	b += SampleDeformation(gridLocal - float2(10.0, 0.0));
+	b += SampleDeformation(gridLocal + float2(0.0, 10.0));
+	b += SampleDeformation(gridLocal - float2(0.0, 10.0));
+	return saturate(b * 0.2);
 }
 
 // Class borders are hard edges in the baked depth/coverage data: a +30
@@ -523,7 +540,8 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	[flatten] if (depth > 0.0)
 	{
 		float deformation = saturate(SampleDeformation(gridLocal));
-		depth = CarvedDepthProfile(deformation, depth);
+		float uncarved = depth;
+		depth = CarveProfile(deformation, uncarved) + BermShape(BermField(gridLocal)) * uncarved * kBermAmp;
 		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 	}
 
@@ -947,9 +965,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
 	float pixelDepth = max(pixelRampDepth, 0.0);
 	float2 profileGrad = float2(
-		CarvedDepthProfile(saturate(dXP), pixelDepth) - CarvedDepthProfile(saturate(dXN), pixelDepth),
-		CarvedDepthProfile(saturate(dYP), pixelDepth) - CarvedDepthProfile(saturate(dYN), pixelDepth)) / (2.0 * step);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad;
+		CarveProfile(saturate(dXP), pixelDepth) - CarveProfile(saturate(dXN), pixelDepth),
+		CarveProfile(saturate(dYP), pixelDepth) - CarveProfile(saturate(dYN), pixelDepth)) / (2.0 * step);
+	// Berm shading: analytic slope of the blurred berm field. The blur
+	// halves the field's gradient relative to the raw deformation taps.
+	float2 deformGradient = float2(dXP - dXN, dYP - dYN) / (2.0 * step);
+	float bermD = BermField(gridLocal);
+	float bermSlope = (BermShape(saturate(bermD + 0.05)) - BermShape(saturate(bermD - 0.05))) / 0.1;
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + deformGradient * 0.5 * bermSlope * pixelDepth * kBermAmp;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
@@ -1088,7 +1111,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// full-height snow and sits in permanent shadow even facing the
 			// sun.
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
-			sampleDepth = CarvedDepthProfile(sampleDeform, sampleDepth);
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * kBermAmp;
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{
