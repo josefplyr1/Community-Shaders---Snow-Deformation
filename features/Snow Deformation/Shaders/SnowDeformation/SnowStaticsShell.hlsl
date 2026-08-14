@@ -397,6 +397,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float2 topGrad = float2(topXP - topXN, topYP - topYN) / 16.0;
 		rim = rim || length(topGrad) > 1.2;
 	}
+	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
+	// still samples tops partway up the smeared ramp and rises as a jagged
+	// rim along the wall. Clamping to the lowest valid neighbor plus a
+	// normal-slope allowance flattens the rim to the ground it belongs to.
+	[flatten] if (minNeighborTop < 1e8)
+		top = min(top, minNeighborTop + 16.0);
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
