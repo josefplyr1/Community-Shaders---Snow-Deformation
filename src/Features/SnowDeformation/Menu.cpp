@@ -169,6 +169,18 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
 			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 
+		uint64_t vramUsageMB = 0, vramBudgetMB = 0;
+		QueryAdapterVRAM(vramUsageMB, vramBudgetMB);
+		std::string vramBreakdown;
+		const uint64_t vramFeatureMB = SumFeatureTextureBytes(vramBreakdown) >> 20;
+		ImGui::Text("VRAM: adapter %llu / %llu MB (%llu%%), this feature ~%llu MB",
+			(unsigned long long)vramUsageMB, (unsigned long long)vramBudgetMB,
+			(unsigned long long)(vramBudgetMB ? vramUsageMB * 100 / vramBudgetMB : 0),
+			(unsigned long long)vramFeatureMB);
+		if (vramBudgetMB && vramUsageMB > vramBudgetMB)
+			ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "OVER BUDGET: driver is demoting textures to system RAM; FPS stays degraded until the game restarts.");
+		ImGui::TextWrapped("%s", vramBreakdown.c_str());
+
 		ImGui::TreePop();
 	}
 }

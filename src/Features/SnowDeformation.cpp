@@ -5,6 +5,8 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
+#include <dxgi1_4.h>
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowDeformation::Settings,
 	EnableSnowDeformation,
@@ -231,6 +233,7 @@ void SnowDeformation::Prepass()
 
 	// Frame boundary for the once-per-frame local shadow atlas copy.
 	pointShadowFrameIndex++;
+	TickVRAMLog();
 
 	auto context = globals::d3d::context;
 
@@ -412,4 +415,157 @@ void SnowDeformation::RestoreDefaultSettings()
 	trenchRangeDirty = true;
 	trenchDetailDirty = true;
 	clearRequested = true;
+}
+
+namespace
+{
+	// Approximate GPU bytes of a texture from its descriptor. bpp16 = bytes
+	// per pixel x16 so block-compressed half-byte formats stay integral.
+	uint64_t TextureBytes(ID3D11Texture2D* a_tex)
+	{
+		if (!a_tex)
+			return 0;
+		D3D11_TEXTURE2D_DESC desc;
+		a_tex->GetDesc(&desc);
+		uint64_t bpp16 = 64;
+		switch (desc.Format) {
+		case DXGI_FORMAT_R8_TYPELESS:
+		case DXGI_FORMAT_R8_UNORM:
+			bpp16 = 16;
+			break;
+		case DXGI_FORMAT_R16_TYPELESS:
+		case DXGI_FORMAT_R16_UNORM:
+		case DXGI_FORMAT_R16_FLOAT:
+		case DXGI_FORMAT_D16_UNORM:
+		case DXGI_FORMAT_R8G8_UNORM:
+			bpp16 = 32;
+			break;
+		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		case DXGI_FORMAT_R32G32_TYPELESS:
+		case DXGI_FORMAT_R32G32_FLOAT:
+			bpp16 = 128;
+			break;
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			bpp16 = 256;
+			break;
+		case DXGI_FORMAT_BC1_TYPELESS:
+		case DXGI_FORMAT_BC1_UNORM:
+		case DXGI_FORMAT_BC1_UNORM_SRGB:
+		case DXGI_FORMAT_BC4_TYPELESS:
+		case DXGI_FORMAT_BC4_UNORM:
+		case DXGI_FORMAT_BC4_SNORM:
+			bpp16 = 8;
+			break;
+		case DXGI_FORMAT_BC2_UNORM:
+		case DXGI_FORMAT_BC3_TYPELESS:
+		case DXGI_FORMAT_BC3_UNORM:
+		case DXGI_FORMAT_BC3_UNORM_SRGB:
+		case DXGI_FORMAT_BC5_TYPELESS:
+		case DXGI_FORMAT_BC5_UNORM:
+		case DXGI_FORMAT_BC6H_UF16:
+		case DXGI_FORMAT_BC7_TYPELESS:
+		case DXGI_FORMAT_BC7_UNORM:
+		case DXGI_FORMAT_BC7_UNORM_SRGB:
+			bpp16 = 16;
+			break;
+		default:
+			break;  // 4-byte default (R32/R24G8/R8G8B8A8/R16G16 families)
+		}
+		uint64_t bytes = (uint64_t)desc.Width * desc.Height * std::max(desc.ArraySize, 1u) * bpp16 / 16;
+		if (desc.MipLevels != 1)
+			bytes = bytes * 4 / 3;
+		return bytes;
+	}
+
+	uint64_t SRVBytes(ID3D11ShaderResourceView* a_srv)
+	{
+		if (!a_srv)
+			return 0;
+		winrt::com_ptr<ID3D11Resource> res;
+		a_srv->GetResource(res.put());
+		auto tex = res.try_as<ID3D11Texture2D>();
+		return tex ? TextureBytes(tex.get()) : 0;
+	}
+}
+
+void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB)
+{
+	a_usageMB = 0;
+	a_budgetMB = 0;
+	static winrt::com_ptr<IDXGIAdapter3> adapter3;
+	if (!adapter3 && globals::d3d::device) {
+		winrt::com_ptr<IDXGIDevice> dxgiDevice;
+		if (SUCCEEDED(globals::d3d::device->QueryInterface(__uuidof(IDXGIDevice), dxgiDevice.put_void()))) {
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			if (SUCCEEDED(dxgiDevice->GetAdapter(adapter.put())))
+				adapter->QueryInterface(__uuidof(IDXGIAdapter3), adapter3.put_void());
+		}
+	}
+	if (adapter3) {
+		DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+		if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+			a_usageMB = info.CurrentUsage >> 20;
+			a_budgetMB = info.Budget >> 20;
+		}
+	}
+}
+
+uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
+{
+	auto texOf = [](Texture2D* a_wrap) -> ID3D11Texture2D* {
+		return a_wrap ? a_wrap->resource.get() : nullptr;
+	};
+
+	const uint64_t deform = TextureBytes(texOf(deformationTextures[0])) + TextureBytes(texOf(deformationTextures[1]));
+	const uint64_t terrain = TextureBytes(texOf(shellTerrainTexture));
+	const uint64_t heights = TextureBytes(texOf(heightTopRaw[0])) + TextureBytes(texOf(heightTopRaw[1])) +
+	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
+	                         TextureBytes(texOf(heightTopFiltered)) + TextureBytes(texOf(heightBottomFiltered)) +
+	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
+	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get()) + TextureBytes(shadowEsramCopyTex.get());
+	const uint64_t pointCopy = TextureBytes(pointShadowAtlasCopyTex.get());
+	const uint64_t sceneCopies = TextureBytes(shellDepthCopyTex.get());
+	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
+	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());
+
+	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + sceneCopies + snowTex;
+
+	char line[256];
+	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, depthCopy %llu, snowTex %llu (MB)",
+		(unsigned long long)(deform >> 20), (unsigned long long)(terrain >> 20), (unsigned long long)(heights >> 20),
+		(unsigned long long)(shadowCopies >> 20), (unsigned long long)(pointCopy >> 20),
+		(unsigned long long)(sceneCopies >> 20), (unsigned long long)(snowTex >> 20));
+	a_breakdown = line;
+	return total;
+}
+
+void SnowDeformation::TickVRAMLog()
+{
+	vramTickCounter++;
+	if (vramTickCounter % 120 != 1)
+		return;
+
+	uint64_t usageMB = 0, budgetMB = 0;
+	QueryAdapterVRAM(usageMB, budgetMB);
+	if (budgetMB == 0)
+		return;
+
+	const bool overBudget = usageMB > budgetMB;
+	const bool bigDelta = usageMB > vramLastLoggedMB + 256 || vramLastLoggedMB > usageMB + 512;
+	const bool cadence = vramTickCounter - vramLastLogTick >= 5400;
+	if (!overBudget && !bigDelta && !cadence)
+		return;
+	vramLastLoggedMB = usageMB;
+	vramLastLogTick = vramTickCounter;
+
+	std::string breakdown;
+	const uint64_t featureMB = SumFeatureTextureBytes(breakdown) >> 20;
+	if (overBudget)
+		logger::warn("[SNOW DEFORMATION] VRAM OVER BUDGET: adapter {}/{} MB, feature ~{} MB | {} | driver demotion likely = large persistent FPS loss until game restart",
+			usageMB, budgetMB, featureMB, breakdown);
+	else
+		logger::info("[SNOW DEFORMATION] VRAM: adapter {}/{} MB ({}%), feature ~{} MB | {}",
+			usageMB, budgetMB, budgetMB ? usageMB * 100 / budgetMB : 0, featureMB, breakdown);
 }
