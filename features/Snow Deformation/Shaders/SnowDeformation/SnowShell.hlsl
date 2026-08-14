@@ -377,10 +377,10 @@ float CarveProfile(float deformation, float uncarvedDepth)
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
 // a deeper layer throws a taller berm. The shape input is the BLURRED
-// deformation (BermField): two sample rings reach ~24 units past the
+// deformation (BermField): two sample rings reach ~48 units past the
 // trail edge, and the outer ring's small per-tap weight gives the hill
 // a long, gentle outer tail instead of a knife along the stamp falloff.
-static const float kBermAmp = 0.35;
+static const float kBermAmp = 0.175;
 
 float BermShape(float bermDeform)
 {
@@ -392,14 +392,14 @@ float BermField(float2 gridLocal)
 	// Inner ring on the axes, outer ring on the diagonals: quasi-isotropic
 	// at 9 taps.
 	float b = SampleDeformation(gridLocal);
-	b += SampleDeformation(gridLocal + float2(12.0, 0.0));
-	b += SampleDeformation(gridLocal - float2(12.0, 0.0));
-	b += SampleDeformation(gridLocal + float2(0.0, 12.0));
-	b += SampleDeformation(gridLocal - float2(0.0, 12.0));
-	b += SampleDeformation(gridLocal + float2(17.0, 17.0));
-	b += SampleDeformation(gridLocal + float2(17.0, -17.0));
-	b += SampleDeformation(gridLocal + float2(-17.0, 17.0));
-	b += SampleDeformation(gridLocal + float2(-17.0, -17.0));
+	b += SampleDeformation(gridLocal + float2(24.0, 0.0));
+	b += SampleDeformation(gridLocal - float2(24.0, 0.0));
+	b += SampleDeformation(gridLocal + float2(0.0, 24.0));
+	b += SampleDeformation(gridLocal - float2(0.0, 24.0));
+	b += SampleDeformation(gridLocal + float2(34.0, 34.0));
+	b += SampleDeformation(gridLocal + float2(34.0, -34.0));
+	b += SampleDeformation(gridLocal + float2(-34.0, 34.0));
+	b += SampleDeformation(gridLocal + float2(-34.0, -34.0));
 	return saturate(b / 9.0);
 }
 
