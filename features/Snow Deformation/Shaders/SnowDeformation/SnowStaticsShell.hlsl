@@ -319,8 +319,39 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	v.Deform = 0.0;
 	v.Killed = 1.0;
 
-	float top = PatchTop(worldXY);
-	float skinDepth = PatchSkinDepth(worldXY);
+	float top;
+	float skinDepth;
+	[branch] if (dense)
+	{
+		// Tessellated vertices sample BETWEEN the 8-unit raster texels,
+		// where raw max-of-4 sampling reads a higher surface than the
+		// legacy grid's linear interpolation; carved floors then poke
+		// through their 0.4-unit tuck and z-fight the object below, angle-
+		// dependently. Bilinear over the same 8-aligned lattice points the
+		// legacy grid sampled reproduces its exact floor geometry.
+		float2 base = floor(worldXY / 8.0) * 8.0;
+		float2 f = saturate((worldXY - base) / 8.0);
+		float t00 = PatchTop(base);
+		float t10 = PatchTop(base + float2(8.0, 0.0));
+		float t01 = PatchTop(base + float2(0.0, 8.0));
+		float t11 = PatchTop(base + float2(8.0, 8.0));
+		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
+		// A sentinel lattice corner poisons the bilinear; near the footprint
+		// edge fall back to the center sample (max-of-4 ignores sentinels)
+		// and let the kill logic decide.
+		[flatten] if (min(min(t00, t10), min(t01, t11)) < -50000.0)
+			top = PatchTop(worldXY);
+		float s00 = PatchSkinDepth(base);
+		float s10 = PatchSkinDepth(base + float2(8.0, 0.0));
+		float s01 = PatchSkinDepth(base + float2(0.0, 8.0));
+		float s11 = PatchSkinDepth(base + float2(8.0, 8.0));
+		skinDepth = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	}
+	else
+	{
+		top = PatchTop(worldXY);
+		skinDepth = PatchSkinDepth(worldXY);
+	}
 	float2 gridLocal = v.GridLocal;
 
 	// Rim test: a vertex whose column towers over any neighbor column is
