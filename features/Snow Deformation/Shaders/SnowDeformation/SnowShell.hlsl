@@ -382,13 +382,14 @@ float CarveProfile(float deformation, float uncarvedDepth)
 // a long, gentle outer tail instead of a knife along the stamp falloff.
 static const float kBermAmp = 0.175;
 
-// Crest at ~0.5 = the field value right at the trail edge, so the hill
-// peaks against the trench and the ENTIRE outer decay of the blurred
-// field becomes the downslope: a long fade that reaches zero with zero
-// slope (no normal-map seam where the berm ends).
+// The rise must still be CLIMBING at ~0.5 (the field value right at
+// the trail edge) or its flattened top smears into a plateau there; the
+// cut starting at 0.5 then caps it into a narrow rounded crest against
+// the rim, descending steadily outward from the top. Tail reaches zero
+// with zero slope (no normal-map seam where the berm ends).
 float BermShape(float bermDeform)
 {
-	return smoothstep(0.0, 0.5, bermDeform) * (1.0 - smoothstep(0.5, 0.9, bermDeform));
+	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
 }
 
 float BermField(float2 gridLocal)
