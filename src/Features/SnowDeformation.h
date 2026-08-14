@@ -22,7 +22,7 @@ public:
 		return { T("feature.snow_deformation.description", "Maintains a persistent deformation map around the player so snow can be visibly compressed by actors moving through it, leaving lasting trails."),
 			{ T("feature.snow_deformation.key_feature_1", "Persistent world-space deformation map following the player"),
 				T("feature.snow_deformation.key_feature_2", "Trails carved by the player, NPCs and creatures"),
-				T("feature.snow_deformation.key_feature_3", "Configurable snow refill over time"),
+				T("feature.snow_deformation.key_feature_3", "Snowfall-driven snow refill"),
 				T("feature.snow_deformation.key_feature_4", "Compute-shader based, low performance impact") } };
 	};
 
@@ -135,9 +135,9 @@ public:
 		float TrenchWallSharpness = 50.0f;
 		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
 		float TrailIrregularity = 0.60f;
-		/** @brief Seconds for compressed snow to fully recover. 0 disables refilling. */
-		float RefillTime = 700.0f;
-		/** @brief Only refill while the current weather is snowing, so trails persist through clear spells and interiors. */
+		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
+		float RefillRateMultiplier = 1.0f;
+		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
@@ -240,6 +240,18 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
 	Settings settings;
+
+	/** @brief Seconds for compressed snow to fully recover at 1.0 snowfall intensity and a 1.0x multiplier. */
+	static constexpr float kBaseRefillTime = 700.0f;
+	/** @brief Precipitation particle density that maps to 1.0 snowfall intensity (vanilla densities run ~1-3). */
+	static constexpr float kReferenceSnowDensity = 2.0f;
+	/** @brief Intensity ceiling; keeps extreme weather-mod densities from erasing trails outright. */
+	static constexpr float kMaxSnowfallIntensity = 4.0f;
+
+	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall. */
+	float ComputeSnowfallIntensity() const;
+	/** @brief Last computed snowfall intensity, for the debug readout. */
+	float snowfallIntensity = 0.0f;
 
 	ConstantBuffer* perFrame = nullptr;
 	Texture2D* deformationTextures[2] = { nullptr, nullptr };
@@ -703,6 +715,11 @@ public:
 	static constexpr float kDoorForwardExtent = 70.0f;
 	static constexpr float kLoadDoorClearRadius = 150.0f;
 	static constexpr float kLoadDoorForwardExtent = 150.0f;
+	/** @brief Melt circle around a burning torch, carried or dropped. */
+	static constexpr float kTorchClearRadius = 40.0f;
+	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
+	static constexpr float kHeatClearRadiusMin = 40.0f;
+	static constexpr float kHeatClearRadiusMax = 90.0f;
 	static constexpr float kFireClearRadius = 70.0f;
 
 	/** @brief Layout must match DoorCB in HeightMapProcessCS.hlsl. */
@@ -716,6 +733,13 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
 	ConstantBuffer* doorsCB = nullptr;
 	uint32_t doorRefreshCounter = 0;
+	/** @brief Cadence-gathered static exclusions (doors, campfires, heat sources); carried torches are appended per frame before CB upload. */
+	std::vector<std::pair<float4, float4>> staticExclusions;
+	/** @brief Survival Mode's Survival_WarmUpObjectsList when the plugin is present: base objects that count as heat sources. */
+	RE::BGSListForm* survivalHeatSources = nullptr;
+	bool survivalHeatSourcesResolved = false;
+	/** @brief Exclusions uploaded this frame (static + carried torches), for the debug readout. */
+	uint32_t statExclusionCount = 0;
 
 	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
 	void CreateHeightFieldResources();

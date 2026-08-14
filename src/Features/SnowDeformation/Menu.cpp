@@ -66,10 +66,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers and how raised snow settles."));
 		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
 		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing. Trails and trenches persist through clear weather."));
-		ImGui::SliderFloat(T(TKEY("refill_time"), "Snow Refill Time"), &settings.RefillTime, 0.0f, 3600.0f, "%.0f s");
+			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing, faster in denser snowfall. Trails and trenches persist through clear weather. Off: snow recovers at the baseline rate in any weather."));
+		ImGui::SliderFloat(T(TKEY("refill_rate"), "Snow Refill Rate"), &settings.RefillRateMultiplier, 0.0f, 10.0f, "%.1fx");
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("refill_time_tooltip"), "Time for compressed snow to fully recover. 0 disables refilling."));
+			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
 		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 		if (auto _ttSteep = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
@@ -210,6 +210,10 @@ void SnowDeformation::DrawSettings()
 			stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
 			stampStats.propRefs, stampStats.propMovers);
 		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
+		ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
+			settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");
+		ImGui::Text("Exclusion zones: %u (Survival heat list %s)", statExclusionCount,
+			survivalHeatSources ? "found" : "absent");
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
 			snowMasksSizeForUI(),
 			(unsigned long long)landMaskHits.load(std::memory_order_relaxed),

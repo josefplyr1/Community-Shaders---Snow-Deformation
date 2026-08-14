@@ -14,7 +14,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FootPrintScale,
 	TrenchWallSharpness,
 	TrailIrregularity,
-	RefillTime,
+	RefillRateMultiplier,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
 	ObjectsSnowDepth,
@@ -227,6 +227,48 @@ void SnowDeformation::ApplyRangeSettings()
 	rangeInitApplied = true;
 }
 
+float SnowDeformation::ComputeSnowfallIntensity() const
+{
+	auto* sky = RE::Sky::GetSingleton();
+	if (!sky)
+		return 0.0f;
+
+	// Normalized precipitation density of a snowing weather; snow-flagged
+	// weathers without particle data count as baseline snowfall.
+	auto snowDensity = [](RE::TESWeather* weather) -> float {
+		if (!weather || !weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow))
+			return 0.0f;
+		if (auto* precipitation = weather->precipitationData) {
+			float density = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
+			if (density > 0.0f)
+				return density / kReferenceSnowDensity;
+		}
+		return 1.0f;
+	};
+
+	auto linearstep = [](float edge0, float edge1, float x) {
+		return edge0 >= edge1 ? (x >= edge1 ? 1.0f : 0.0f) : std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+	};
+
+	// Fade with the transition the way the engine fades the particles: the
+	// incoming weather's precipitation ramps in over the last
+	// precipitationBeginFadeIn/255 of the transition, the outgoing weather's
+	// dies over the first precipitationEndFadeOut/255 (WetnessEffects' rain
+	// interpretation of the same record bytes).
+	float pct = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
+	float intensity = 0.0f;
+	if (float current = snowDensity(sky->currentWeather); current > 0.0f) {
+		float fadeIn = sky->currentWeather->data.precipitationBeginFadeIn / 255.0f;
+		float ramp = fadeIn > 0.0f ? linearstep(1.0f - fadeIn, 1.0f, pct) : (pct > 0.1f ? 1.0f : 0.0f);
+		intensity = current * ramp;
+	}
+	if (float last = snowDensity(sky->lastWeather); last > 0.0f) {
+		float fadeOut = sky->lastWeather->data.precipitationEndFadeOut / 255.0f;
+		intensity = std::max(intensity, last * (1.0f - linearstep(fadeOut, 1.0f, pct)));
+	}
+	return std::min(intensity, kMaxSnowfallIntensity);
+}
+
 void SnowDeformation::Prepass()
 {
 	ApplyRangeSettings();
@@ -277,14 +319,12 @@ void SnowDeformation::Prepass()
 	perFrameData.StampNoiseAmp = std::max(settings.TrailIrregularity, 0.0f);
 
 	float deltaTime = *globals::game::deltaTime;
-	// With RefillOnlyWhenSnowing, snow only recovers while the current
-	// weather carries snow; interiors have no sky and do not refill.
-	bool refillActive = !settings.RefillOnlyWhenSnowing;
-	if (!refillActive)
-		if (auto* sky = RE::Sky::GetSingleton())
-			if (auto* weather = sky->currentWeather)
-				refillActive = weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
-	perFrameData.RefillAmount = (refillActive && settings.RefillTime > 0.0f) ? deltaTime / settings.RefillTime : 0.0f;
+	// Refill rate follows the weather's snowfall density; interiors have no
+	// snowing weather and do not refill. With RefillOnlyWhenSnowing off the
+	// weather is ignored and the baseline rate applies everywhere.
+	snowfallIntensity = ComputeSnowfallIntensity();
+	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
+	perFrameData.RefillAmount = deltaTime / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
 
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;

@@ -407,19 +407,25 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
 
-	// Exclusion zones: refresh on window scroll and periodically (doors and
-	// campfires never move, so a 60-frame cadence is plenty). Load doors
-	// (teleport data) are cave/building entrances; deeper recesses, bigger
-	// clears.
+	// Exclusion zones. Static sources (doors, campfires, heat sources,
+	// dropped torches) refresh on window scroll and on a 60-frame cadence;
+	// load doors (teleport data) are cave/building entrances; deeper
+	// recesses, bigger clears. Heat sources come from Survival Mode's
+	// warm-up-objects formlist when the plugin is present, plus model-path
+	// matching that also covers non-Survival installs.
 	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
 	if (windowScrolled || (doorRefreshCounter++ % 60) == 0) {
-		ExclusionsCB exclusionData{};
-		uint32_t exclusionCount = 0;
+		if (!survivalHeatSourcesResolved) {
+			survivalHeatSourcesResolved = true;
+			if (auto* dataHandler = RE::TESDataHandler::GetSingleton())
+				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
+		}
+		staticExclusions.clear();
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
 					[&](RE::TESObjectREFR* a_ref) {
-						if (exclusionCount >= kMaxExclusions)
+						if (staticExclusions.size() >= kMaxExclusions)
 							return RE::BSContainer::ForEachResult::kStop;
 						if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
 							return RE::BSContainer::ForEachResult::kContinue;
@@ -431,37 +437,88 @@ void SnowDeformation::RenderObjectHeightMap()
 							bool loadDoor = a_ref->extraList.HasType(RE::ExtraDataType::kTeleport);
 							auto pos = a_ref->GetPosition();
 							float angleZ = a_ref->GetAngleZ();
-							exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, loadDoor ? kLoadDoorClearRadius : kDoorClearRadius };
-							exclusionData.DirExtType[exclusionCount] = { std::sin(angleZ), std::cos(angleZ), loadDoor ? kLoadDoorForwardExtent : kDoorForwardExtent, 0.0f };
-							exclusionCount++;
-						} else {
-							// Explicit form-type chain: skyrim_cast to TESModel
-							// silently returns null for activator bases, which
-							// makes campfires invisible to the gather.
-							const char* modelPath = nullptr;
-							if (auto* acti = base->As<RE::TESObjectACTI>())
-								modelPath = acti->GetModel();
-							else if (auto* stat = base->As<RE::TESObjectSTAT>())
-								modelPath = stat->GetModel();
-							else if (auto* movable = base->As<RE::BGSMovableStatic>())
-								modelPath = movable->GetModel();
-							if (modelPath && modelPath[0]) {
-								std::string lowered(modelPath);
-								std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-									[](unsigned char c) { return (char)std::tolower(c); });
-								if (lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos) {
-									auto pos = a_ref->GetPosition();
-									exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, kFireClearRadius };
-									exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, 0.0f, 1.0f };
-									exclusionCount++;
-								}
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, loadDoor ? kLoadDoorClearRadius : kDoorClearRadius },
+								{ std::sin(angleZ), std::cos(angleZ), loadDoor ? kLoadDoorForwardExtent : kDoorForwardExtent, 0.0f } });
+							return RE::BSContainer::ForEachResult::kContinue;
+						}
+
+						// Dropped torches: carryable light references burn where they lie.
+						if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
+							auto pos = a_ref->GetPosition();
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
+							return RE::BSContainer::ForEachResult::kContinue;
+						}
+
+						// Explicit form-type chain: skyrim_cast to TESModel
+						// silently returns null for activator bases, which
+						// makes campfires invisible to the gather.
+						const char* modelPath = nullptr;
+						if (auto* acti = base->As<RE::TESObjectACTI>())
+							modelPath = acti->GetModel();
+						else if (auto* stat = base->As<RE::TESObjectSTAT>())
+							modelPath = stat->GetModel();
+						else if (auto* movable = base->As<RE::BGSMovableStatic>())
+							modelPath = movable->GetModel();
+						bool campfire = false;
+						bool brazier = false;
+						if (modelPath && modelPath[0]) {
+							std::string lowered(modelPath);
+							std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+								[](unsigned char c) { return (char)std::tolower(c); });
+							campfire = lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos;
+							brazier = lowered.find("brazier") != std::string::npos;
+						}
+						if (campfire) {
+							auto pos = a_ref->GetPosition();
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, kFireClearRadius }, { 0.0f, 1.0f, 0.0f, 1.0f } });
+						} else if (brazier || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
+							// Braziers, sconces, forges: melt radius from the
+							// object's own footprint.
+							float halfExtent = 20.0f;
+							if (auto* bound = base->As<RE::TESBoundObject>()) {
+								float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
+								float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
+								halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
 							}
+							auto pos = a_ref->GetPosition();
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax) },
+								{ 0.0f, 1.0f, 0.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
 			}
 		}
+	}
+
+	// Upload every frame: the cached static set plus carried torches, which
+	// move with their actor and need fresh positions each frame.
+	{
+		ExclusionsCB exclusionData{};
+		uint32_t exclusionCount = 0;
+		for (const auto& [posRadius, dirExtType] : staticExclusions) {
+			exclusionData.PosRadius[exclusionCount] = posRadius;
+			exclusionData.DirExtType[exclusionCount] = dirExtType;
+			exclusionCount++;
+		}
+		auto addCarriedTorch = [&](RE::Actor* a_actor) {
+			if (exclusionCount >= kMaxExclusions || !a_actor || a_actor->IsDead() || !a_actor->Is3DLoaded())
+				return;
+			auto* leftHand = a_actor->GetEquippedObject(true);
+			if (!leftHand || !leftHand->Is(RE::FormType::Light))
+				return;
+			auto pos = a_actor->GetPosition();
+			exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, kTorchClearRadius };
+			exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, 0.0f, 1.0f };
+			exclusionCount++;
+		};
+		addCarriedTorch(RE::PlayerCharacter::GetSingleton());
+		if (const auto processLists = RE::ProcessLists::GetSingleton()) {
+			for (auto& actorHandle : processLists->highActorHandles)
+				if (auto actor = actorHandle.get())
+					addCarriedTorch(actor.get());
+		}
 		exclusionData.ExclusionCount = exclusionCount;
+		statExclusionCount = exclusionCount;
 		doorsCB->Update(exclusionData);
 	}
 
