@@ -597,7 +597,10 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Angle of repose: multi-scale min-plus cone passes (large steps first),
 	// ping-ponging topFiltered <-> heightScratch and ENDING in topFiltered.
-	static constexpr uint kConeSteps[] = { 32, 16, 8, 4, 2, 1 };
+	// Steps are texels: the leading 64 preserves the cone's world reach at
+	// the 4-unit texel (was 32..1 at 8-unit texels); the trailing repeat
+	// keeps the pass count even.
+	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
 	// An even pass count is what lands the final result back in topFiltered.
 	static_assert(std::size(kConeSteps) % 2 == 0);
 	context->CSSetShader(heightConeCS, nullptr, 0);

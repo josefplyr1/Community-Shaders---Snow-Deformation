@@ -608,9 +608,10 @@ public:
 
 	// ---- Top-down object height windows ----
 
-	// 4096 units at 8-unit texels, following the camera; matches the
-	// shell's inner grid density.
-	static constexpr uint kHeightMapDim = 512;
+	// 4096 units at 4-unit texels, following the camera. Halving the texel
+	// (512 -> 1024) shrank the visible raster squares on the patch top
+	// sheet; kHeightTexel in SnowStaticsShell.hlsl must match.
+	static constexpr uint kHeightMapDim = 1024;
 	static constexpr float kHeightMapHalfExtent = 2048.0f;
 	/** @brief Height sentinels for texels no object covers. */
 	static constexpr float kHeightMapEmptyTop = -100000.0f;

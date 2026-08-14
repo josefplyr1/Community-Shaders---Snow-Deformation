@@ -333,6 +333,10 @@ Texture2D<float> ObjectSkinDepth : register(t12);
 
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
+// One texel of the object height raster in world units; must match
+// kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
+static const float kHeightTexel = 4.0;
+
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
 // object edges; MAX both ignores them and keeps the patch on the highest
 // (safest) surface.
@@ -400,12 +404,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// through their 0.4-unit tuck and z-fight the object below, angle-
 		// dependently. Bilinear over the same 8-aligned lattice points the
 		// legacy grid sampled reproduces its exact floor geometry.
-		float2 base = floor(worldXY / 8.0) * 8.0;
-		float2 f = saturate((worldXY - base) / 8.0);
+		float2 base = floor(worldXY / kHeightTexel) * kHeightTexel;
+		float2 f = saturate((worldXY - base) / kHeightTexel);
 		float t00 = PatchTop(base);
-		float t10 = PatchTop(base + float2(8.0, 0.0));
-		float t01 = PatchTop(base + float2(0.0, 8.0));
-		float t11 = PatchTop(base + float2(8.0, 8.0));
+		float t10 = PatchTop(base + float2(kHeightTexel, 0.0));
+		float t01 = PatchTop(base + float2(0.0, kHeightTexel));
+		float t11 = PatchTop(base + float2(kHeightTexel, kHeightTexel));
 		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
 		// A sentinel lattice corner poisons the bilinear, and a large drop
 		// across the cell (roof or wall edge) would interpolate vertices
@@ -418,9 +422,9 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
 			top = PatchTop(worldXY);
 		float s00 = PatchSkinDepth(base);
-		float s10 = PatchSkinDepth(base + float2(8.0, 0.0));
-		float s01 = PatchSkinDepth(base + float2(0.0, 8.0));
-		float s11 = PatchSkinDepth(base + float2(8.0, 8.0));
+		float s10 = PatchSkinDepth(base + float2(kHeightTexel, 0.0));
+		float s01 = PatchSkinDepth(base + float2(0.0, kHeightTexel));
+		float s11 = PatchSkinDepth(base + float2(kHeightTexel, kHeightTexel));
 		skinDepth = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 		// Weakest lattice corner: a footprint boundary crossing this cell.
 		skinEdgeMin = min(min(s00, s10), min(s01, s11));
@@ -442,10 +446,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// vertex is killed by its own sentinel top (outline-spanning triangles
 	// go with it), and within-footprint roof-to-ground drops are caught by
 	// the height delta.
-	float topXP = PatchTop(worldXY + float2(8.0, 0.0));
-	float topXN = PatchTop(worldXY - float2(8.0, 0.0));
-	float topYP = PatchTop(worldXY + float2(0.0, 8.0));
-	float topYN = PatchTop(worldXY - float2(0.0, 8.0));
+	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
+	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
+	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
+	float topYN = PatchTop(worldXY - float2(0.0, kHeightTexel));
 	float minNeighborTop = 1e9;
 	if (topXP > -50000.0)
 		minNeighborTop = min(minNeighborTop, topXP);
@@ -470,7 +474,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// steep core; the surviving band was the jagged wall-base sheath.
 		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
 		// under this; steep flanks belong to the skin.
-		float2 topGrad = float2(topXP - topXN, topYP - topYN) / 16.0;
+		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kHeightTexel);
 		rim = rim || length(topGrad) > 0.5;
 	}
 	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
@@ -478,7 +482,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// rim along the wall. Clamping to the lowest valid neighbor plus a
 	// normal-slope allowance flattens the rim to the ground it belongs to.
 	[flatten] if (minNeighborTop < 1e8)
-		top = min(top, minNeighborTop + 16.0);
+		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
 	// leaves elevated plateaus hugging walls that evade both the slope
