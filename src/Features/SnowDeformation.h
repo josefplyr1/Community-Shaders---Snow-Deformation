@@ -28,9 +28,8 @@ public:
 
 	// Square world-space deformation window following the camera in whole-texel
 	// steps. Texel value = normalized depression depth, 0 = untouched snow,
-	// 1 = compressed to the ground. World size is runtime (deformWorldSize) and
-	// the resolution doubles with HighDetailTrenches, so trench detail coarsens
-	// with range and sharpens with the quality toggle.
+	// 1 = compressed to the ground. World size is runtime (deformWorldSize),
+	// so trench detail coarsens with range.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
 
@@ -130,16 +129,12 @@ public:
 		bool ShowDebugTexture = false;
 		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size). */
 		float StampRadius = 10.0f;
-		/** @brief Living actors stamp heel-to-toe capsules from skeleton foot bones (real alternating footprints). Skeletons without recognizable foot bones fall back to collision shapes; corpses and props always use shapes. */
-		bool PerFootStamping = true;
 		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
 		float FootPrintScale = 1.5f;
 		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
 		float TrenchWallSharpness = 50.0f;
 		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
 		float TrailIrregularity = 0.60f;
-		/** @brief Doubles the deformation map to 4096² (2-unit texels at the default Trenches range) for crisper trench detail. 64 MB of VRAM instead of 16; toggling clears existing trenches. */
-		bool HighDetailTrenches = false;
 		/** @brief Seconds for compressed snow to fully recover. 0 disables refilling. */
 		float RefillTime = 700.0f;
 		/** @brief Only refill while the current weather is snowing, so trails persist through clear spells and interiors. */
@@ -793,9 +788,8 @@ protected:
 	/** @brief Deformation window world size (2x the Trenches range). Changing it clears the map. */
 	float deformWorldSize = 14000.0f;
 	bool trenchRangeDirty = false;
-	/** @brief Deformation map resolution: kTextureDim, doubled by HighDetailTrenches. Changing it recreates and clears the map. */
+	/** @brief Deformation map resolution. */
 	uint deformMapDim = kTextureDim;
-	bool trenchDetailDirty = false;
 	bool rangeInitApplied = false;
 
 public:

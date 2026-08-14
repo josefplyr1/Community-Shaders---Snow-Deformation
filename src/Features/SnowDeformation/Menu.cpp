@@ -10,16 +10,6 @@ void SnowDeformation::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
-	// Temporary placement: both toggles are slated for removal once their
-	// paths are the only ones left.
-	ImGui::Checkbox(T(TKEY("per_foot_stamping"), "Per-Foot Stamping"), &settings.PerFootStamping);
-	if (auto _ttFoot = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Actors stamp from their skeleton bones: heel-to-toe foot prints that alternate with the stride, plus limb segments that carve as deep as they reach into the snow layer (wading legs connect the prints in deep snow). Corpses imprint body-shaped from the same bones. Skeletons without recognizable bones fall back to collision shapes; props are unaffected."));
-	if (ImGui::Checkbox(T(TKEY("high_detail_trenches"), "High Detail Trenches"), &settings.HighDetailTrenches))
-		trenchDetailDirty = true;
-	if (auto _ttHd = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("high_detail_trenches_tooltip"), "Doubles the deformation map to 4096² for crisper trench edges (2-unit texels at the default Trenches range). Uses 64 MB of VRAM instead of 16 MB; toggling clears existing trenches."));
-
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::InputText(T(TKEY("snow_texture_path"), "Shell Snow Texture"), &settings.SnowTexturePath);
 		if (auto _ttTex = Util::HoverTooltipWrapper())

@@ -11,11 +11,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowDeformation::Settings,
 	EnableSnowDeformation,
 	StampRadius,
-	PerFootStamping,
 	FootPrintScale,
 	TrenchWallSharpness,
 	TrailIrregularity,
-	HighDetailTrenches,
 	RefillTime,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
@@ -226,17 +224,6 @@ void SnowDeformation::ApplyRangeSettings()
 		trenchRangeDirty = false;
 	}
 
-	// Trench detail: the resolution change recreates the ping-pong pair (and
-	// clears it; texel content is resolution-relative).
-	if (trenchDetailDirty || !rangeInitApplied) {
-		const uint desiredDim = settings.HighDetailTrenches ? kTextureDim * 2 : kTextureDim;
-		if (desiredDim != deformMapDim) {
-			deformMapDim = desiredDim;
-			CreateDeformationTextures();
-			clearRequested = true;
-		}
-		trenchDetailDirty = false;
-	}
 	rangeInitApplied = true;
 }
 
@@ -438,10 +425,9 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	// Loaded values may change the window size or map resolution; the apply
-	// path is a no-op when they match the current state.
+	// Loaded values may change the window size; the apply path is a no-op
+	// when they match the current state.
 	trenchRangeDirty = true;
-	trenchDetailDirty = true;
 }
 
 void SnowDeformation::SaveSettings(json& o_json)
@@ -453,7 +439,6 @@ void SnowDeformation::RestoreDefaultSettings()
 {
 	settings = {};
 	trenchRangeDirty = true;
-	trenchDetailDirty = true;
 	clearRequested = true;
 }
 

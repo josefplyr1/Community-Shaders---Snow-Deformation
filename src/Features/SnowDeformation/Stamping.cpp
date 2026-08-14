@@ -262,19 +262,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			kStampDepthScaleMin, kStampDepthScaleMax);
 
 		StampBones* bones = nullptr;
-		if (settings.PerFootStamping) {
-			if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
-				stampBoneCache.clear();
-			auto& cache = stampBoneCache[formID];
-			if (cache.root.get() != root) {
-				cache.root = RE::NiPointer<RE::NiAVObject>(root);
-				cache.feet.clear();
-				cache.limbs.clear();
-				CollectStampBones(root, nullptr, 0.0f, cache);
-			}
-			if (!cache.feet.empty() || !cache.limbs.empty())
-				bones = &cache;
+		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
+			stampBoneCache.clear();
+		auto& cache = stampBoneCache[formID];
+		if (cache.root.get() != root) {
+			cache.root = RE::NiPointer<RE::NiAVObject>(root);
+			cache.feet.clear();
+			cache.limbs.clear();
+			CollectStampBones(root, nullptr, 0.0f, cache);
 		}
+		if (!cache.feet.empty() || !cache.limbs.empty())
+			bones = &cache;
 
 		// Living actors need matched feet to take the bone path: a limbs-only
 		// match (creature spines/necks) would steal the collision-shape
