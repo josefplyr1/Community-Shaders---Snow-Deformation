@@ -120,6 +120,27 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Trench Detail"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttTd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected."));
+			ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
+			if (auto _ttBh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));
+			ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
+			if (auto _ttCh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
+			ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
+			if (auto _ttCs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
+			ImGui::SliderFloat(T(TKEY("crisp_scale"), "Grain Fineness"), &settings.CrispScale, 1.0f, 8.0f, "%.1fx");
+			if (auto _ttGf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed snow (shading only)."));
+			ImGui::SliderFloat(T(TKEY("crisp_strength"), "Grain Strength"), &settings.CrispStrength, 0.0f, 3.0f, "%.2f");
+			if (auto _ttGs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed snow. 0 disables it."));
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttRd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));

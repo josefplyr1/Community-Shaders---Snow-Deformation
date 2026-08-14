@@ -113,7 +113,12 @@ cbuffer ShellCB : register(b0)
 	float SnowReliefDepth;
 	// Statics debug view: object snow renders decision variables as colors.
 	float StaticsDebugView;
-	float padShell;
+	float BermHeightAmp;
+
+	float ChurnHeightAmp;
+	float ChurnSizeScale;
+	float CrispScaleV;
+	float CrispStrengthV;
 }
 
 cbuffer StaticCB : register(b1)

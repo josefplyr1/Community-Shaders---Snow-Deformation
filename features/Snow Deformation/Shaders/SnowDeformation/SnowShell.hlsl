@@ -119,7 +119,12 @@ cbuffer ShellCB : register(b0)
 	float SnowReliefDepth;
 	// Statics debug view: object snow renders decision variables as colors.
 	float StaticsDebugView;
-	float padShell;
+	float BermHeightAmp;
+
+	float ChurnHeightAmp;
+	float ChurnSizeScale;
+	float CrispScaleV;
+	float CrispStrengthV;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -390,10 +395,10 @@ float CarveProfile(float deformation, float uncarvedDepth)
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
 // a deeper layer throws a taller berm. The shape input is the BLURRED
-// deformation (BermField): two sample rings reach ~48 units past the
+// deformation (BermField): two sample rings reach ~40 units past the
 // trail edge, and the outer ring's small per-tap weight gives the hill
 // a long, gentle outer tail instead of a knife along the stamp falloff.
-static const float kBermAmp = 0.30;
+// Height is the live BermHeightAmp slider.
 
 // The rise must still be CLIMBING at ~0.5 (the field value right at
 // the trail edge) or its flattened top smears into a plateau there; the
@@ -430,12 +435,13 @@ float BermField(float2 gridLocal)
 // piled (RDR2 reference, Josef's design): trench walls, floors and berms
 // get ~10-unit lumps; the weight comes from the same carve/berm terms the
 // profile uses, so churn dies at the untouched surface with no boundary.
-// The self-shadow march skips it: +-2 units is under its step resolution.
-static const float kChurnAmp = 4.0;
-
+// The self-shadow march skips it: a few units is under its step
+// resolution. Amplitude and lump size are live sliders (ChurnHeightAmp /
+// ChurnSizeScale).
 float ChurnNoise(float2 worldXY)
 {
-	float n = ShapeNoise(worldXY / 16.0) * 0.65 + ShapeNoise(worldXY / 7.0) * 0.35;
+	float s = max(ChurnSizeScale, 0.05);
+	float n = ShapeNoise(worldXY / (16.0 * s)) * 0.65 + ShapeNoise(worldXY / (7.0 * s)) * 0.35;
 	return (n - 0.5) * 2.0;
 }
 
@@ -589,10 +595,11 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float deformation = saturate(SampleDeformation(gridLocal));
 		float bermD = BermField(gridLocal);
 		float uncarved = depth;
-		depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * kBermAmp;
+		depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
 		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
-		// Churn scales away on thin cover so it can never push depth negative.
-		depth += ChurnNoise(GridOrigin + gridLocal) * kChurnAmp * ChurnWeight(deformation, bermD) * saturate(depth / 4.0);
+		// Churn scales away on thin cover: the /10 keeps the dig under 80% of
+		// local depth even at the slider's 8-unit maximum.
+		depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
 	}
 
 	return terrainHeight + depth;
@@ -1028,7 +1035,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) - BermShape(bermXN),
 		BermShape(bermYP) - BermShape(bermYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * kBermAmp;
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
@@ -1044,15 +1051,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	// Churn gradient (same field the geometry displaces by).
-	float churnW = ChurnWeight(pixelCarve, bermCenter) * saturate(pixelDepth / 4.0);
-	[branch] if (churnW > 0.001)
+	float churnW = ChurnWeight(pixelCarve, bermCenter) * saturate(pixelDepth / 10.0);
+	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
 	{
 		const float cStep = 3.0;
 		float cXP = ChurnNoise(worldXYPS + float2(cStep, 0.0));
 		float cXN = ChurnNoise(worldXYPS - float2(cStep, 0.0));
 		float cYP = ChurnNoise(worldXYPS + float2(0.0, cStep));
 		float cYN = ChurnNoise(worldXYPS - float2(0.0, cStep));
-		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * kChurnAmp * churnW;
+		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * ChurnHeightAmp * churnW;
 	}
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
@@ -1069,18 +1076,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// same normal map; the weight IS the disturbance, so the transition
 	// never draws a boundary. The 3x taps alias 3x sooner, so their own
 	// distance fade is tighter than bumpFade.
-	static const float kCrispScale = 5.0;
-	static const float kCrispStrength = 1.6;
-	float disturb = ChurnWeight(pixelCarve, bermCenter);
+	float disturb = ChurnWeight(pixelCarve, bermCenter) * CrispStrengthV;
 	disturb *= 1.0 - smoothstep(300.0, 1000.0, shellZ);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
 		[branch] if (disturb > 0.01)
 		{
-			SnowTaps crispTaps = ComputeSnowTaps(snowUV * kCrispScale, worldXYPS);
+			SnowTaps crispTaps = ComputeSnowTaps(snowUV * max(CrispScaleV, 1.0), worldXYPS);
 			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
-			texN.xy += crispN * (kCrispStrength * disturb);
+			texN.xy += crispN * disturb;
 		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
@@ -1198,7 +1203,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// full-height snow and sits in permanent shadow even facing the
 			// sun.
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * kBermAmp;
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * BermHeightAmp;
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{

@@ -296,6 +296,11 @@ void SnowDeformation::DrawShell()
 	// the PBR config's displacementScale is deliberately not multiplied in,
 	// the slider is authoritative).
 	cbData.SnowReliefDepth = std::max(settings.ReliefDepth, 0.0f);
+	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
+	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
+	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
+	cbData.CrispScaleV = std::clamp(settings.CrispScale, 1.0f, 8.0f);
+	cbData.CrispStrengthV = std::clamp(settings.CrispStrength, 0.0f, 3.0f);
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
