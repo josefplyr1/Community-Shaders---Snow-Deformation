@@ -519,6 +519,9 @@ void SnowDeformation::DrawShell()
 		context->DSSetShader(tessDS, nullptr, 0);
 		context->HSSetConstantBuffers(0, 1, cbs);
 		context->DSSetConstantBuffers(0, 1, cbs);
+		// The hull shader reads the deformation map for trench-aware factors.
+		ID3D11ShaderResourceView* hsDeformSRV = GetDeformationSRV();
+		context->HSSetShaderResources(1, 1, &hsDeformSRV);
 		context->DSSetShaderResources(0, 6, shellSRVs);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
@@ -575,6 +578,7 @@ void SnowDeformation::DrawShell()
 	{
 		ID3D11ShaderResourceView* nullDSSRVs[13] = {};
 		context->DSSetShaderResources(0, 13, nullDSSRVs);
+		context->HSSetShaderResources(0, 13, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);

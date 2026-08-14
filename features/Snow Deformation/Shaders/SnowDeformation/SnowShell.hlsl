@@ -670,11 +670,18 @@ static const float kTessMax = 8.0;
 #ifdef HULLSHADER
 // Edge factor from the edge midpoint's camera distance, computed from the
 // shared corners only, so both patches on an edge agree (crack-free).
+// Trench-aware: edges carrying deformation get up to 3x the detail reach,
+// so trench walls stay smooth well past the base band while untouched
+// snowfields keep the cheap factors; the boost reads only edge-derived
+// positions, preserving the crack-free property.
 float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 {
-	float2 midAbs = GridOrigin + 0.5 * (gridLocalA + gridLocalB);
+	float2 midLocal = 0.5 * (gridLocalA + gridLocalB);
+	float2 midAbs = GridOrigin + midLocal;
 	float dist = length(midAbs - ShellCameraPosAdjust.xy);
-	return clamp(kTessNear / max(dist, 32.0), 1.0, kTessMax);
+	float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
+	float reach = kTessNear * lerp(1.0, 3.0, smoothstep(0.02, 0.25, deform));
+	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 }
 
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
