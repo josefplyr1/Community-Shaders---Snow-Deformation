@@ -337,6 +337,11 @@ Texture2D<float> ObjectSkinDepth : register(t12);
 // units; must match kFineHeightMapHalfExtent * 2 / kFineHeightMapDim
 // (SnowDeformation.h).
 static const float kHeightTexel = 1.0;
+// The rim/slope/de-jut kill heuristics keep this WORLD reach regardless
+// of the raster texel: they were tuned at 8 units through the facade
+// saga, and scaling them with the texel let them resolve roof outlines
+// (beam-shaped kill cutouts in the floor) and stamp 2-unit rim ledges.
+static const float kRimReach = 8.0;
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
 // object edges; MAX both ignores them and keeps the patch on the highest
@@ -447,10 +452,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// vertex is killed by its own sentinel top (outline-spanning triangles
 	// go with it), and within-footprint roof-to-ground drops are caught by
 	// the height delta.
-	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
-	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
-	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
-	float topYN = PatchTop(worldXY - float2(0.0, kHeightTexel));
+	float topXP = PatchTop(worldXY + float2(kRimReach, 0.0));
+	float topXN = PatchTop(worldXY - float2(kRimReach, 0.0));
+	float topYP = PatchTop(worldXY + float2(0.0, kRimReach));
+	float topYN = PatchTop(worldXY - float2(0.0, kRimReach));
 	float minNeighborTop = 1e9;
 	if (topXP > -50000.0)
 		minNeighborTop = min(minNeighborTop, topXP);
@@ -475,7 +480,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// steep core; the surviving band was the jagged wall-base sheath.
 		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
 		// under this; steep flanks belong to the skin.
-		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kHeightTexel);
+		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kRimReach);
 		rim = rim || length(topGrad) > 0.5;
 	}
 	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
@@ -483,7 +488,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// rim along the wall. Clamping to the lowest valid neighbor plus a
 	// normal-slope allowance flattens the rim to the ground it belongs to.
 	[flatten] if (minNeighborTop < 1e8)
-		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
+		top = min(top, minNeighborTop + 2.0 * kRimReach);
 
 	// Untrenchable band around much-taller structures: the raster smear
 	// leaves elevated plateaus hugging walls that evade both the slope
