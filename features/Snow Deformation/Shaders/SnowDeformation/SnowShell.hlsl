@@ -380,7 +380,7 @@ float CarveProfile(float deformation, float uncarvedDepth)
 // deformation (BermField): two sample rings reach ~48 units past the
 // trail edge, and the outer ring's small per-tap weight gives the hill
 // a long, gentle outer tail instead of a knife along the stamp falloff.
-static const float kBermAmp = 0.22;
+static const float kBermAmp = 0.30;
 
 // The rise must still be CLIMBING at ~0.5 (the field value right at
 // the trail edge) or its flattened top smears into a plateau there; the
