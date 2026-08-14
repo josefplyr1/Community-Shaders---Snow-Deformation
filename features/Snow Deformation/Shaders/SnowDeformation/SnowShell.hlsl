@@ -254,6 +254,19 @@ float SampleDeformation(float2 gridLocal)
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
 }
 
+// Single-bilinear deformation tap: for many-tap averages (BermField) where
+// the sum provides the smoothness and bicubic per tap would be waste.
+float SampleDeformationFast(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	return SampleDeformationBilinear(uv * dims - 0.5, dims);
+}
+
 // Bilinear samples of the object field maps at absolute world XY. The raster
 // pass maps +worldY to +ndcY = texture v0 (top), so v mirrors.
 float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
@@ -392,20 +405,24 @@ float BermShape(float bermDeform)
 	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
 }
 
+// 17 taps on two staggered 8-point rings. Tap COUNT is the anti-seam: for
+// a straight trail edge each tap's projection crosses zero at a different
+// distance, so the field climbs in 1/17 steps instead of the 2/9 ledge a
+// sparse ring printed as a visible contour line ~34 units out. Bilinear
+// taps: the 17-way average supplies the smoothness bicubic would.
+static const float2 kBermTaps[16] = {
+	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
+	float2(-18.0, 0.0), float2(-12.73, -12.73), float2(0.0, -18.0), float2(12.73, -12.73),
+	float2(36.96, 15.31), float2(15.31, 36.96), float2(-15.31, 36.96), float2(-36.96, 15.31),
+	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
+};
+
 float BermField(float2 gridLocal)
 {
-	// Inner ring on the axes, outer ring on the diagonals: quasi-isotropic
-	// at 9 taps.
-	float b = SampleDeformation(gridLocal);
-	b += SampleDeformation(gridLocal + float2(24.0, 0.0));
-	b += SampleDeformation(gridLocal - float2(24.0, 0.0));
-	b += SampleDeformation(gridLocal + float2(0.0, 24.0));
-	b += SampleDeformation(gridLocal - float2(0.0, 24.0));
-	b += SampleDeformation(gridLocal + float2(34.0, 34.0));
-	b += SampleDeformation(gridLocal + float2(34.0, -34.0));
-	b += SampleDeformation(gridLocal + float2(-34.0, 34.0));
-	b += SampleDeformation(gridLocal + float2(-34.0, -34.0));
-	return saturate(b / 9.0);
+	float b = SampleDeformationFast(gridLocal);
+	[unroll] for (int i = 0; i < 16; i++)
+		b += SampleDeformationFast(gridLocal + kBermTaps[i]);
+	return saturate(b / 17.0);
 }
 
 // ---- Trench churn: chunky broken snow in disturbed zones ----
@@ -414,7 +431,7 @@ float BermField(float2 gridLocal)
 // get ~10-unit lumps; the weight comes from the same carve/berm terms the
 // profile uses, so churn dies at the untouched surface with no boundary.
 // The self-shadow march skips it: +-2 units is under its step resolution.
-static const float kChurnAmp = 2.0;
+static const float kChurnAmp = 4.0;
 
 float ChurnNoise(float2 worldXY)
 {
