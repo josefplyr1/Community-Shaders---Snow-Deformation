@@ -981,9 +981,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Berm shading: numerical gradient of the SAME blurred hill the
 	// geometry displaces by, so the light/shadow break sits on the hill's
 	// true flanks (the analytic shortcut put the terminator on the crest).
+	float bermXP = BermField(gridLocal + float2(step, 0.0));
+	float bermXN = BermField(gridLocal - float2(step, 0.0));
+	float bermYP = BermField(gridLocal + float2(0.0, step));
+	float bermYN = BermField(gridLocal - float2(0.0, step));
 	float2 bermGrad = float2(
-		BermShape(BermField(gridLocal + float2(step, 0.0))) - BermShape(BermField(gridLocal - float2(step, 0.0))),
-		BermShape(BermField(gridLocal + float2(0.0, step))) - BermShape(BermField(gridLocal - float2(0.0, step)))) / (2.0 * step);
+		BermShape(bermXP) - BermShape(bermXN),
+		BermShape(bermYP) - BermShape(bermYN)) / (2.0 * step);
 	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * kBermAmp;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
@@ -1007,9 +1011,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
+	// Disturbed-snow crisping (RDR2 reference): churned snow reads finer-
+	// grained than settled cover. Where the surface is carved (trench walls
+	// and floors) or piled (berms), layer in a higher-frequency tap of the
+	// same normal map; the weight IS the disturbance, so the transition
+	// never draws a boundary. The 3x taps alias 3x sooner, so their own
+	// distance fade is tighter than bumpFade.
+	static const float kCrispScale = 3.0;
+	static const float kCrispStrength = 0.8;
+	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
+	float disturb = max(smoothstep(0.05, 0.6, pixelCarve), BermShape(bermCenter));
+	disturb *= 1.0 - smoothstep(300.0, 1000.0, shellZ);
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
+		[branch] if (disturb > 0.01)
+		{
+			SnowTaps crispTaps = ComputeSnowTaps(snowUV * kCrispScale, worldXYPS);
+			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
+			texN.xy += crispN * (kCrispStrength * disturb);
+		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
@@ -1029,6 +1050,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
+		// Luminance-bump fallback: no second frequency to layer, so crisp by
+		// deepening the relief instead.
+		bumpGrad *= 1.0 + 0.8 * disturb;
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
