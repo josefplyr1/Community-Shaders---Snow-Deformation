@@ -192,8 +192,7 @@ float SampleTerrainHeight(float2 worldXY)
 				// gradual rise (whoever tends the fire also cleared the snow
 				// around it). Two noise octaves: fine wobble plus large-scale
 				// shape irregularity so no two bowls read as stamped circles.
-				// dirExtType.z scales melt strength (carried torches thaw
-				// partially instead of flattening trenches around the bearer).
+				// dirExtType.z scales melt strength per source.
 				float noisy = 0.7 + 0.35 * ExclusionNoise(worldXY) + 0.35 * ExclusionNoise(worldXY * 0.3);
 				float noisyRadius = radius * noisy;
 				float dist = length(d);

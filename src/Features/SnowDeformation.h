@@ -716,15 +716,13 @@ public:
 	static constexpr float kDoorForwardExtent = 70.0f;
 	static constexpr float kLoadDoorClearRadius = 150.0f;
 	static constexpr float kLoadDoorForwardExtent = 150.0f;
-	/** @brief Melt circle around a burning torch, carried or dropped. */
+	/** @brief Melt circle around a dropped burning torch. Carried torches never melt: a moving basin warps the bearer's own trails. */
 	static constexpr float kTorchClearRadius = 40.0f;
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
 	/** @brief Melt bowl radius for ground-level fires. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
-	static constexpr float kFireClearRadius = 150.0f;
-	/** @brief Melt strength of a carried torch: a partial thaw around the bearer. Full strength here would flatten trenches and berms wherever the bearer walks. */
-	static constexpr float kCarriedTorchMeltStrength = 0.35f;
+	static constexpr float kFireClearRadius = 300.0f;
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 
@@ -739,7 +737,7 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
 	ConstantBuffer* doorsCB = nullptr;
 	uint32_t doorRefreshCounter = 0;
-	/** @brief Cadence-gathered static exclusions (doors, campfires, heat sources); carried torches are appended per frame before CB upload. */
+	/** @brief Cadence-gathered exclusions (doors, campfires, heat sources, dropped burning torches). */
 	std::vector<std::pair<float4, float4>> staticExclusions;
 	/** @brief Survival Mode's Survival_WarmUpObjectsList when the plugin is present: base objects that count as heat sources. */
 	RE::BGSListForm* survivalHeatSources = nullptr;

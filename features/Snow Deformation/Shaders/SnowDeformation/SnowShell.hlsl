@@ -995,8 +995,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// measured along the view ray and shifts with the camera; widening the
 	// band with distance turns that parallax wobble into a broad soft fade.
 	// Mild distance scaling only: a steep view-Z-proportional band wobbles
-	// with camera tilt even up close.
-	float objectFadeBand = 10.0 + shellZ * 0.004;
+	// with camera tilt even up close. Base kept short: a long band reads as
+	// a stretched-out translucent margin wherever the shell nears geometry.
+	float objectFadeBand = 5.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
 	// Two situations hug the geometry behind them and must override the
 	// fade: carved trench floors (terrain, actor feet in the trench) and the
@@ -1008,14 +1009,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// rejoins the soft dissolve at borders.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
 	float pixelLift = 0.0;
+	float pixelMelt = 0.0;
 	[branch] if (ObjectLiftCap > 0.0)
 	{
 		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
 		[flatten] if (fieldHeight > -50000.0)
 			pixelLift = fieldHeight - pixelTerrain.x;
+		// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above
+		// it); without an override the proximity fade dithers them into
+		// translucency like any other near-coincident surface.
+		pixelMelt = saturate(-SampleObjectBottom(GridOrigin + gridLocal));
 	}
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
-	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift)));
+	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
 	// Stochastic discard dither: writing alpha without discarding blends
 	// nothing in this pass; TB's alpha path runs through depth-prepass

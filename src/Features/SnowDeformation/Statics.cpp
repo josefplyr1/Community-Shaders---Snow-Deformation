@@ -520,8 +520,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 	}
 
-	// Upload every frame: the cached static set plus carried torches, which
-	// move with their actor and need fresh positions each frame.
+	// Upload after each gather. Carried torches deliberately do NOT melt:
+	// a moving basin warps the bearer's own trench and berms (tried at full
+	// and 0.35 strength, both read as snow avoiding the player). Dropped
+	// burning torches cover the on-ground case.
 	{
 		ExclusionsCB exclusionData{};
 		uint32_t exclusionCount = 0;
@@ -529,25 +531,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			exclusionData.PosRadius[exclusionCount] = posRadius;
 			exclusionData.DirExtType[exclusionCount] = dirExtType;
 			exclusionCount++;
-		}
-		auto addCarriedTorch = [&](RE::Actor* a_actor) {
-			if (exclusionCount >= kMaxExclusions || !a_actor || a_actor->IsDead() || !a_actor->Is3DLoaded())
-				return;
-			auto* leftHand = a_actor->GetEquippedObject(true);
-			if (!leftHand || !leftHand->Is(RE::FormType::Light))
-				return;
-			auto pos = a_actor->GetPosition();
-			exclusionData.PosRadius[exclusionCount] = { pos.x, pos.y, pos.z, kTorchClearRadius };
-			// Partial melt strength: a full-strength moving basin flattens the
-			// bearer's own trench and berms into a warp that follows them.
-			exclusionData.DirExtType[exclusionCount] = { 0.0f, 1.0f, kCarriedTorchMeltStrength, 1.0f };
-			exclusionCount++;
-		};
-		addCarriedTorch(RE::PlayerCharacter::GetSingleton());
-		if (const auto processLists = RE::ProcessLists::GetSingleton()) {
-			for (auto& actorHandle : processLists->highActorHandles)
-				if (auto actor = actorHandle.get())
-					addCarriedTorch(actor.get());
 		}
 		exclusionData.ExclusionCount = exclusionCount;
 		statExclusionCount = exclusionCount;
