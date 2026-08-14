@@ -352,6 +352,10 @@ void SnowDeformation::Prepass()
 	// Blur the fresh map into the berm field (the edge berm's shape input).
 	EnsureBermFieldTexture();
 	if (auto* blurCS = GetBermBlurCS()) {
+		// The update pass still holds the fresh map at u0; release it first or
+		// the runtime force-nulls the SRV bind below and the blur reads zeros.
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 		ID3D11ShaderResourceView* srvs[] = { deformationTextures[currentTexture]->srv.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 		ID3D11UnorderedAccessView* uavs[] = { bermFieldTexture->uav.get() };
