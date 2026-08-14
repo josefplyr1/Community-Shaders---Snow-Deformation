@@ -831,6 +831,9 @@ protected:
 	{
 		uint16_t stillFrames = 0;
 		bool settled = false;
+		/** @brief Root z from the previous frame, for the flight gate. */
+		float prevZ = 0.0f;
+		bool hasPrevZ = false;
 	};
 	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
 };

@@ -57,11 +57,12 @@ static constexpr float kMinLimbCarve = 0.05f;
 // Prop stamps floor here so small dropped items (daggers, gems) stay visible
 // at deformation-texel resolution.
 static constexpr float kMinPropStampRadius = 5.0f;
-// Props descending faster than this are in flight and do not stamp. Support
-// is judged by fall speed, not land height: props resting on statics
-// (roads, bridges, snow drifts) sit far above the land, and the old
-// land-height band starved their stamps there.
-static constexpr float kPropFallSpeed = 300.0f;
+// Bodies descending faster than this are in flight and do not stamp (no
+// carving under a throw or a ragdoll arc). Support is judged by fall speed,
+// not land height: props and corpses resting on statics (roads, bridges,
+// snow drifts) sit far above the land, and a land-height band starves
+// their stamps there.
+static constexpr float kFallSpeedGate = 300.0f;
 // Skeletons carry bones that are hidden or never composed for this race
 // (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
 // world transform at the origin. A capsule anchored on one combs a trench
@@ -245,6 +246,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (const auto tesGround = RE::TES::GetSingleton())
 				tesGround->GetLandHeight(position, groundZ);
 
+		if (rest) {
+			// Flight gate: a flung ragdoll must not carve under its arc.
+			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
+			const bool fallingCorpse = rest->hasPrevZ && (position.z - rest->prevZ) / dt < -kFallSpeedGate;
+			rest->prevZ = position.z;
+			rest->hasPrevZ = true;
+			if (fallingCorpse)
+				return;
+		}
+
 		const float nominalDepth = std::max(
 			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
@@ -384,6 +395,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// segments, run through the shape path's settle latch per limb.
 		const bool useCorpseBones = isDead && bones && !bones->limbs.empty();
 		if (useCorpseBones) {
+			// A corpse rests on whatever its lowest limb touches (statics
+			// included): that limb carves fully, higher ones taper.
+			float lowestLimbBottom = FLT_MAX;
+			for (const auto& limb : bones->limbs) {
+				auto* nA = limb.a.get();
+				auto* nB = limb.b.get();
+				if (!nA || !nB || !LimbEndpointValid(nA->world, position) || !LimbEndpointValid(nB->world, position))
+					continue;
+				lowestLimbBottom = std::min(lowestLimbBottom,
+					std::min(nA->world.translate.z, nB->world.translate.z) - limb.radius * nA->world.scale);
+			}
+			const float corpseGroundZ = lowestLimbBottom != FLT_MAX ? std::max(groundZ, lowestLimbBottom) : groundZ;
+
 			uint32_t limbIndex = 0;
 			for (const auto& limb : bones->limbs) {
 				const uint32_t thisIndex = limbIndex++;
@@ -425,7 +449,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				currentPositions[key] = current;
 
-				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
+				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - corpseGroundZ;
 				const float carve = std::clamp(1.0f - heightAbove / nominalDepth, 0.0f, 1.0f);
 				if (carve < kMinLimbCarve)
 					continue;
@@ -442,6 +466,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
+		// Band reference: identical to groundZ for the living (their ground
+		// IS their position); for dead ragdolls it lifts to the body, so
+		// corpses on statics keep their shape stamps.
+		const float bandRefZ = std::max(groundZ, position.z);
 		uint32_t shapeIndex = 0;
 		if (!useCorpseBones)
 			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
@@ -452,7 +480,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				const uint32_t thisIndex = shapeIndex++;
 				if (stampCount >= kMaxStamps)
 					return RE::BSVisit::BSVisitControl::kStop;
-				if (centerPos.z - radius > groundZ + kStampSurfaceBand)
+				if (centerPos.z - radius > bandRefZ + kStampSurfaceBand)
 					return RE::BSVisit::BSVisitControl::kContinue;
 				if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
 					return RE::BSVisit::BSVisitControl::kContinue;
@@ -588,7 +616,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// Fast-falling props must not carve under their arc; supported
 			// ones stamp wherever they lie, including on top of statics.
 			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
-			if ((position.z - prevIt->second.z) / dt < -kPropFallSpeed)
+			if ((position.z - prevIt->second.z) / dt < -kFallSpeedGate)
 				return RE::BSContainer::ForEachResult::kContinue;
 
 			float groundZ = position.z;
