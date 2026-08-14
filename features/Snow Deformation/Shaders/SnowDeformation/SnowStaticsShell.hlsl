@@ -466,7 +466,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// through worn floors is the Trench Floor See-Through slider's job.
 		float depth = skinDepth * (1.0 - deform);
 		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
-		float floorMin = min(skinDepth, 0.8 + camDist * 0.004);
+		// The minimum floor tapers away where the raster data thins (the
+		// footprint boundary): held at full strength there, the raised
+		// floor ends in an 8-unit staircase rim along the footprint edge.
+		float floorMin = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(1.0, 4.0, skinDepth);
 		depth = max(depth, floorMin);
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
