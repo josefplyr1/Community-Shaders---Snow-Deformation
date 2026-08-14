@@ -8,9 +8,19 @@
 
 void SnowDeformation::DrawSettings()
 {
-	if (ImGui::TreeNodeEx(T(TKEY("snow_deformation"), "Snow Deformation"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
+	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
+	// Temporary placement: both toggles are slated for removal once their
+	// paths are the only ones left.
+	ImGui::Checkbox(T(TKEY("per_foot_stamping"), "Per-Foot Stamping"), &settings.PerFootStamping);
+	if (auto _ttFoot = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Actors stamp from their skeleton bones: heel-to-toe foot prints that alternate with the stride, plus limb segments that carve as deep as they reach into the snow layer (wading legs connect the prints in deep snow). Corpses imprint body-shaped from the same bones. Skeletons without recognizable bones fall back to collision shapes; props are unaffected."));
+	if (ImGui::Checkbox(T(TKEY("high_detail_trenches"), "High Detail Trenches"), &settings.HighDetailTrenches))
+		trenchDetailDirty = true;
+	if (auto _ttHd = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("high_detail_trenches_tooltip"), "Doubles the deformation map to 4096² for crisper trench edges (2-unit texels at the default Trenches range). Uses 64 MB of VRAM instead of 16 MB; toggling clears existing trenches."));
+
+	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::InputText(T(TKEY("snow_texture_path"), "Shell Snow Texture"), &settings.SnowTexturePath);
 		if (auto _ttTex = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_texture_path_tooltip"), "DDS path (relative to Data) for the shell's snow diffuse. Point it at the modlist's snow texture, then press Reload."));
@@ -29,197 +39,186 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
-		ImGui::Checkbox(T(TKEY("per_foot_stamping"), "Per-Foot Stamping"), &settings.PerFootStamping);
-		if (auto _ttFoot = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("per_foot_stamping_tooltip"), "Actors stamp from their skeleton bones: heel-to-toe foot prints that alternate with the stride, plus limb segments that carve as deep as they reach into the snow layer (wading legs connect the prints in deep snow). Corpses imprint body-shaped from the same bones. Skeletons without recognizable bones fall back to collision shapes; props are unaffected."));
-		if (settings.PerFootStamping) {
-			ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
-			if (auto _ttFw = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
-		}
+		ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
+		if (auto _ttFw = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
 		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
 		if (auto _ttSharp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
 		ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttIrr = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
-		if (ImGui::Checkbox(T(TKEY("high_detail_trenches"), "High Detail Trenches"), &settings.HighDetailTrenches))
-			trenchDetailDirty = true;
-		if (auto _ttHd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_detail_trenches_tooltip"), "Doubles the deformation map to 4096² for crisper trench edges (2-unit texels at the default Trenches range). Uses 64 MB of VRAM instead of 16 MB; toggling clears existing trenches."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttRd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
+		ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
+		if (auto _ttRs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
+		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			trenchRangeDirty = true;
+		if (auto _ttRt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+		if (auto _ttRk = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+		ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
+		if (auto _ttRkf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers and how raised snow settles."));
 		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
 		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing. Trails and trenches persist through clear weather."));
 		ImGui::SliderFloat(T(TKEY("refill_time"), "Snow Refill Time"), &settings.RefillTime, 0.0f, 3600.0f, "%.0f s");
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_time_tooltip"), "Time for compressed snow to fully recover. 0 disables refilling."));
+		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
+		if (auto _ttSteep = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
+		ImGui::TreePop();
+	}
 
-		if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Snow Depth by Model Class"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttModels = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh."));
-			ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttRoad = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
-			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
-			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
-			ImGui::SliderFloat(T(TKEY("floor_see_through"), "Trench Floor See-Through"), &settings.TrenchFloorFade, 0.0f, 1.0f, "%.2f");
-			if (auto _ttFloor = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("floor_see_through_tooltip"), "How much a heavily trampled trench floor on an object (rock, log, walkway) wears through to the object's own surface instead of holding solid snow."));
-			ImGui::TreePop();
+	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Surface Undulation"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttUnd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
+		ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttUs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
+		ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
+		if (auto _ttUsp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
+		ImGui::SliderFloat(T(TKEY("relief_depth"), "Relief Depth"), &settings.ReliefDepth, 0.0f, 12.0f, "%.1f units");
+		if (auto _ttRd2 = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Real geometric relief from the snow texture's displacement map, tessellated near the camera. Compressed snow and trench floors stay smooth. 0 disables tessellation."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Snow Depth by Model Class"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttModels = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh."));
+		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttRoad = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
+		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+		if (auto _ttObj = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
+		ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
+		if (auto _ttMesh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
+		ImGui::SliderFloat(T(TKEY("floor_see_through"), "Trench Floor See-Through"), &settings.TrenchFloorFade, 0.0f, 1.0f, "%.2f");
+		if (auto _ttFloor = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("floor_see_through_tooltip"), "How much a heavily trampled trench floor on an object (rock, log, walkway) wears through to the object's own surface instead of holding solid snow."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttClasses = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
+		bool classDepthsChanged = false;
+		for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
+			classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
+		if (classDepthsChanged)
+			shellDataDirty.store(true, std::memory_order_release);
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttBorders = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
+		ImGui::SliderFloat(T(TKEY("border_noise"), "Border Noise"), &settings.SnowBorderNoise, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttBn = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("border_noise_tooltip"), "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam."));
+		ImGui::SliderFloat(T(TKEY("border_smoothness"), "Border Smoothness"), &settings.SnowBorderSmoothness, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttBs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("border_smoothness_tooltip"), "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall."));
+		ImGui::SliderFloat(T(TKEY("border_trampled_fade"), "Trampled Border Fade"), &settings.SnowBorderTrampledFade, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttTf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("border_trampled_fade_tooltip"), "How gradually TRAMPLED snow (trench floors) blends out toward a class border, letting the ground beneath show through faintly. Too high and the landscape becomes too visible under trenches."));
+		ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttUf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
+		ImGui::SliderFloat(T(TKEY("snow_snow_fade"), "Snow <-> Snow Fade"), &settings.SnowSnowFade, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttSs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_snow_fade_tooltip"), "Cross-fade between OBJECT snow and LANDSCAPE snow where their surfaces run close in height (road meshes, low platforms). Wider = the two snow kinds dither into each other instead of meeting at a hard seam."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Landscape Trenches"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttTd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected."));
+		ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
+		if (auto _ttBh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));
+		ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttCh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
+		ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
+		if (auto _ttCs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
+		ImGui::SliderFloat(T(TKEY("crisp_scale"), "Grain Fineness"), &settings.CrispScale, 1.0f, 8.0f, "%.1fx");
+		if (auto _ttGf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed snow (shading only)."));
+		ImGui::SliderFloat(T(TKEY("crisp_strength"), "Grain Strength"), &settings.CrispStrength, 0.0f, 3.0f, "%.2f");
+		if (auto _ttGs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed snow. 0 disables it."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("obj_trench_detail"), "Object Trenches"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttOtd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_trench_detail_tooltip"), "The same disturbed-snow detail for snow on objects (roads, rocks, logs), independent of the landscape set. The berm is shading-only here."));
+		ImGui::SliderFloat(T(TKEY("obj_berm_height"), "Berm Height"), &settings.ObjBermHeight, 0.0f, 1.0f, "%.2fx");
+		if (auto _ttObh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_berm_height_tooltip"), "Strength of the shaded snow ridge along object trails. 0 removes it."));
+		ImGui::SliderFloat(T(TKEY("obj_churn_height"), "Churn Height"), &settings.ObjChurnHeight, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttOch = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_churn_height_tooltip"), "How tall the broken lumps are in object trench walls. Floors keep their thin cover regardless."));
+		ImGui::SliderFloat(T(TKEY("obj_churn_size"), "Churn Size"), &settings.ObjChurnSize, 0.25f, 4.0f, "%.2fx");
+		if (auto _ttOcs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_churn_size_tooltip"), "Size of the broken lumps: smaller = finer rubble, larger = broad clods."));
+		ImGui::SliderFloat(T(TKEY("obj_crisp_scale"), "Grain Fineness"), &settings.ObjCrispScale, 1.0f, 8.0f, "%.1fx");
+		if (auto _ttOgf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed object snow (shading only)."));
+		ImGui::SliderFloat(T(TKEY("obj_crisp_strength"), "Grain Strength"), &settings.ObjCrispStrength, 0.0f, 3.0f, "%.2f");
+		if (auto _ttOgs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("obj_crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed object snow. 0 disables it."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
+		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
+		if (settings.ShowDebugTexture) {
+			ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
+			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
 		}
 
-		if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttClasses = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
-			bool classDepthsChanged = false;
-			for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
-				classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
-			if (classDepthsChanged)
-				shellDataDirty.store(true, std::memory_order_release);
-			ImGui::TreePop();
-		}
+		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
+			clearRequested = true;
 
-		if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttBorders = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
-			ImGui::SliderFloat(T(TKEY("border_noise"), "Border Noise"), &settings.SnowBorderNoise, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttBn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_noise_tooltip"), "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam."));
-			ImGui::SliderFloat(T(TKEY("border_smoothness"), "Border Smoothness"), &settings.SnowBorderSmoothness, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttBs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_smoothness_tooltip"), "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall."));
-			ImGui::SliderFloat(T(TKEY("border_trampled_fade"), "Trampled Border Fade"), &settings.SnowBorderTrampledFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttTf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_trampled_fade_tooltip"), "How gradually TRAMPLED snow (trench floors) blends out toward a class border, letting the ground beneath show through faintly. Too high and the landscape becomes too visible under trenches."));
-			ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttUf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
-			ImGui::SliderFloat(T(TKEY("snow_snow_fade"), "Snow <-> Snow Fade"), &settings.SnowSnowFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttSs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_snow_fade_tooltip"), "Cross-fade between OBJECT snow and LANDSCAPE snow where their surfaces run close in height (road meshes, low platforms). Wider = the two snow kinds dither into each other instead of meeting at a hard seam."));
-			ImGui::TreePop();
-		}
+		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);
+		if (auto _ttPlane = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 
-		if (ImGui::TreeNodeEx(T(TKEY("snow_mounds"), "Snow Mounds"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttMounds = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_mounds_tooltip"), "How raised snow settles around whatever lifts it."));
-			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
-			if (auto _ttSteep = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
-			ImGui::TreePop();
-		}
+		ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
+		if (auto _ttSdv = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
 
-		if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Surface Undulation"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttUnd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
-			ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttUs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
-			ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
-			if (auto _ttUsp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
-			ImGui::SliderFloat(T(TKEY("relief_depth"), "Relief Depth"), &settings.ReliefDepth, 0.0f, 12.0f, "%.1f units");
-			if (auto _ttRd2 = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Real geometric relief from the snow texture's displacement map, tessellated near the camera. Compressed snow and trench floors stay smooth. 0 disables tessellation."));
-			ImGui::TreePop();
-		}
+		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
 
-		if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Trench Detail"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttTd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected."));
-			ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
-			if (auto _ttBh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));
-			ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttCh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
-			ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
-			if (auto _ttCs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
-			ImGui::SliderFloat(T(TKEY("crisp_scale"), "Grain Fineness"), &settings.CrispScale, 1.0f, 8.0f, "%.1fx");
-			if (auto _ttGf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed snow (shading only)."));
-			ImGui::SliderFloat(T(TKEY("crisp_strength"), "Grain Strength"), &settings.CrispStrength, 0.0f, 3.0f, "%.2f");
-			if (auto _ttGs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed snow. 0 disables it."));
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx(T(TKEY("obj_trench_detail"), "Object Trench Detail"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttOtd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_trench_detail_tooltip"), "The same disturbed-snow detail for snow on objects (roads, rocks, logs), independent of the landscape set. The berm is shading-only here."));
-			ImGui::SliderFloat(T(TKEY("obj_berm_height"), "Berm Height"), &settings.ObjBermHeight, 0.0f, 1.0f, "%.2fx");
-			if (auto _ttObh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_berm_height_tooltip"), "Strength of the shaded snow ridge along object trails. 0 removes it."));
-			ImGui::SliderFloat(T(TKEY("obj_churn_height"), "Churn Height"), &settings.ObjChurnHeight, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttOch = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_churn_height_tooltip"), "How tall the broken lumps are in object trench walls. Floors keep their thin cover regardless."));
-			ImGui::SliderFloat(T(TKEY("obj_churn_size"), "Churn Size"), &settings.ObjChurnSize, 0.25f, 4.0f, "%.2fx");
-			if (auto _ttOcs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_churn_size_tooltip"), "Size of the broken lumps: smaller = finer rubble, larger = broad clods."));
-			ImGui::SliderFloat(T(TKEY("obj_crisp_scale"), "Grain Fineness"), &settings.ObjCrispScale, 1.0f, 8.0f, "%.1fx");
-			if (auto _ttOgf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed object snow (shading only)."));
-			ImGui::SliderFloat(T(TKEY("obj_crisp_strength"), "Grain Strength"), &settings.ObjCrispStrength, 0.0f, 3.0f, "%.2f");
-			if (auto _ttOgs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed object snow. 0 disables it."));
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
-			if (auto _ttRd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
-			ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
-			if (auto _ttRs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
-			ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
-			if (ImGui::IsItemDeactivatedAfterEdit())
-				trenchRangeDirty = true;
-			if (auto _ttRt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
-			ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
-			if (auto _ttRk = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
-			ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
-			if (auto _ttRkf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
-			ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
-			if (settings.ShowDebugTexture) {
-				ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
-				ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
-			}
-
-			if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
-				clearRequested = true;
-
-			ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);
-			if (auto _ttPlane = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
-
-			ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
-			if (auto _ttSdv = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
-
-			ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
-
-			// Diagnostics: plain text by existing convention (no i18n).
-			ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (prop refs %u, movers %u)",
-				stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
-				stampStats.propRefs, stampStats.propMovers);
-
-			ImGui::TreePop();
-		}
-
+		// Diagnostics: plain text by existing convention (no i18n).
+		ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (prop refs %u, movers %u)",
+			stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
+			stampStats.propRefs, stampStats.propMovers);
 		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
 			snowMasksSizeForUI(),
