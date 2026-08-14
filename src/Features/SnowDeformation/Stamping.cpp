@@ -31,6 +31,11 @@ static constexpr float kStampDepthScaleMax = 1.2f;
 // scale (giants, scaled races). The ankle joint sits ~8 units above the sole
 // on humanoids, so the band leaves ~7 units of stride tolerance.
 static constexpr float kFootPlantBand = 15.0f;
+// Tall-ankle skeletons (mammoths) hold every foot bone above the absolute
+// band; when even the lowest foot misses it, the plant test switches to
+// relative-to-lowest-foot (the lowest foot of a grounded skeleton is
+// planted). Tighter than the absolute band: swing feet pass close by.
+static constexpr float kFootRelativeBand = 10.0f;
 // The toe bone marks the ball of the foot; the print capsule extends past it
 // by this fraction of the heel-toe length (the capsule end caps add the
 // rounded heel and toe tips on top).
@@ -255,6 +260,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// fallback while its high segments carve nothing.
 		if (!isDead && bones && !bones->feet.empty()) {
 			{
+				float minFootZ = FLT_MAX;
+				float minFootScale = 1.0f;
+				for (const auto& foot : bones->feet)
+					if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f && n->world.translate.z < minFootZ) {
+						minFootZ = n->world.translate.z;
+						minFootScale = n->world.scale;
+					}
+				const bool groundRefStarved =
+					minFootZ != FLT_MAX && minFootZ - groundZ > kFootPlantBand * minFootScale;
+
 				uint32_t footIndex = 0;
 				for (const auto& foot : bones->feet) {
 					const uint32_t thisIndex = footIndex++;
@@ -270,12 +285,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
 					// discrete print instead of dragging from the previous one.
-					if (footWorld.translate.z - groundZ > kFootPlantBand * boneScale)
+					const float plantRef = groundRefStarved ? minFootZ : groundZ;
+					const float plantBand = (groundRefStarved ? kFootRelativeBand : kFootPlantBand) * boneScale;
+					if (footWorld.translate.z - plantRef > plantBand)
 						continue;
 
 					float2 heel = { footWorld.translate.x, footWorld.translate.y };
 					float2 tip = heel;
+					// Toeless feet size off the parent-bone distance: a fixed
+					// hoof radius turns mammoth feet into dots.
 					float radius = kHoofRadius * boneScale;
+					if (auto* parentNode = footNode->parent)
+						radius = std::max(radius, 0.2f * footWorld.translate.GetDistance(parentNode->world.translate));
 					if (auto* toeNode = foot.toe.get()) {
 						const auto& toePos = toeNode->world.translate;
 						float2 dir = { toePos.x - heel.x, toePos.y - heel.y };
