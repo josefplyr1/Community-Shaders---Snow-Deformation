@@ -146,11 +146,7 @@ cbuffer StaticCB : register(b1)
 	float HasSmoothedNormals;
 	float RoundedDepth;  // rounded-class depth (rocks, drifts, logs)
 	float VertexCountF;  // index of the flatness-stats element in SmoothedNormals
-	float CaptureAltitudeCap;  // capture-pass altitude gate; unused here
-
-	float2 TerrainOriginS;  // capture-pass terrain mapping; unused here
-	float TerrainTexelS;
-	float TerrainDimS;
+	float padStat2;
 }
 
 Texture2D<float> DeformationMap : register(t1);
@@ -1316,11 +1312,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// toward the low/sentinel neighbors, and its drop below the max-based
 	// placement marks the overhang. Dissolve on that drop, so the patch
 	// ends where the object ends (to raster resolution).
-	// Sheet-edge fade: the vertex-kill boundary at the trail margin is a
-	// staircase of live/dead cells; dissolving on the pixel's own trample
-	// ends the sheet on the smooth falloff contour instead. Beneath is the
-	// skin at the same height, so nothing pops.
-	coverageAlpha *= smoothstep(0.001, 0.02, pixelDeform);
 	{
 		float2 clipDims;
 		ObjectTopRaw.GetDimensions(clipDims.x, clipDims.y);
