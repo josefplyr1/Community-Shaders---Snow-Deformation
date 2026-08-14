@@ -211,17 +211,8 @@ public:
 	Texture2D* deformationTextures[2] = { nullptr, nullptr };
 	uint currentTexture = 0;
 
-	// Wide Gaussian blur of the deformation map (~16-unit texels), the edge
-	// berm's shape input. Rebuilt each frame by BermBlurCS.
-	Texture2D* bermFieldTexture = nullptr;
-	uint bermFieldDim = 0;
-
 	/** @brief SRV of the most recently written deformation map, for shader sampling and debug UI. */
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[currentTexture]->srv.get(); }
-	/** @brief SRV of the blurred berm field, or null before the first Prepass. */
-	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
-	/** @brief (Re)creates the berm field texture at ~16 world units per texel for the current window size. */
-	void EnsureBermFieldTexture();
 	/** @brief World XY of the corner of texel (0,0) of the current deformation window. */
 	float2 GetWindowOrigin() const { return windowOrigin; }
 
@@ -240,9 +231,6 @@ public:
 	/** @brief Returns the deformation update compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationUpdateCS();
 	ID3D11ComputeShader* deformationUpdateCS = nullptr;
-	/** @brief Returns the berm field blur compute shader, compiling it on first use. */
-	ID3D11ComputeShader* GetBermBlurCS();
-	ID3D11ComputeShader* bermBlurCS = nullptr;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */

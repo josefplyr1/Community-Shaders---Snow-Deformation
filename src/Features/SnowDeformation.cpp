@@ -76,42 +76,6 @@ void SnowDeformation::CreateDeformationTextures()
 	}
 }
 
-void SnowDeformation::EnsureBermFieldTexture()
-{
-	// ~16 world units per texel, multiple of 8 for the dispatch. Fixed texel
-	// size keeps BermBlurCS's texel-space kernel a fixed world-space reach.
-	const uint desired = (uint)std::clamp<long>(std::lround(deformWorldSize / 16.0f / 8.0f) * 8, 64, 1024);
-	if (bermFieldTexture && bermFieldDim == desired)
-		return;
-	delete bermFieldTexture;
-	bermFieldTexture = nullptr;
-
-	D3D11_TEXTURE2D_DESC texDesc = {
-		.Width = desired,
-		.Height = desired,
-		.MipLevels = 1,
-		.ArraySize = 1,
-		.Format = DXGI_FORMAT_R16_FLOAT,
-		.SampleDesc = { .Count = 1 },
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-	};
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-		.Format = texDesc.Format,
-		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-	};
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-		.Format = texDesc.Format,
-		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MipSlice = 0 }
-	};
-	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
-	bermFieldTexture->CreateSRV(srvDesc);
-	bermFieldTexture->CreateUAV(uavDesc);
-	bermFieldDim = desired;
-}
-
 void SnowDeformation::SetupResources()
 {
 	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
@@ -349,23 +313,6 @@ void SnowDeformation::Prepass()
 		globals::profiler->EndPass();
 	}
 
-	// Blur the fresh map into the berm field (the edge berm's shape input).
-	EnsureBermFieldTexture();
-	if (auto* blurCS = GetBermBlurCS()) {
-		// The update pass still holds the fresh map at u0; release it first or
-		// the runtime force-nulls the SRV bind below and the blur reads zeros.
-		ID3D11UnorderedAccessView* nullUav = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-		ID3D11ShaderResourceView* srvs[] = { deformationTextures[currentTexture]->srv.get() };
-		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-		ID3D11UnorderedAccessView* uavs[] = { bermFieldTexture->uav.get() };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-		context->CSSetShader(blurCS, nullptr, 0);
-		globals::profiler->BeginPass("SnowDeformation::BermBlur");
-		context->Dispatch(bermFieldDim / 8, bermFieldDim / 8, 1);
-		globals::profiler->EndPass();
-	}
-
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	ID3D11Buffer* nullBuffer = nullptr;
@@ -391,23 +338,11 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationUpdateCS()
 	return deformationUpdateCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetBermBlurCS()
-{
-	if (!bermBlurCS) {
-		logger::debug("Compiling BermBlurCS");
-		bermBlurCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\BermBlurCS.hlsl", {}, "cs_5_0"));
-	}
-	return bermBlurCS;
-}
-
 void SnowDeformation::ClearShaderCache()
 {
 	if (deformationUpdateCS)
 		deformationUpdateCS->Release();
 	deformationUpdateCS = nullptr;
-	if (bermBlurCS)
-		bermBlurCS->Release();
-	bermBlurCS = nullptr;
 	if (shellVS)
 		shellVS->Release();
 	shellVS = nullptr;
@@ -611,8 +546,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 		return a_wrap ? a_wrap->resource.get() : nullptr;
 	};
 
-	const uint64_t deform = TextureBytes(texOf(deformationTextures[0])) + TextureBytes(texOf(deformationTextures[1])) +
-	                        TextureBytes(texOf(bermFieldTexture));
+	const uint64_t deform = TextureBytes(texOf(deformationTextures[0])) + TextureBytes(texOf(deformationTextures[1]));
 	const uint64_t terrain = TextureBytes(texOf(shellTerrainTexture));
 	const uint64_t heights = TextureBytes(texOf(heightTopRaw[0])) + TextureBytes(texOf(heightTopRaw[1])) +
 	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +

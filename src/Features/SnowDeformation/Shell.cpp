@@ -439,10 +439,6 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 	context->VSSetShaderResources(11, 2, objectCapSRVs);
 	context->PSSetShaderResources(11, 2, objectCapSRVs);
-	// Blurred berm field (t13): the edge berm's shape input, geometry + PS.
-	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
-	context->VSSetShaderResources(13, 1, &bermSRV);
-	context->PSSetShaderResources(13, 1, &bermSRV);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
 	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {
@@ -531,7 +527,6 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
 		context->DSSetShaderResources(11, 2, objectCapSRVs);
-		context->DSSetShaderResources(13, 1, &bermSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
 		context->Draw(kShellGridDim * kShellGridDim * 4, 0);
@@ -582,9 +577,9 @@ void SnowDeformation::DrawShell()
 	// tessellation is unavailable, and the deformation map is UAV-written
 	// next Prepass so it must not linger on a DS slot.
 	{
-		ID3D11ShaderResourceView* nullDSSRVs[14] = {};
-		context->DSSetShaderResources(0, 14, nullDSSRVs);
-		context->HSSetShaderResources(0, 14, nullDSSRVs);
+		ID3D11ShaderResourceView* nullDSSRVs[13] = {};
+		context->DSSetShaderResources(0, 13, nullDSSRVs);
+		context->HSSetShaderResources(0, 13, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
@@ -596,9 +591,9 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
-	ID3D11ShaderResourceView* nullSRVs[14] = {};
-	context->VSSetShaderResources(0, 14, nullSRVs);
-	context->PSSetShaderResources(0, 14, nullSRVs);
+	ID3D11ShaderResourceView* nullSRVs[13] = {};
+	context->VSSetShaderResources(0, 13, nullSRVs);
+	context->PSSetShaderResources(0, 13, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
 	// D3D silently drops the binding with warning spam. t20 (glint noise) and

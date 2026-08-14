@@ -371,11 +371,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		prevVSCBs[0].attach(cbs[0]);
 		prevVSCBs[1].attach(cbs[1]);
 	}
-	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVs[14];
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVs[6];
 	{
-		ID3D11ShaderResourceView* srvs[14] = {};
-		context->VSGetShaderResources(0, 14, srvs);
-		for (uint32_t i = 0; i < 14; i++)
+		ID3D11ShaderResourceView* srvs[6] = {};
+		context->VSGetShaderResources(0, 6, srvs);
+		for (uint32_t i = 0; i < 6; i++)
 			prevVSSRVs[i].attach(srvs[i]);
 	}
 	winrt::com_ptr<ID3D11Buffer> prevVB;
@@ -418,9 +418,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
 		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
 	context->VSSetShaderResources(0, 6, vsSRVs);
-	// Berm field (t13): the caster must displace the same hill the shell does.
-	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
-	context->VSSetShaderResources(13, 1, &bermSRV);
 	ID3D11Buffer* cb0 = shellCB->CB();
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -487,10 +484,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetConstantBuffers(0, 2, cbs);
 	}
 	{
-		ID3D11ShaderResourceView* srvs[14];
-		for (uint32_t i = 0; i < 14; i++)
+		ID3D11ShaderResourceView* srvs[6];
+		for (uint32_t i = 0; i < 6; i++)
 			srvs[i] = prevVSSRVs[i].get();
-		context->VSSetShaderResources(0, 14, srvs);
+		context->VSSetShaderResources(0, 6, srvs);
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();
