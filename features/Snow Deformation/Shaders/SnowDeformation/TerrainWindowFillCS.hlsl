@@ -22,8 +22,13 @@ cbuffer WindowFillCB : register(b0)
 	float2 HeightMapScale;
 	float2 HeightMapOffset;
 
-	// Decoded height = lerp(ZRange.x, ZRange.y, sample).
-	float2 ZRange;
+	// Decoded height = lerp(HeightRange.x, HeightRange.y, sample), where
+	// HeightRange is the metadata's pos0.z/pos1.z — the range the file's
+	// values are normalized over (+-32767*8 for xLODGen exports). This is
+	// the convention ShadowUpdate.cs.hlsl decodes with; the metadata's
+	// zRange is the actual min/max CONTENT height and is a much narrower
+	// band, so decoding with it flattens the world toward its midpoint.
+	float2 HeightRange;
 	// Worldspace south/north Y bounds for the latitude term.
 	float2 WorldYRange;
 
@@ -47,7 +52,7 @@ cbuffer WindowFillCB : register(b0)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return;
 
-	float z = lerp(ZRange.x, ZRange.y, HeightMap.SampleLevel(LinearSampler, uv, 0));
+	float z = lerp(HeightRange.x, HeightRange.y, HeightMap.SampleLevel(LinearSampler, uv, 0));
 
 	// Snow line sinks toward the north edge over the top ~third of the map,
 	// so the northern coast reads snowy at sea level while the mid-map

@@ -318,7 +318,9 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	cbData.WindowDim = kShellWindowDim;
 	cbData.HeightMapScale = { 1.0f / (heightmap->pos1.x - heightmap->pos0.x), 1.0f / (heightmap->pos1.y - heightmap->pos0.y) };
 	cbData.HeightMapOffset = { -heightmap->pos0.x * cbData.HeightMapScale.x, -heightmap->pos0.y * cbData.HeightMapScale.y };
-	cbData.ZRange = heightmap->zRange;
+	// pos0.z/pos1.z = the file's normalization range (ShadowUpdate.cs.hlsl
+	// decode convention), NOT zRange (the content min/max).
+	cbData.HeightRange = { heightmap->pos0.z, heightmap->pos1.z };
 	// TS convention: pos0 = left-TOP (north, larger Y), pos1 = right-bottom.
 	cbData.WorldYRange = { heightmap->pos1.y, heightmap->pos0.y };
 	cbData.SnowLineZ = settings.DistantSnowLineZ;

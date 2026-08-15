@@ -559,7 +559,7 @@ public:
 		float2 HeightMapScale;
 		float2 HeightMapOffset;
 
-		float2 ZRange;
+		float2 HeightRange;
 		float2 WorldYRange;
 
 		float SnowLineZ;
