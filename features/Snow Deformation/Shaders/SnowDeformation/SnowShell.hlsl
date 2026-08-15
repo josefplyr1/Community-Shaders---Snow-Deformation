@@ -132,7 +132,10 @@ cbuffer ShellCB : register(b0)
 	float ObjCrispScaleV;
 
 	float ObjCrispStrengthV;
-	float3 padObjDetail;
+	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
+	// u1), 2 warp-ring view, 3 data-provenance view.
+	uint ShellLODDebug;
+	float2 padObjDetail;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -179,6 +182,17 @@ float WarpAxis(float u)
 	float ext = max(a - kWarpInnerVerts, 0.0);
 	float outer = kWarpGrowth * (pow(kWarpGrowth, ext) - 1.0) / (kWarpGrowth - 1.0);
 	return sign(u) * (lin + outer) * GridSpacing;
+}
+
+// Inverse of WarpAxis: world-unit offset from the grid center back to vertex
+// units. Shared by the ring debug view and the probe CS.
+float InverseWarpAxis(float w)
+{
+	float a = abs(w) / GridSpacing;
+	float ext = 0.0;
+	[flatten] if (a > kWarpInnerVerts)
+		ext = log2((a - kWarpInnerVerts) * (kWarpGrowth - 1.0) / kWarpGrowth + 1.0) / log2(kWarpGrowth);
+	return sign(w) * (min(a, kWarpInnerVerts) + ext);
 }
 
 struct VS_OUTPUT
@@ -656,6 +670,10 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	// colored by the sampled values.
 	if (ShellDebugData != 0)
 		z = terrainHeight + 200.0;
+	// Provenance view: sentinel texels sit ~100k under the world and would be
+	// invisible; raise them to eye level so data gaps read as a red sheet.
+	if (ShellLODDebug == 3 && terrainHeight < -50000.0)
+		z = ShellCameraPosAdjust.z;
 
 	float3 absolutePos = float3(GridOrigin + gridLocal, z);
 
@@ -934,9 +952,18 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
 }
 
+// Depth-delta histogram (heatmap mode): 4 distance bands x 8 signed-delta
+// buckets. SM5.0 shares PS UAV slots with the render-target outputs, so the
+// heatmap runs as its own permutation with a single SV_Target — matching the
+// kMAIN-only binding — and the histogram UAV at u1.
+#	ifdef SNOW_LOD_HISTOGRAM
+RWStructuredBuffer<uint> LODHistogram : register(u1);
+#	endif
+
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
+#	ifndef SNOW_LOD_HISTOGRAM
 	float4 MotionVectors : SV_Target1;
 	float4 NormalGlossiness : SV_Target2;
 	float4 Albedo : SV_Target3;
@@ -944,6 +971,7 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
+#	endif
 };
 
 PS_OUTPUT main(VS_OUTPUT input)
@@ -1041,7 +1069,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// nothing in this pass; TB's alpha path runs through depth-prepass
 	// machinery not replicated here.
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-	[branch] if (ShellDebugData == 0)
+	[branch] if (ShellLODDebug == 1)
+	{
+		// Heatmap analyzes the covered snow surface only: bare/submerged
+		// shell would read as fake poke-under. Depth test is ALWAYS in this
+		// mode, so occlusion is re-created here for anything well behind the
+		// scene surface.
+		if (coverageAlpha < 0.05 || shellZ > sceneZ + 64.0)
+			discard;
+	}
+	else if (ShellDebugData == 0 && ShellLODDebug == 0)
 	{
 		if (screenNoise * screenNoise >= coverageAlpha)
 			discard;
@@ -1352,14 +1389,70 @@ PS_OUTPUT main(VS_OUTPUT input)
 		preLit = isSentinel ? float3(0.0, 0.0, 0.5) : float3(heightNorm * 0.25, pixelCoverage * 0.5, saturate(pixelTerrain.y / 40.0));
 	}
 
+	[branch] if (ShellLODDebug == 1)
+	{
+		// Signed vertical gap between the shell surface and whatever the
+		// scene rendered along this pixel's ray (positive = shell above the
+		// ground; approximate at grazing angles). Buckets feed the histogram
+		// and the color bands: reds = shell buried under the rendered
+		// ground, yellow = inside z-fight range, greens/blues = clearance.
+		float deltaUp = input.WorldPos.z * (1.0 - sceneZ / max(shellZ, 1e-3));
+		float camDist = length(gridLocal - WarpedHalfSpan);
+		uint band = camDist < 4000.0 ? 0u : (camDist < 8000.0 ? 1u : (camDist < 16000.0 ? 2u : 3u));
+		uint bucket = deltaUp < -32.0 ? 0u : deltaUp < -8.0 ? 1u :
+		                                 deltaUp < -2.0     ? 2u :
+		                                 deltaUp < 2.0      ? 3u :
+		                                 deltaUp < 8.0      ? 4u :
+		                                 deltaUp < 32.0     ? 5u :
+		                                 deltaUp < 128.0    ? 6u :
+		                                                      7u;
+#	ifdef SNOW_LOD_HISTOGRAM
+		InterlockedAdd(LODHistogram[band * 8u + bucket], 1u);
+#	endif
+		static const float3 kBucketColors[8] = {
+			float3(0.55, 0.0, 0.0), float3(1.0, 0.2, 0.0), float3(1.0, 0.55, 0.0), float3(1.0, 1.0, 0.15),
+			float3(0.2, 0.85, 0.2), float3(0.0, 0.7, 0.9), float3(0.15, 0.3, 1.0), float3(0.55, 0.15, 0.85)
+		};
+		preLit = kBucketColors[bucket];
+	}
+	else if (ShellLODDebug == 2)
+	{
+		// Warp-ring view: inner linear region gray; outer rings cycle six
+		// colors by ring index, dimmed where the world-snap weight is still
+		// partial (the camera-relative morph zone).
+		float2 uAxis = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
+		float ringF = max(abs(uAxis.x), abs(uAxis.y)) - kWarpInnerVerts;
+		[flatten] if (ringF <= 0.0)
+			preLit = float3(0.15, 0.15, 0.15);
+		else
+		{
+			float snapWeight = saturate(pow(kWarpGrowth, ringF) - 1.0);
+			static const float3 kRingColors[6] = {
+				float3(1.0, 0.2, 0.2), float3(1.0, 0.8, 0.2), float3(0.3, 1.0, 0.3),
+				float3(0.2, 0.9, 0.9), float3(0.3, 0.4, 1.0), float3(0.9, 0.3, 0.9)
+			};
+			preLit = kRingColors[(uint)ringF % 6u] * lerp(0.35, 1.0, snapWeight);
+		}
+	}
+	else if (ShellLODDebug == 3)
+	{
+		// Provenance: green = baked cell data (brightness = coverage), red =
+		// no data (unvisited cell; the VS raises these to eye level so the
+		// gap reads as a sheet). Blue reserved for heightmap-sourced texels.
+		float2 provT = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+		float provH = TerrainWindow.Load(int3((int2)clamp(provT, 0.0, (float)(TerrainDim - 1)), 0)).x;
+		preLit = provH > -50000.0 ? float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1) : float3(0.9, 0.1, 0.1);
+	}
+
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's
 	// deferred tail encodes it for the temporal resolve.
-	float alpha = ShellDebugData != 0 ? 1.0 : coverageAlpha;
+	float alpha = (ShellDebugData != 0 || ShellLODDebug != 0) ? 1.0 : coverageAlpha;
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
 	psout.Diffuse = float4(preLit, alpha);
+#	ifndef SNOW_LOD_HISTOGRAM
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
 	// Albedo carries the diffuse lobe (Lighting's PBR tail writes the same),
@@ -1372,6 +1465,82 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// outputAlbedo, then ApplySkylighting); ambientPart matches that.
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
 	psout.Masks2 = float4(0.0, 0.0, 0.0, alpha);
+#	endif
 	return psout;
+}
+#endif
+
+#ifdef COMPUTESHADER
+// LOD shimmer probes: evaluates the ACTUAL shell mesh surface (warped
+// placement, ring snapping, ShellSurfaceZ) at world-anchored points, so the
+// CPU can measure frame-to-frame surface stability. Probing the field at the
+// probe XY directly would miss the vertex hops entirely — the pops come from
+// vertices resampling the field at snapped positions, so the quad corners
+// are rebuilt exactly as the VS builds them and interpolated.
+// Probes anchor to a 512-unit-quantized camera XY; the CPU mirrors the
+// quantization and skips deltas across anchor changes.
+RWStructuredBuffer<float> ProbeHeights : register(u0);
+
+static const uint kProbeAzimuths = 24;
+static const uint kProbeRadii = 12;
+// Must match SnowDeformation.h kLODProbeRadius.
+static const float kProbeRadius[12] = { 1500, 2500, 3500, 5000, 6500, 8000, 10000, 12500, 15000, 18000, 21000, 24000 };
+static const float kProbeInvalid = 3.0e38;
+
+float2 SnappedVertexXY(float2 u)
+{
+	float2 vLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
+	float2 absXY = GridOrigin + vLocal;
+	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
+	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
+	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
+	return lerp(absXY, snapped, snapT);
+}
+
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+	if (id.x >= kProbeAzimuths * kProbeRadii)
+		return;
+	uint az = id.x % kProbeAzimuths;
+	uint ri = id.x / kProbeAzimuths;
+
+	float2 anchor = floor(ShellCameraPosAdjust.xy / 512.0) * 512.0;
+	float ang = (float)az * (6.28318530 / kProbeAzimuths);
+	float2 probeXY = anchor + float2(cos(ang), sin(ang)) * kProbeRadius[ri];
+
+	// Locate the quad by unsnapped vertex units, then rebuild its corners
+	// exactly as the VS does (snapping moves them by up to half a ring step).
+	float2 center = GridOrigin + WarpedHalfSpan;
+	float2 u = float2(InverseWarpAxis(probeXY.x - center.x), InverseWarpAxis(probeXY.y - center.y));
+	float2 q = floor(u);
+	if (max(abs(q.x), abs(q.y)) >= (float)GridDim * 0.5 - 1.0) {
+		ProbeHeights[id.x] = kProbeInvalid;
+		return;
+	}
+
+	float2 p00 = SnappedVertexXY(q);
+	float2 p10 = SnappedVertexXY(q + float2(1, 0));
+	float2 p01 = SnappedVertexXY(q + float2(0, 1));
+	float2 p11 = SnappedVertexXY(q + float2(1, 1));
+
+	float cov, th;
+	float z00 = ShellSurfaceZ(p00 - GridOrigin, cov, th);
+	bool valid = th > -50000.0;
+	float z10 = ShellSurfaceZ(p10 - GridOrigin, cov, th);
+	valid = valid && th > -50000.0;
+	float z01 = ShellSurfaceZ(p01 - GridOrigin, cov, th);
+	valid = valid && th > -50000.0;
+	float z11 = ShellSurfaceZ(p11 - GridOrigin, cov, th);
+	valid = valid && th > -50000.0;
+	if (!valid) {
+		ProbeHeights[id.x] = kProbeInvalid;
+		return;
+	}
+
+	// Bilinear over the snapped quad. The rasterizer splits it into two
+	// triangles, but bilinear tracks every corner hop the same way; the
+	// temporal delta is what the meter measures, not the absolute surface.
+	float2 span = max(p11 - p00, 1.0);
+	float2 f = saturate((probeXY - p00) / span);
+	ProbeHeights[id.x] = lerp(lerp(z00, z10, f.x), lerp(z01, z11, f.x), f.y);
 }
 #endif

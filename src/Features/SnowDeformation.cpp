@@ -411,9 +411,15 @@ void SnowDeformation::ClearShaderCache()
 	if (shellPS)
 		shellPS->Release();
 	shellPS = nullptr;
+	if (shellLODPS)
+		shellLODPS->Release();
+	shellLODPS = nullptr;
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (lodProbeCS)
+		lodProbeCS->Release();
+	lodProbeCS = nullptr;
 	if (staticsVS)
 		staticsVS->Release();
 	staticsVS = nullptr;

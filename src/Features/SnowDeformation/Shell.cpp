@@ -187,6 +187,18 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 	return shellPS;
 }
 
+ID3D11PixelShader* SnowDeformation::GetShellLODPS()
+{
+	// Single-SV_Target permutation: SM5.0 shares PS UAV slots with the
+	// render-target outputs, so the histogram UAV (u1) requires dropping the
+	// G-buffer down to kMAIN.
+	if (!shellLODPS) {
+		logger::debug("Compiling SnowShell LOD heatmap PS");
+		shellLODPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "PSHADER", "" }, { "SNOW_LOD_HISTOGRAM", "" } }, "ps_5_0"));
+	}
+	return shellLODPS;
+}
+
 ID3D11VertexShader* SnowDeformation::GetShellTessVS()
 {
 	if (!shellTessVS) {
@@ -266,6 +278,7 @@ void SnowDeformation::DrawShell()
 	cbData.TerrainTexelSize = kShellVertexSpacing;
 	cbData.TerrainDim = kShellWindowDim;
 	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : 0u);
+	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 3);
 	cbData.StaticsDebugView = staticsDebugView ? 1.0f : 0.0f;
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
@@ -426,6 +439,20 @@ void SnowDeformation::DrawShell()
 	context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
 
+	// Heatmap mode: depth test ALWAYS + no write (the PS re-creates
+	// occlusion) so poke-under pixels survive to be measured, and the
+	// G-buffer shrinks to kMAIN so the histogram UAV fits under the FL11.0
+	// 8-slot RTV+UAV limit.
+	const bool lodHeatmap = lodDebugView == 1 && EnsureLODDebugResources() && GetShellLODPS();
+	if (lodHeatmap) {
+		const UINT histClear[4] = {};
+		context->ClearUnorderedAccessViewUint(lodHistogramUAV.get(), histClear);
+		ID3D11UnorderedAccessView* histUAV = lodHistogramUAV.get();
+		context->OMSetRenderTargetsAndUnorderedAccessViews(1, rtvs, dsv, 1, 1, &histUAV, nullptr);
+		context->OMSetDepthStencilState(shellLODDepthState.get(), 0);
+		ps = shellLODPS;
+	}
+
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
@@ -550,6 +577,16 @@ void SnowDeformation::DrawShell()
 	}
 	globals::profiler->EndPass();
 
+	if (lodHeatmap) {
+		// Statics + the depth copy below expect the full G-buffer and the
+		// standard depth state; rebinding also unbinds the histogram UAV
+		// before its CopyResource.
+		context->OMSetRenderTargets(8, rtvs, dsv);
+		context->OMSetDepthStencilState(shellDepthState.get(), 0);
+		context->CopyResource(lodHistogramStaging[lodReadbackRing].get(), lodHistogram.get());
+		lodHistStagingValid[lodReadbackRing] = true;
+	}
+
 	// Post-shell depth copy (Terrain Blending's technique adapted): the main
 	// depth now contains the landscape shell's surface. The statics skin
 	// samples this at t9 to measure its view-ray gap to the shell and cross-
@@ -621,6 +658,8 @@ void SnowDeformation::DrawShell()
 	context->IASetPrimitiveTopology(prevTopology);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
+	RunLODProbePass();
+
 	// Screen-space passes running after us (SSGI) read Terrain Blending's
 	// blended depth, finalized during opaque rendering; without a sync they
 	// see buried geometry poking through the snow and paint occlusion halos
@@ -646,4 +685,178 @@ void SnowDeformation::DrawShell()
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
+}
+
+// ---- Distant-snow / LOD diagnostics ----
+
+bool SnowDeformation::EnsureLODDebugResources()
+{
+	if (shellLODDepthState && lodHistogram && lodProbeBuffer)
+		return true;
+
+	auto device = globals::d3d::device;
+
+	D3D11_DEPTH_STENCIL_DESC depthDesc{};
+	depthDesc.DepthEnable = TRUE;
+	depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+	depthDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
+	if (FAILED(device->CreateDepthStencilState(&depthDesc, shellLODDepthState.put())))
+		return false;
+	Util::SetResourceName(shellLODDepthState.get(), "SnowDeformation::ShellLODDepthState");
+
+	auto makeStructured = [&](uint32_t a_count, uint32_t a_stride, const char* a_name,
+							  winrt::com_ptr<ID3D11Buffer>& a_buf, winrt::com_ptr<ID3D11UnorderedAccessView>& a_uav,
+							  winrt::com_ptr<ID3D11Buffer>(&a_staging)[2]) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = a_count * a_stride;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = a_stride;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, a_buf.put())))
+			return false;
+		Util::SetResourceName(a_buf.get(), a_name);
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = a_count;
+		if (FAILED(device->CreateUnorderedAccessView(a_buf.get(), &uavDesc, a_uav.put())))
+			return false;
+
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = a_count * a_stride;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (int i = 0; i < 2; ++i)
+			if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, a_staging[i].put())))
+				return false;
+		return true;
+	};
+
+	if (!makeStructured(kLODHistBands * kLODHistBuckets, 4, "SnowDeformation::LODHistogram", lodHistogram, lodHistogramUAV, lodHistogramStaging))
+		return false;
+	if (!makeStructured(kLODProbeCount, 4, "SnowDeformation::LODProbeHeights", lodProbeBuffer, lodProbeUAV, lodProbeStaging))
+		return false;
+	return true;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetLODProbeCS()
+{
+	if (!lodProbeCS) {
+		logger::debug("Compiling SnowShell LOD probe CS");
+		lodProbeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "cs_5_0"));
+	}
+	return lodProbeCS;
+}
+
+/** @brief Distance band of a probe/pixel, matching the shader's histogram banding. */
+static uint32_t LODBandOfRadius(float a_radius)
+{
+	return a_radius < 4000.0f ? 0u : (a_radius < 8000.0f ? 1u : (a_radius < 16000.0f ? 2u : 3u));
+}
+
+void SnowDeformation::RunLODProbePass()
+{
+	auto context = globals::d3d::context;
+
+	if (lodShimmerMeter && EnsureLODDebugResources()) {
+		if (auto cs = GetLODProbeCS()) {
+			ID3D11Buffer* csCB = shellCB->CB();
+			context->CSSetConstantBuffers(0, 1, &csCB);
+			// ShellSurfaceZ reads the terrain window, deformation map and the
+			// object height/shelter/cap fields; t2/t3 (snow diffuse, scene
+			// depth) are unused by the surface math.
+			ID3D11ShaderResourceView* csSRVs[6] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), nullptr, nullptr, heightTopFiltered->srv.get(), heightBottomFiltered->srv.get() };
+			context->CSSetShaderResources(0, 6, csSRVs);
+			ID3D11ShaderResourceView* csCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+			context->CSSetShaderResources(11, 2, csCapSRVs);
+			ID3D11UnorderedAccessView* probeUAV = lodProbeUAV.get();
+			context->CSSetUnorderedAccessViews(0, 1, &probeUAV, nullptr);
+			context->CSSetShader(cs, nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::LODProbes");
+			context->Dispatch((kLODProbeCount + 63) / 64, 1, 1);
+			globals::profiler->EndPass();
+
+			ID3D11UnorderedAccessView* nullUAV = nullptr;
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+			ID3D11ShaderResourceView* nullSRVs[6] = {};
+			context->CSSetShaderResources(0, 6, nullSRVs);
+			context->CSSetShaderResources(11, 2, nullSRVs);
+			ID3D11Buffer* nullCB = nullptr;
+			context->CSSetConstantBuffers(0, 1, &nullCB);
+			context->CSSetShader(nullptr, nullptr, 0);
+
+			context->CopyResource(lodProbeStaging[lodReadbackRing].get(), lodProbeBuffer.get());
+			lodProbeStagingValid[lodReadbackRing] = true;
+			auto eyeFB = globals::game::frameBufferCached.GetCameraPosAdjust();
+			lodProbeAnchorAtCopy[lodReadbackRing] = { std::floor(eyeFB.x / 512.0f) * 512.0f, std::floor(eyeFB.y / 512.0f) * 512.0f };
+		}
+	}
+
+	ReadbackLODDiagnostics();
+	lodReadbackRing ^= 1;
+}
+
+void SnowDeformation::ReadbackLODDiagnostics()
+{
+	auto context = globals::d3d::context;
+	const int mapRing = lodReadbackRing ^ 1;
+
+	// Both maps target last frame's copies; DO_NOT_WAIT keeps a slow frame
+	// from stalling the render thread (the table just lags one more frame).
+	if (lodHistStagingValid[mapRing]) {
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(context->Map(lodHistogramStaging[mapRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+			std::memcpy(lodHistData, mapped.pData, sizeof(lodHistData));
+			context->Unmap(lodHistogramStaging[mapRing].get(), 0);
+			lodHistStagingValid[mapRing] = false;
+		}
+	}
+
+	if (!lodProbeStagingValid[mapRing])
+		return;
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	if (FAILED(context->Map(lodProbeStaging[mapRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
+		return;
+	lodProbeStagingValid[mapRing] = false;
+
+	const float* heights = static_cast<const float*>(mapped.pData);
+	const float2 anchor = lodProbeAnchorAtCopy[mapRing];
+	const bool sameAnchor = lodProbePrevValid && anchor.x == lodProbeAnchor.x && anchor.y == lodProbeAnchor.y;
+
+	float sum[kLODHistBands] = {};
+	float mx[kLODHistBands] = {};
+	uint32_t hops[kLODHistBands] = {};
+	uint32_t cnt[kLODHistBands] = {};
+	uint32_t validCnt[kLODHistBands] = {};
+
+	for (uint32_t i = 0; i < kLODProbeCount; ++i) {
+		const float h = heights[i];
+		const uint32_t band = LODBandOfRadius(kLODProbeRadius[i / kLODProbeAzimuths]);
+		const bool nowValid = h < 1.0e37f;
+		if (nowValid)
+			validCnt[band]++;
+		if (sameAnchor && nowValid && lodProbePrev[i] < 1.0e37f) {
+			const float d = std::abs(h - lodProbePrev[i]);
+			sum[band] += d;
+			mx[band] = std::max(mx[band], d);
+			if (d > 1.0f)
+				hops[band]++;
+			cnt[band]++;
+		}
+		lodProbePrev[i] = h;
+	}
+	context->Unmap(lodProbeStaging[mapRing].get(), 0);
+
+	for (uint32_t band = 0; band < kLODHistBands; ++band) {
+		lodShimmerMax[band] = mx[band];
+		lodShimmerAvg[band] = cnt[band] ? sum[band] / cnt[band] : 0.0f;
+		lodShimmerHops[band] = hops[band];
+		lodShimmerValid[band] = validCnt[band];
+		lodShimmerHistoryBuf[band][lodShimmerHistoryIdx] = mx[band];
+	}
+	lodShimmerHistoryIdx = (lodShimmerHistoryIdx + 1) % kLODShimmerHistory;
+	lodProbePrevValid = true;
+	lodProbeAnchor = anchor;
 }

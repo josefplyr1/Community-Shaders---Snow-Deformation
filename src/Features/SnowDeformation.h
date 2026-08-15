@@ -395,7 +395,9 @@ public:
 		float ObjCrispScaleV;
 
 		float ObjCrispStrengthV;
-		float3 padObjDetail;
+		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
+		uint ShellLODDebug;
+		float2 padObjDetail;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -430,6 +432,10 @@ public:
 	ID3D11VertexShader* shellVS = nullptr;
 	ID3D11PixelShader* shellPS = nullptr;
 
+	/** @brief Heatmap-mode PS permutation (SNOW_LOD_HISTOGRAM): single SV_Target + histogram UAV at u1. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11PixelShader* GetShellLODPS();
+	ID3D11PixelShader* shellLODPS = nullptr;
+
 	/** @brief Tessellated-path stages (SNOW_TESS): control-point VS (grid placement only), hull shader (distance-based crack-free factors) and domain shader (full surface evaluation + displacement-map relief). Active when Relief Depth > 0. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellTessVS();
 	ID3D11HullShader* GetShellHS();
@@ -453,6 +459,58 @@ public:
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	bool staticsDebugView = false;
+
+	// ---- Distant-snow / LOD diagnostics (runtime-only) ----
+
+	/** @brief 0 off, 1 depth-delta heatmap, 2 warp-ring view, 3 data-provenance view. Mirrors ShellCB::ShellLODDebug. */
+	int lodDebugView = 0;
+	/** @brief Shimmer meter: a probe CS evaluates the shell mesh surface at world-anchored points each frame; the CPU tracks frame-to-frame height deltas per distance band. */
+	bool lodShimmerMeter = false;
+
+	static constexpr uint32_t kLODHistBands = 4;
+	static constexpr uint32_t kLODHistBuckets = 8;
+	static constexpr uint32_t kLODProbeAzimuths = 24;
+	static constexpr uint32_t kLODProbeRadii = 12;
+	static constexpr uint32_t kLODProbeCount = kLODProbeAzimuths * kLODProbeRadii;
+	/** @brief Probe ring radii in world units; must match kProbeRadius in SnowShell.hlsl. */
+	static constexpr float kLODProbeRadius[kLODProbeRadii] = { 1500, 2500, 3500, 5000, 6500, 8000, 10000, 12500, 15000, 18000, 21000, 24000 };
+	static constexpr uint32_t kLODShimmerHistory = 120;
+
+	/** @brief Heatmap-mode depth state: test ALWAYS, write off. The PS re-creates occlusion, so poke-under pixels survive to be measured. */
+	winrt::com_ptr<ID3D11DepthStencilState> shellLODDepthState;
+	winrt::com_ptr<ID3D11Buffer> lodHistogram;
+	winrt::com_ptr<ID3D11UnorderedAccessView> lodHistogramUAV;
+	winrt::com_ptr<ID3D11Buffer> lodHistogramStaging[2];
+	winrt::com_ptr<ID3D11Buffer> lodProbeBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> lodProbeUAV;
+	winrt::com_ptr<ID3D11Buffer> lodProbeStaging[2];
+	/** @brief Two-deep staging ring: frame N copies into [ring], maps [ring^1] (frame N-1's copy) so readback never stalls. */
+	int lodReadbackRing = 0;
+	bool lodHistStagingValid[2] = {};
+	bool lodProbeStagingValid[2] = {};
+	/** @brief Probe anchor (512-unit-quantized camera XY) captured at each dispatch; deltas are only valid between readbacks sharing an anchor. */
+	float2 lodProbeAnchorAtCopy[2] = {};
+
+	uint32_t lodHistData[kLODHistBands * kLODHistBuckets] = {};
+	float lodProbePrev[kLODProbeCount] = {};
+	bool lodProbePrevValid = false;
+	float2 lodProbeAnchor = { 0.0f, 0.0f };
+	/** @brief Per-band shimmer stats from the last readback: max |dZ|, mean |dZ|, probes moving > 1 unit, valid probe count. */
+	float lodShimmerMax[kLODHistBands] = {};
+	float lodShimmerAvg[kLODHistBands] = {};
+	uint32_t lodShimmerHops[kLODHistBands] = {};
+	uint32_t lodShimmerValid[kLODHistBands] = {};
+	float lodShimmerHistoryBuf[kLODHistBands][kLODShimmerHistory] = {};
+	int lodShimmerHistoryIdx = 0;
+
+	/** @brief Lazily creates the LOD-diagnostic GPU resources. Implemented in SnowDeformation/Shell.cpp. */
+	bool EnsureLODDebugResources();
+	/** @brief Probe CS (COMPUTESHADER block of SnowShell.hlsl), compiled on first use. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11ComputeShader* GetLODProbeCS();
+	ID3D11ComputeShader* lodProbeCS = nullptr;
+	/** @brief Dispatches the probe CS (when the shimmer meter is on), reads back last frame's histogram + probe copies and updates the stats. Implemented in SnowDeformation/Shell.cpp. */
+	void RunLODProbePass();
+	void ReadbackLODDiagnostics();
 
 	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;

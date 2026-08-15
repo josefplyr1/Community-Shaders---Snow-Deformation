@@ -194,6 +194,7 @@ void SnowDeformation::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
+		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
 		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
 		if (settings.ShowDebugTexture) {
 			ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
@@ -203,6 +204,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
 			clearRequested = true;
 
+		ImGui::SeparatorText(T(TKEY("debug_cat_shell"), "Shell & Terrain Data"));
 		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);
 		ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Shell: Exclusion Debug Plane"), &shellExclusionDebug);
 		if (auto _ttExcl = Util::HoverTooltipWrapper())
@@ -210,14 +212,85 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPlane = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 
-		ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
-		if (auto _ttSdv = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
-
 		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
 
+		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
+		ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
+		if (auto _ttSdv = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
+
+		ImGui::SeparatorText(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"));
+		{
+			std::string lodModes;
+			lodModes += T(TKEY("lod_debug_off"), "Off");
+			lodModes += '\0';
+			lodModes += T(TKEY("lod_debug_heatmap"), "Depth Delta Heatmap");
+			lodModes += '\0';
+			lodModes += T(TKEY("lod_debug_rings"), "Warp Ring View");
+			lodModes += '\0';
+			lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
+			lodModes += '\0';
+			ImGui::Combo(T(TKEY("lod_debug_view"), "Distant Debug View"), &lodDebugView, lodModes.c_str());
+			if (auto _ttLod = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Ring View: warp rings by color, dimmed while still camera-relative. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
+
+			// Diagnostics below use plain text by existing convention (no i18n).
+			if (lodDebugView == 1) {
+				static const char* kBandLabels[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
+				static const char* kBucketLabels[kLODHistBuckets] = { "<-32", "-32..-8", "-8..-2", "+-2", "2..8", "8..32", "32..128", ">128" };
+				if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+					ImGui::TableNextRow();
+					ImGui::TableNextColumn();
+					ImGui::Text("units");
+					for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
+						ImGui::TableNextColumn();
+						if (bucketI == 3)
+							ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", kBucketLabels[bucketI]);
+						else
+							ImGui::Text("%s", kBucketLabels[bucketI]);
+					}
+					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+						ImGui::TableNextRow();
+						ImGui::TableNextColumn();
+						ImGui::Text("%s", kBandLabels[bandI]);
+						uint64_t bandTotal = 0;
+						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI)
+							bandTotal += lodHistData[bandI * kLODHistBuckets + bucketI];
+						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
+							ImGui::TableNextColumn();
+							const float pct = bandTotal ? 100.0f * lodHistData[bandI * kLODHistBuckets + bucketI] / bandTotal : 0.0f;
+							if (bucketI == 3 && pct >= 0.05f)
+								ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%.1f%%", pct);
+							else
+								ImGui::Text("%.1f%%", pct);
+						}
+					}
+					ImGui::EndTable();
+				}
+				ImGui::Text("Rows: camera distance bands. Columns: shell minus rendered ground, world units (share of band pixels).");
+			}
+
+			ImGui::Checkbox(T(TKEY("lod_shimmer"), "Far-Field Shimmer Meter"), &lodShimmerMeter);
+			if (auto _ttShimmer = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("lod_shimmer_tooltip"), "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field."));
+			if (lodShimmerMeter) {
+				static const char* kShimmerBands[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
+				for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+					char overlay[96];
+					snprintf(overlay, sizeof(overlay), "%s: max %.2f avg %.3f hops %u/%u", kShimmerBands[bandI],
+						lodShimmerMax[bandI], lodShimmerAvg[bandI], lodShimmerHops[bandI], lodShimmerValid[bandI]);
+					char plotId[16];
+					snprintf(plotId, sizeof(plotId), "##shim%u", bandI);
+					ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
+						overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
+				}
+				ImGui::Text("Per-frame max |dZ| (units, 0-25 scale). Deltas pause for one frame when the probe anchor requantizes (every 512 units of travel).");
+			}
+		}
+
+		ImGui::SeparatorText(T(TKEY("debug_cat_stats"), "Statistics"));
 		// Diagnostics: plain text by existing convention (no i18n).
 		ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (prop refs %u, movers %u)",
 			stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
