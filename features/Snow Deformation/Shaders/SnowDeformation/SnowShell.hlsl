@@ -632,7 +632,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float3 fineData = SampleTerrainLevel(gridLocal, mipFine);
 			float3 coarseData = SampleTerrainLevel(gridLocal, mipFine + 1u);
 			[flatten] if (min(fineData.x, coarseData.x) > -50000.0)
+			{
 				terrain = lerp(fineData, coarseData, frac(maxLodM));
+				// Mip averages sit below ridge crests, where the full-res
+				// mesh then tops the shell. The fine-vs-coarse gap is a free
+				// local-roughness measure: lift adaptively (rough ridges get
+				// more, plains get almost nothing), bounded and covered-only.
+				terrain.x += (min(abs(fineData.x - coarseData.x) * 0.5, 16.0) + 3.0) * saturate(terrain.z);
+			}
 		}
 
 		terrainHeight = terrain.x;
@@ -1627,6 +1634,15 @@ float2 SnappedVertexXY(float2 u)
 	float2 anchor = floor(ShellCameraPosAdjust.xy / 512.0) * 512.0;
 	float ang = (float)az * (6.28318530 / kProbeAzimuths);
 	float2 probeXY = anchor + float2(cos(ang), sin(ang)) * kProbeRadius[ri];
+
+	// Beyond the loaded-cell seam the shell is parked underground and
+	// invisible — measuring it there reports huge fake deltas. Only real
+	// shell counts.
+	[branch] if (ShellEdgeFade(probeXY - GridOrigin) <= 0.0)
+	{
+		ProbeHeights[id.x] = kProbeInvalid;
+		return;
+	}
 
 	// Locate the quad by unsnapped vertex units, then rebuild its corners
 	// exactly as the VS does (snapping moves them by up to half a ring step).

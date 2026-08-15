@@ -33,28 +33,39 @@ cbuffer WindowFillCB : register(b0)
 	float4 s01 = MipSource.Load(int3(src + int2(0, 1), 0));
 	float4 s11 = MipSource.Load(int3(src + int2(1, 1), 0));
 	float4 acc = 0.0;
+	float maxCoverage = 0.0;
 	float count = 0.0;
 	[flatten] if (s00.x > -50000.0)
 	{
 		acc += s00;
+		maxCoverage = max(maxCoverage, s00.z);
 		count += 1.0;
 	}
 	[flatten] if (s10.x > -50000.0)
 	{
 		acc += s10;
+		maxCoverage = max(maxCoverage, s10.z);
 		count += 1.0;
 	}
 	[flatten] if (s01.x > -50000.0)
 	{
 		acc += s01;
+		maxCoverage = max(maxCoverage, s01.z);
 		count += 1.0;
 	}
 	[flatten] if (s11.x > -50000.0)
 	{
 		acc += s11;
+		maxCoverage = max(maxCoverage, s11.z);
 		count += 1.0;
 	}
-	MipDest[id.xy] = count > 0.0 ? acc / count : float4(-100000.0, 0.0, 0.0, 0.0);
+	// Height/depth/provenance average, but coverage takes the MAX: an
+	// averaged coverage dilutes on mixed rock/snow slopes, thins the alpha
+	// taper and dithers holes into continuous snowfields. Snow-biased
+	// coverage is the same insurance the old neighbor-max provided.
+	float4 result = count > 0.0 ? acc / count : float4(-100000.0, 0.0, 0.0, 0.0);
+	result.z = count > 0.0 ? maxCoverage : 0.0;
+	MipDest[id.xy] = result;
 }
 #else
 
