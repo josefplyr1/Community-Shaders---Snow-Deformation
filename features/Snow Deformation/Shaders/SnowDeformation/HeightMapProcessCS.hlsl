@@ -233,7 +233,18 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 				float2 local = float2(obsRot.y * rel.x - obsRot.x * rel.y, obsRot.x * rel.x + obsRot.y * rel.y);
 				float2 q = abs(local) - posExt.zw;
 				float outside = length(max(q, 0.0));
-				[branch] if (outside > 0.5 && outside < DRIFT_BAND)
+				[branch] if (outside < 0.5)
+				{
+					// Inside the footprint: hold a full-height plateau, hidden
+					// by the building itself. Without it the un-lifted interior
+					// is the cone transform's lowest neighbor and every wall
+					// bank gets cut down INTO the wall at the repose slope,
+					// terraced by the sparse cone steps - snow that climbs
+					// down the wall as stairs instead of banking up it.
+					float amp = DRIFT_BASE + DRIFT_WIND * windStrength;
+					field = max(field, terrain + DriftHeight * amp);
+				}
+				else if (outside < DRIFT_BAND)
 				{
 					float2 nLocal = normalize(float2(max(q.x, 0.0) * sign(local.x), max(q.y, 0.0) * sign(local.y)));
 					float2 nWorld = float2(obsRot.y * nLocal.x + obsRot.x * nLocal.y, -obsRot.x * nLocal.x + obsRot.y * nLocal.y);
