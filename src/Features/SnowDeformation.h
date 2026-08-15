@@ -740,6 +740,8 @@ public:
 	static constexpr float kLoadDoorForwardExtent = 150.0f;
 	/** @brief Melt circle around a dropped burning torch. Carried torches never melt: a moving basin warps the bearer's own trails. */
 	static constexpr float kTorchClearRadius = 40.0f;
+	/** @brief Living actors this far above the LAND height stand on an elevated structure and do not stamp (2D-map interim gate; drift tops below this keep trails). */
+	static constexpr float kElevatedStampCutoff = 70.0f;
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;

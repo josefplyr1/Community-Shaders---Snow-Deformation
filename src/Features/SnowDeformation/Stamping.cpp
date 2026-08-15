@@ -240,6 +240,21 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
 				return;
 
+		// Living actors on ELEVATED structures (walkways, roofs, bridges) do
+		// not stamp either: the deformation map is 2D, so their trails would
+		// carve the ground shell below AND every snow surface above at the
+		// same XY (tracks on roofs from walking the walkway beneath).
+		// Interim gate until the stamp-height channel lands; drift tops
+		// (under the cutoff) keep their trails. Corpses keep the round-218
+		// elevated-surface behavior.
+		if (!isDead) {
+			float landZ = position.z;
+			if (const auto tesLand = RE::TES::GetSingleton())
+				tesLand->GetLandHeight(position, landZ);
+			if (position.z - landZ > kElevatedStampCutoff)
+				return;
+		}
+
 		// Living actors use their own position as the ground reference. Dead
 		// ragdolls are exempt from the airborne gate above, so their ground
 		// is the land height: a corpse flung off a ledge must not carve the
@@ -482,67 +497,67 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		uint32_t shapeIndex = 0;
 		if (!useCorpseBones)
 			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
-			RE::NiPoint3 centerPos;
-			float radius;
-			if (Util::GetShapeBound(a_object, centerPos, radius)) {
-				// Stable per-skeleton traversal order keys the trail history.
-				const uint32_t thisIndex = shapeIndex++;
-				if (stampCount >= kMaxStamps)
-					return RE::BSVisit::BSVisitControl::kStop;
-				if (centerPos.z - radius > bandRefZ + kStampSurfaceBand)
-					return RE::BSVisit::BSVisitControl::kContinue;
-				if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
-					return RE::BSVisit::BSVisitControl::kContinue;
+				RE::NiPoint3 centerPos;
+				float radius;
+				if (Util::GetShapeBound(a_object, centerPos, radius)) {
+					// Stable per-skeleton traversal order keys the trail history.
+					const uint32_t thisIndex = shapeIndex++;
+					if (stampCount >= kMaxStamps)
+						return RE::BSVisit::BSVisitControl::kStop;
+					if (centerPos.z - radius > bandRefZ + kStampSurfaceBand)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
+						return RE::BSVisit::BSVisitControl::kContinue;
 
-				// Capsule stamp from the shape's previous position keeps
-				// fast movers' trails continuous.
-				float2 current = { centerPos.x, centerPos.y };
-				float2 previous = current;
-				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
-				auto it = stampPrevPositions.find(key);
-				float sqDelta = 0.0f;
-				if (it != stampPrevPositions.end()) {
-					float2 delta = { current.x - it->second.x, current.y - it->second.y };
-					sqDelta = delta.x * delta.x + delta.y * delta.y;
-					if (sqDelta < kTrailBreakDistance * kTrailBreakDistance)
-						previous = it->second;
-				}
-				const bool firstSight = (it == stampPrevPositions.end());
-				// Against the frozen resting anchor: dragging accumulates
-				// past the wake distance, ragdoll jitter does not.
-				const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
-				if (isDead) {
-					// While unsettled the anchor follows every frame, so
-					// sqDelta is per-frame speed there; the epsilon separates
-					// real motion from jitter for the settle counter.
-					anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
-					anyShapeWoken |= woken;
-				}
-				if (isDead && (firstSight || (rest->settled && !woken))) {
-					// First sight baselines only; settled corpses keep the
-					// frozen anchor and feed the burial mounds instead.
-					currentPositions[key] = firstSight ? current : it->second;
-					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
-						corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
-					return RE::BSVisit::BSVisitControl::kContinue;
-				}
-				// Unsettled dead stamp every frame, exactly like the living:
-				// the snow deforms as the body moves through it.
-				currentPositions[key] = current;
+					// Capsule stamp from the shape's previous position keeps
+					// fast movers' trails continuous.
+					float2 current = { centerPos.x, centerPos.y };
+					float2 previous = current;
+					const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
+					auto it = stampPrevPositions.find(key);
+					float sqDelta = 0.0f;
+					if (it != stampPrevPositions.end()) {
+						float2 delta = { current.x - it->second.x, current.y - it->second.y };
+						sqDelta = delta.x * delta.x + delta.y * delta.y;
+						if (sqDelta < kTrailBreakDistance * kTrailBreakDistance)
+							previous = it->second;
+					}
+					const bool firstSight = (it == stampPrevPositions.end());
+					// Against the frozen resting anchor: dragging accumulates
+					// past the wake distance, ragdoll jitter does not.
+					const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
+					if (isDead) {
+						// While unsettled the anchor follows every frame, so
+						// sqDelta is per-frame speed there; the epsilon separates
+						// real motion from jitter for the settle counter.
+						anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
+						anyShapeWoken |= woken;
+					}
+					if (isDead && (firstSight || (rest->settled && !woken))) {
+						// First sight baselines only; settled corpses keep the
+						// frozen anchor and feed the burial mounds instead.
+						currentPositions[key] = firstSight ? current : it->second;
+						if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
+							corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+					// Unsettled dead stamp every frame, exactly like the living:
+					// the snow deforms as the body moves through it.
+					currentPositions[key] = current;
 
-				float4 stamp{};
-				stamp.x = current.x;
-				stamp.y = current.y;
-				stamp.z = 1.0f;
-				// StampRadius scales the shape's own radius.
-				stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
-				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
-				stampCount++;
-				stampStats.shapes++;
-			}
-			return RE::BSVisit::BSVisitControl::kContinue;
-		});
+					float4 stamp{};
+					stamp.x = current.x;
+					stamp.y = current.y;
+					stamp.z = 1.0f;
+					// StampRadius scales the shape's own radius.
+					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
+					perFrameData.Stamps[stampCount] = stamp;
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					stampCount++;
+					stampStats.shapes++;
+				}
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
 
 		if (rest) {
 			if (anyShapeWoken) {

@@ -494,14 +494,14 @@ void SnowDeformation::RenderObjectHeightMap()
 						if (!base)
 							return RE::BSContainer::ForEachResult::kContinue;
 
-						if (base->Is(RE::FormType::Door)) {
-							bool loadDoor = a_ref->extraList.HasType(RE::ExtraDataType::kTeleport);
-							auto pos = a_ref->GetPosition();
-							float angleZ = a_ref->GetAngleZ();
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, loadDoor ? kLoadDoorClearRadius : kDoorClearRadius },
-								{ std::sin(angleZ), std::cos(angleZ), loadDoor ? kLoadDoorForwardExtent : kDoorForwardExtent, 0.0f } });
+						// Doors: REMOVED per round-248 verdict. They were the
+						// only coverage-kill (bare ground) system left, their
+						// ellipse is large, and elevated doors (porch decks)
+						// project it straight down onto the ground below
+						// through the 300-unit z-gate. The suppress channel and
+						// the shader ellipse stay for a better-scoped revisit.
+						if (base->Is(RE::FormType::Door))
 							return RE::BSContainer::ForEachResult::kContinue;
-						}
 
 						// Dropped torches: carryable light references melt where
 						// they lie - but only while actually BURNING. Torch-
