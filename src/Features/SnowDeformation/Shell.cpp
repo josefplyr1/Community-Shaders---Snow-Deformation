@@ -260,10 +260,11 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
-	// The range slider scales the warped grid's inner spacing; the warp
-	// shape is unchanged, so range costs only near-field density (8 units
-	// at the 375 m default).
-	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
+	// Spacing is FIXED at 8 units: the shell ends at the loaded-cell seam
+	// (ShellEdgeFade), so range no longer scales density. Tighter spacing
+	// was measured to EXPLODE cost (sub-pixel triangles near the camera:
+	// 94 m range = 2-unit triangles = 4.2 ms Shell pass vs 1.1 ms at 8).
+	const float shellSpacing = kShellGridSpacing;
 	cbData.GridSpacing = shellSpacing;
 	cbData.GridDim = kShellGridDim;
 	// The warped grid is camera-centered: snap the center to the grid step
@@ -280,6 +281,28 @@ void SnowDeformation::DrawShell()
 	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : 0u);
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 3);
 	cbData.StaticsDebugView = staticsDebugView ? 1.0f : 0.0f;
+
+	// Loaded-cell boundary square around the PLAYER's cell (cell attachment
+	// follows the player, not the camera): full terrain inside, LOD outside.
+	// The shell's edge fade anchors here so it hands off to the horizon
+	// recolor exactly where the game swaps terrain for LOD meshes.
+	cbData.SeamRampInv = 0.0f;
+	if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+		static const int uGrids = [] {
+			if (auto* ini = RE::INISettingCollection::GetSingleton())
+				if (auto* setting = ini->GetSetting("uGridsToLoad:General"))
+					return std::max((int)setting->GetInteger(), 3);
+			return 5;
+		}();
+		const auto playerPos = player->GetPosition();
+		const int cellX = (int)std::floor(playerPos.x / 4096.0f);
+		const int cellY = (int)std::floor(playerPos.y / 4096.0f);
+		const int halfCells = (uGrids - 1) / 2;
+		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f, (cellY - halfCells) * 4096.0f,
+			(cellX + halfCells + 1) * 4096.0f, (cellY + halfCells + 1) * 4096.0f };
+		// ~15 m depth ramp just inside the seam.
+		cbData.SeamRampInv = 1.0f / 1024.0f;
+	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
 	// Keep shader-side sampling math in small grid-local coordinates.

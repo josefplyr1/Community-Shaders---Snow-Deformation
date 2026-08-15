@@ -193,8 +193,7 @@ public:
 		float ObjChurnSize = 0.25f;
 		float ObjCrispScale = 6.0f;
 		float ObjCrispStrength = 1.8f;
-		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
-		float RangeShellM = 375.0f;
+		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 100.0f;
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
@@ -209,8 +208,6 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief Where the horizon recolor ramps in, as a percent of the shell's reach (100 = exactly at the shell edge). */
-		float HorizonHandoffPct = 100.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -417,7 +414,12 @@ public:
 		float ObjCrispStrengthV;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
 		uint ShellLODDebug;
-		float2 padObjDetail;
+		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
+		float SeamRampInv;
+		float padObjDetail;
+
+		/** @brief Loaded-cell boundary square (minX, minY, maxX, maxY): the shell ends here and the horizon recolor takes over. */
+		float4 SeamBounds;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

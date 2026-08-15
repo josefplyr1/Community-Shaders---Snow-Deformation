@@ -135,7 +135,15 @@ cbuffer ShellCB : register(b0)
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
-	float2 padObjDetail;
+	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
+	// data (fall back to the warped-span fade alone).
+	float SeamRampInv;
+	float padObjDetail;
+
+	// Loaded-cell boundary square (minX, minY, maxX, maxY): full terrain
+	// inside, LOD terrain outside. The shell ends here and hands off to the
+	// horizon recolor, which wears the same snow material.
+	float4 SeamBounds;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -193,6 +201,24 @@ float InverseWarpAxis(float w)
 	[flatten] if (a > kWarpInnerVerts)
 		ext = log2((a - kWarpInnerVerts) * (kWarpGrowth - 1.0) / kWarpGrowth + 1.0) / log2(kWarpGrowth);
 	return sign(w) * (min(a, kWarpInnerVerts) + ext);
+}
+
+// Shell edge fade: the shell dissolves at the loaded-cell seam, where the
+// game swaps full terrain for LOD meshes and the horizon recolor takes over
+// in the same snow material. The warped-span fade stays as the fallback for
+// the grid's own physical edge (and for frames with no seam data).
+float ShellEdgeFade(float2 gridLocal)
+{
+	float2 delta = abs(gridLocal - WarpedHalfSpan);
+	float fade = saturate((WarpedHalfSpan - max(delta.x, delta.y)) / 2048.0);
+	[flatten] if (SeamRampInv > 0.0)
+	{
+		float2 worldXY = GridOrigin + gridLocal;
+		float inside = min(min(worldXY.x - SeamBounds.x, worldXY.y - SeamBounds.y),
+			min(SeamBounds.z - worldXY.x, SeamBounds.w - worldXY.y));
+		fade = min(fade, saturate(inside * SeamRampInv));
+	}
+	return fade;
 }
 
 struct VS_OUTPUT
@@ -516,134 +542,101 @@ float3 SampleTerrainShaped(float2 gridLocal)
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
-	float3 terrain = SampleTerrainShaped(gridLocal);
-	terrainHeight = terrain.x;
-	float rampDepth = terrain.y;
-	coverage = saturate(terrain.z);
-
-	// Distant de-noising: out here one terrain-window texel spans 100+ world
-	// units and the bilinear height/coverage under-resolve; on slopes the
-	// interpolated height dips below the real mesh and single bare texels
-	// punch crawling pinholes into continuous snowfields. A snow-biased
-	// neighborhood max over one texel radius lifts the shell clear and fills
-	// the pinholes; the blend-in leaves the near field untouched.
-	float camDist = length(gridLocal - WarpedHalfSpan);
-	[branch] if (camDist > 4000.0)
+	// Beyond the loaded-cell seam the recolored LOD terrain owns the ground:
+	// park the vertex under it and skip the field work entirely. Single
+	// return keeps fxc's X4000 quiet (early return + out params misfires).
+	float edgeFade = ShellEdgeFade(gridLocal);
+	float surfaceZ;
+	[branch] if (edgeFade <= 0.0)
 	{
-		float farBlend = smoothstep(4000.0, 10000.0, camDist);
-		float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
-		float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
-		float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
-		float3 n3 = SampleTerrain(gridLocal - float2(0.0, TerrainTexelSize));
-		float3 n4 = SampleTerrain(gridLocal + float2(TerrainTexelSize, TerrainTexelSize));
-		float3 n5 = SampleTerrain(gridLocal - float2(TerrainTexelSize, TerrainTexelSize));
-		float3 n6 = SampleTerrain(gridLocal + float2(TerrainTexelSize, -TerrainTexelSize));
-		float3 n7 = SampleTerrain(gridLocal + float2(-TerrainTexelSize, TerrainTexelSize));
-		// Never-rasterized window texels at the data edge hold sentinel heights
-		// that would explode the ridge pad through a single neighbor tap. Trust
-		// only plausible taps (fall back to the center height) and cap the pad.
-		float h0 = n0.x > -50000.0 ? n0.x : terrainHeight;
-		float h1 = n1.x > -50000.0 ? n1.x : terrainHeight;
-		float h2 = n2.x > -50000.0 ? n2.x : terrainHeight;
-		float h3 = n3.x > -50000.0 ? n3.x : terrainHeight;
-		float h4 = n4.x > -50000.0 ? n4.x : terrainHeight;
-		float h5 = n5.x > -50000.0 ? n5.x : terrainHeight;
-		float h6 = n6.x > -50000.0 ? n6.x : terrainHeight;
-		float h7 = n7.x > -50000.0 ? n7.x : terrainHeight;
-		float maxHeight = max(max(max(h0, h1), max(h2, h3)), max(max(h4, h5), max(h6, h7)));
-		float c0 = n0.x > -50000.0 ? n0.z : 0.0;
-		float c1 = n1.x > -50000.0 ? n1.z : 0.0;
-		float c2 = n2.x > -50000.0 ? n2.z : 0.0;
-		float c3 = n3.x > -50000.0 ? n3.z : 0.0;
-		float c4 = n4.x > -50000.0 ? n4.z : 0.0;
-		float c5 = n5.x > -50000.0 ? n5.z : 0.0;
-		float c6 = n6.x > -50000.0 ? n6.z : 0.0;
-		float c7 = n7.x > -50000.0 ? n7.z : 0.0;
-		float maxCoverage = saturate(max(max(max(c0, c1), max(c2, c3)), max(max(c4, c5), max(c6, c7))));
-		// Within-texel ridge error: one height sample per 100+ world units cannot
-		// see a crest between texel centers; on a slope the real mesh can top the
-		// interpolated field by half the local gradient. Pad by that bound so the
-		// shell always clears the mesh.
-		float ridgePad = min(0.25 * max(abs(h0 - h1), abs(h2 - h3)), 150.0);
-		terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
-		coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
-		// Wherever the pad still lands the far shell within a few units of the
-		// landscape mesh, the two interleave at depth precision and the winner
-		// flips with the view angle. A fixed covered-only margin makes the
-		// shell win at every angle.
-		terrainHeight += farBlend * 8.0 * saturate(coverage);
+		terrainHeight = SampleTerrain(gridLocal).x;
+		coverage = 0.0;
+		surfaceZ = terrainHeight - 32.0;
 	}
-
-	// Object height field: t4 holds the SLOPE-LIMITED snow-height field
-	// (terrain run through the angle-of-repose cone transform), t5 the
-	// shelter mask; 1 under floating structures, so walkways, roofs and
-	// bridges keep the ground beneath them bare.
-	[branch] if (ObjectLiftCap > 0.0)
+	else
 	{
-		float2 worldXY = GridOrigin + gridLocal;
-		float field = SampleObjectHeight(worldXY);
-		[flatten] if (field > -50000.0)
+		float3 terrain = SampleTerrainShaped(gridLocal);
+		terrainHeight = terrain.x;
+		float rampDepth = terrain.y;
+		coverage = saturate(terrain.z);
+
+		// The shell now ends at the loaded-cell seam, where window heights are
+		// exact land vertices — the old far-field lift stack (neighbor max,
+		// ridge pads, 8-unit float) is gone. What remains is the bilinear-vs-
+		// triangulation bound: on twisted quads the interpolated height can dip
+		// a few units below the real mesh, so pad slightly with distance.
+		float camDist = length(gridLocal - WarpedHalfSpan);
+		terrainHeight += smoothstep(3000.0, 8000.0, camDist) * 3.0 * saturate(coverage);
+
+		// Object height field: t4 holds the SLOPE-LIMITED snow-height field
+		// (terrain run through the angle-of-repose cone transform), t5 the
+		// shelter mask; 1 under floating structures, so walkways, roofs and
+		// bridges keep the ground beneath them bare.
+		[branch] if (ObjectLiftCap > 0.0)
 		{
-			// Where a captured object defines the surface, the layer wears
-			// the object's own skin depth instead of the landscape class
-			// depth (a thin-skinned rock must not carry a deep landscape
-			// layer). Blend by how far the object stands proud of the
-			// un-lifted base, so buried objects and the aprons around them
-			// keep landscape depth.
-			float lift = field - terrainHeight;
-			float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
-			rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
-			terrainHeight = max(terrainHeight, field);
-			// Drift failsafe: a field standing well proud IS snow. Force
-			// coverage and a minimum depth so banks raised over bare or
-			// low-coverage ground (dirt patches at walls) never dither into
-			// holes or submerge out of the surface.
-			float liftForce = smoothstep(6.0, 20.0, lift);
-			coverage = max(coverage, liftForce);
-			rampDepth = max(rampDepth, liftForce * 6.0);
+			float2 worldXY = GridOrigin + gridLocal;
+			float field = SampleObjectHeight(worldXY);
+			[flatten] if (field > -50000.0)
+			{
+				// Where a captured object defines the surface, the layer wears
+				// the object's own skin depth instead of the landscape class
+				// depth (a thin-skinned rock must not carry a deep landscape
+				// layer). Blend by how far the object stands proud of the
+				// un-lifted base, so buried objects and the aprons around them
+				// keep landscape depth.
+				float lift = field - terrainHeight;
+				float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
+				rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
+				terrainHeight = max(terrainHeight, field);
+				// Drift failsafe: a field standing well proud IS snow. Force
+				// coverage and a minimum depth so banks raised over bare or
+				// low-coverage ground (dirt patches at walls) never dither into
+				// holes or submerge out of the surface.
+				float liftForce = smoothstep(6.0, 20.0, lift);
+				coverage = max(coverage, liftForce);
+				rampDepth = max(rampDepth, liftForce * 6.0);
+			}
+			// The mask carries two independent channels. x = door suppression,
+			// smooth 0-1, so doorstep clearings fade at their edges instead of
+			// cutting. y = melt fraction: depth thins toward kFireMeltFloor
+			// (coverage untouched), so melted ground keeps a thin snow floor
+			// instead of fading to bare ground.
+			float2 shelterMask = SampleObjectBottom(worldXY);
+			coverage *= saturate(1.0 - shelterMask.x);
+			float melt = saturate(shelterMask.y);
+			rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
 		}
-		// The mask carries two independent channels. x = door suppression,
-		// smooth 0-1, so doorstep clearings fade at their edges instead of
-		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
-		// (coverage untouched), so melted ground keeps a thin snow floor
-		// instead of fading to bare ground.
-		float2 shelterMask = SampleObjectBottom(worldXY);
-		coverage *= saturate(1.0 - shelterMask.x);
-		float melt = saturate(shelterMask.y);
-		rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
+
+		// Bare ground contributes negative depth so the shell submerges toward
+		// uncovered terrain as well; edgeFade (computed above) melts the shell
+		// into the ground across the seam ramp.
+		float bare = saturate(1.0 - coverage);
+		float depth = rampDepth + (-8.0) * bare;
+		depth = lerp(-8.0, depth, edgeFade);
+
+		// Deformation carves only where the layer is actually raised; the
+		// negative-depth submerge at class edges is untouched. The carved floor
+		// never drops below kTrenchFloor units (or the un-carved depth when
+		// thinner), so trench bottoms stay shell snow. The floor tapers away as
+		// the uncarved depth thins toward class borders; a full floor there would
+		// hold a hard-edged slab over bare ground (border fade itself is alpha,
+		// handled in the PS). Undulation rides on top, scaled by the remaining
+		// depth so floors and thin edges stay flat.
+		[flatten] if (depth > 0.0)
+		{
+			float deformation = saturate(SampleDeformation(gridLocal));
+			float bermD = BermField(gridLocal);
+			float uncarved = depth;
+			depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
+			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
+			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
+			// local depth even at the slider's 8-unit maximum.
+			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
+		}
+
+		surfaceZ = terrainHeight + depth;
 	}
-
-	// Fade toward the grid boundary so the shell melts into the terrain.
-	float2 delta = abs(gridLocal - WarpedHalfSpan);
-	float edgeFade = saturate((WarpedHalfSpan - max(delta.x, delta.y)) / 2048.0);
-
-	// Bare ground contributes negative depth so the shell submerges toward
-	// uncovered terrain as well.
-	float bare = saturate(1.0 - coverage);
-	float depth = rampDepth + (-8.0) * bare;
-	depth = lerp(-8.0, depth, edgeFade);
-
-	// Deformation carves only where the layer is actually raised; the
-	// negative-depth submerge at class edges is untouched. The carved floor
-	// never drops below kTrenchFloor units (or the un-carved depth when
-	// thinner), so trench bottoms stay shell snow. The floor tapers away as
-	// the uncarved depth thins toward class borders; a full floor there would
-	// hold a hard-edged slab over bare ground (border fade itself is alpha,
-	// handled in the PS). Undulation rides on top, scaled by the remaining
-	// depth so floors and thin edges stay flat.
-	[flatten] if (depth > 0.0)
-	{
-		float deformation = saturate(SampleDeformation(gridLocal));
-		float bermD = BermField(gridLocal);
-		float uncarved = depth;
-		depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
-		depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
-		// Churn scales away on thin cover: the /10 keeps the dig under 80% of
-		// local depth even at the slider's 8-unit maximum.
-		depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
-	}
-
-	return terrainHeight + depth;
+	return surfaceZ;
 }
 
 // Shared vertex tail for the legacy VS and the tessellated domain shader:
@@ -662,9 +655,7 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 
 	// Coverage alpha drives both geometry taper and edge dithering in the PS.
 	float taper = smoothstep(0.0, 0.6, coverage);
-	float2 edgeDelta = abs(gridLocal - WarpedHalfSpan);
-	float edgeFade = saturate((WarpedHalfSpan - max(edgeDelta.x, edgeDelta.y)) / 2048.0);
-	float coverageAlpha = taper * edgeFade;
+	float coverageAlpha = taper * ShellEdgeFade(gridLocal);
 
 	// Data debug: conforming plane well above the sampled terrain height,
 	// colored by the sampled values.
@@ -988,8 +979,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// dither agree with the shaped geometry.
 	float3 pixelTerrain = SampleTerrainShaped(gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
-	float2 psEdgeDelta = abs(gridLocal - WarpedHalfSpan);
-	float psEdgeFade = saturate((WarpedHalfSpan - max(psEdgeDelta.x, psEdgeDelta.y)) / 2048.0);
+	float psEdgeFade = ShellEdgeFade(gridLocal);
 
 	// Un-carved class depth ramp at this pixel. Where it goes negative the
 	// shell is submerged (depth-rejected anyway). The dither rides the ramp:

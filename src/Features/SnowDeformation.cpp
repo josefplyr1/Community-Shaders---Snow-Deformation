@@ -45,7 +45,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ObjChurnSize,
 	ObjCrispScale,
 	ObjCrispStrength,
-	RangeShellM,
 	RangeTrenchesM,
 	RangeSkinsM,
 	RangeSkinsFadeM,
@@ -53,8 +52,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantSnowNorthDrop,
 	DistantSnowLineFade,
 	LODSnowSensitivity,
-	HorizonSnow,
-	HorizonHandoffPct)
+	HorizonSnow)
 
 void SnowDeformation::CreateDeformationTextures()
 {
@@ -229,14 +227,13 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = debugTerrainOverlay ? 1u : 0u;
 
-	// Horizon snow: ramp aligned to the shell's reach so geometry hands off
-	// to the recolored LOD inside the shell's own edge fade.
+	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
+	// (where the shell ends), so the recolor simply applies to all of it —
+	// including any LOD peeking through under the shell, which then wears
+	// the same material and helps hide holes.
 	EnsureShellSnowTextures();
-	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
-	const float shellSpan = ShellWarpedHalfSpan(shellSpacing);
-	constexpr float kHandoffBand = 4096.0f;
-	data.LODReplaceStart = std::max(shellSpan * std::clamp(settings.HorizonHandoffPct, 10.0f, 150.0f) / 100.0f - kHandoffBand, 0.0f);
-	data.LODReplaceFadeInv = 1.0f / kHandoffBand;
+	data.LODReplaceStart = 0.0f;
+	data.LODReplaceFadeInv = 1.0f / 2048.0f;
 	data.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
 	data.SnowIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
 	data.SnowRoughnessScale = snowRoughnessScale;

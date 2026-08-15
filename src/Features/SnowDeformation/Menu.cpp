@@ -44,10 +44,7 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttRd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
-		ImGui::SliderFloat(T(TKEY("range_shell"), "Snow Shell"), &settings.RangeShellM, 94.0f, 750.0f, "%.0f m");
-		if (auto _ttRs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_shell_tooltip"), "Warped-grid span. Applies live; near-field vertex density scales with range (8-unit spacing at 375 m)."));
+			ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost. The snow shell itself auto-sizes to the game's loaded-cell grid and hands off to Horizon Snow beyond it."));
 		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			trenchRangeDirty = true;
@@ -67,10 +64,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead."));
 		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
 		if (auto _ttHs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. Applies out to the edge of the world."));
-		ImGui::SliderFloat(T(TKEY("horizon_handoff"), "Horizon Handoff"), &settings.HorizonHandoffPct, 10.0f, 150.0f, "%.0f %%");
-		if (auto _ttHh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("horizon_handoff_tooltip"), "Where the recolor ramps in, as a percent of the Snow Shell range (100 = exactly at the shell's edge fade). Lower it to see the recolor closer and tune the blend; the goal is an undetectable swap at 100."));
+			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
 		bool distantChanged = false;
 		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttLss = Util::HoverTooltipWrapper())
