@@ -199,6 +199,12 @@ public:
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
 		float RangeSkinsFadeM = 100.0f;
+		/** @brief Distant snow line (world Z units): heightmap-sourced far terrain above this height gets snow coverage. */
+		float DistantSnowLineZ = 5000.0f;
+		/** @brief How far the snow line sinks (world units) toward the worldspace's north edge, so the northern coast is snowy at sea level. */
+		float DistantSnowNorthDrop = 15000.0f;
+		/** @brief Half-width (world units) of the bare-to-snow blend band around the snow line. */
+		float DistantSnowLineFade = 1500.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -540,6 +546,36 @@ public:
 
 	/** @brief Recenters and re-uploads the terrain data window when the camera crosses cells or new cells were baked. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
 	void UpdateShellTerrainWindow();
+
+	// ---- Far fill: heightmap-sourced distant terrain ----
+
+	/** @brief Per-dispatch constants for the window far fill. Layout must match WindowFillCB in TerrainWindowFillCS.hlsl. */
+	struct alignas(16) WindowFillCB
+	{
+		float2 WindowOriginWorld;
+		float TexelSize;
+		uint WindowDim;
+
+		float2 HeightMapScale;
+		float2 HeightMapOffset;
+
+		float2 ZRange;
+		float2 WorldYRange;
+
+		float SnowLineZ;
+		float SnowNorthDrop;
+		float SnowLineFade;
+		float SnowDepthUnits;
+	};
+	STATIC_ASSERT_ALIGNAS_16(WindowFillCB);
+	ConstantBuffer* windowFillCB = nullptr;
+
+	/** @brief Fills sentinel window texels from the Terrain Shadows xLODGen heightmap (height + snow-line coverage, provenance in .w). Runs after each window upload. Implemented in SnowDeformation/TerrainData.cpp. */
+	void FillShellWindowFromHeightmap();
+	ID3D11ComputeShader* GetWindowFillCS();
+	ID3D11ComputeShader* windowFillCS = nullptr;
+	/** @brief Worldspace whose heightmap filled the current window; a change forces a rebuild even when the origin is unchanged. */
+	std::string lastFillWorldspace;
 
 	/** @brief Nominal (untrampled) snow depth in world units at a world XY, resolved from the baked cell data and the class depth sliders. Returns a_missing where no cell is baked (interiors, unvisited land). Implemented in SnowDeformation/TerrainData.cpp. */
 	float GetNominalSnowDepthAt(float a_x, float a_y, float a_missing);

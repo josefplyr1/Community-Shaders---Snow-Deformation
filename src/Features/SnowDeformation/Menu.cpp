@@ -62,6 +62,24 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
+	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttDs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Where snow exists on far terrain the game hasn't loaded (heights come from the worldspace heightmap the Terrain Shadows feature ships). Loaded terrain always uses its real snow textures instead."));
+		bool distantChanged = false;
+		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
+		if (auto _ttDsl = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered."));
+		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");
+		if (auto _ttDsn = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("distant_snow_north_tooltip"), "How far the snow line sinks toward the map's north edge, so the northern coast is snowy at sea level while southern plains at the same elevation stay bare."));
+		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_fade"), "Snow Line Fade"), &settings.DistantSnowLineFade, 100.0f, 6000.0f, "%.0f units");
+		if (auto _ttDsf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the snow line."));
+		if (distantChanged)
+			shellDataDirty.store(true, std::memory_order_release);
+		ImGui::TreePop();
+	}
+
 	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers and how raised snow settles."));
@@ -240,10 +258,12 @@ void SnowDeformation::DrawSettings()
 			if (lodDebugView == 1) {
 				static const char* kBandLabels[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
 				static const char* kBucketLabels[kLODHistBuckets] = { "<-32", "-32..-8", "-8..-2", "+-2", "2..8", "8..32", "32..128", ">128" };
-				if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+				if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
 					ImGui::TableNextRow();
 					ImGui::TableNextColumn();
 					ImGui::Text("units");
+					ImGui::TableNextColumn();
+					ImGui::Text("pixels");
 					for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
 						ImGui::TableNextColumn();
 						if (bucketI == 3)
@@ -258,6 +278,10 @@ void SnowDeformation::DrawSettings()
 						uint64_t bandTotal = 0;
 						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI)
 							bandTotal += lodHistData[bandI * kLODHistBuckets + bucketI];
+						// Raw sample size: percent-only misleads when a band
+						// holds a handful of pixels.
+						ImGui::TableNextColumn();
+						ImGui::Text("%llu", (unsigned long long)bandTotal);
 						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
 							ImGui::TableNextColumn();
 							const float pct = bandTotal ? 100.0f * lodHistData[bandI * kLODHistBuckets + bucketI] / bandTotal : 0.0f;

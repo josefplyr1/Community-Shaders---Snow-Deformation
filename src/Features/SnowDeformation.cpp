@@ -48,7 +48,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RangeShellM,
 	RangeTrenchesM,
 	RangeSkinsM,
-	RangeSkinsFadeM)
+	RangeSkinsFadeM,
+	DistantSnowLineZ,
+	DistantSnowNorthDrop,
+	DistantSnowLineFade)
 
 void SnowDeformation::CreateDeformationTextures()
 {
@@ -104,7 +107,9 @@ void SnowDeformation::SetupResources()
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE
+			// UAV: the far-fill CS writes heightmap-sourced texels in place
+			// after each CPU upload.
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
 		};
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC terrainSrvDesc = {
@@ -115,10 +120,18 @@ void SnowDeformation::SetupResources()
 				.MipLevels = 1 }
 		};
 
+		D3D11_UNORDERED_ACCESS_VIEW_DESC terrainUavDesc = {
+			.Format = terrainDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
 		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
 		shellTerrainTexture->CreateSRV(terrainSrvDesc);
+		shellTerrainTexture->CreateUAV(terrainUavDesc);
 	}
 
+	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
@@ -420,6 +433,9 @@ void SnowDeformation::ClearShaderCache()
 	if (lodProbeCS)
 		lodProbeCS->Release();
 	lodProbeCS = nullptr;
+	if (windowFillCS)
+		windowFillCS->Release();
+	windowFillCS = nullptr;
 	if (staticsVS)
 		staticsVS->Release();
 	staticsVS = nullptr;

@@ -1,7 +1,9 @@
 #include "Features/SnowDeformation.h"
 
+#include "Features/TerrainShadows.h"
 #include "Globals.h"
 #include "State.h"
+#include "Utils/D3D.h"
 
 /** @brief Classifies a land texture into a kSnowClasses index by diffuse filename substring (first match wins), falling back on the snow material check. Returns -1 for absent textures. */
 static int ClassifySnowClass(RE::TESLandTexture* a_landTexture)
@@ -204,7 +206,13 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	int desiredOriginY = camCellY - kShellWindowCells / 2;
 
 	bool originChanged = desiredOriginX != shellWindowCellX || desiredOriginY != shellWindowCellY;
-	if (!originChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
+	// A heightmap swap (worldspace change, or Terrain Shadows finishing its
+	// load after this window was built) invalidates the far fill even when
+	// the origin is unchanged.
+	auto& terrainShadows = globals::features::terrainShadows;
+	const std::string fillWorldspace = (terrainShadows.loaded && terrainShadows.IsHeightMapReady()) ? terrainShadows.cachedHeightmap->worldspace : std::string{};
+	bool fillChanged = lastFillWorldspace != fillWorldspace;
+	if (!originChanged && !fillChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
 		return;
 
 	shellWindowCellX = desiredOriginX;
@@ -278,6 +286,72 @@ void SnowDeformation::UpdateShellTerrainWindow()
 
 	globals::d3d::context->UpdateSubresource(shellTerrainTexture->resource.get(), 0, nullptr,
 		shellUploadScratch.data(), kShellWindowDim * 4 * sizeof(float), 0);
+
+	FillShellWindowFromHeightmap();
+}
+
+ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()
+{
+	if (!windowFillCS) {
+		logger::debug("Compiling TerrainWindowFillCS");
+		windowFillCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", {}, "cs_5_0"));
+	}
+	return windowFillCS;
+}
+
+void SnowDeformation::FillShellWindowFromHeightmap()
+{
+	auto& terrainShadows = globals::features::terrainShadows;
+	if (!terrainShadows.loaded || !terrainShadows.texHeightMap || !terrainShadows.IsHeightMapReady()) {
+		lastFillWorldspace.clear();
+		return;
+	}
+	auto cs = GetWindowFillCS();
+	if (!cs || !shellTerrainTexture->uav)
+		return;
+
+	const auto* heightmap = terrainShadows.cachedHeightmap;
+	WindowFillCB cbData{};
+	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	cbData.WindowOriginWorld = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
+	cbData.TexelSize = kShellVertexSpacing;
+	cbData.WindowDim = kShellWindowDim;
+	cbData.HeightMapScale = { 1.0f / (heightmap->pos1.x - heightmap->pos0.x), 1.0f / (heightmap->pos1.y - heightmap->pos0.y) };
+	cbData.HeightMapOffset = { -heightmap->pos0.x * cbData.HeightMapScale.x, -heightmap->pos0.y * cbData.HeightMapScale.y };
+	cbData.ZRange = heightmap->zRange;
+	// TS convention: pos0 = left-TOP (north, larger Y), pos1 = right-bottom.
+	cbData.WorldYRange = { heightmap->pos1.y, heightmap->pos0.y };
+	cbData.SnowLineZ = settings.DistantSnowLineZ;
+	cbData.SnowNorthDrop = settings.DistantSnowNorthDrop;
+	cbData.SnowLineFade = std::max(settings.DistantSnowLineFade, 1.0f);
+	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);  // "Snow 01"
+	windowFillCB->Update(cbData);
+
+	auto context = globals::d3d::context;
+	ID3D11Buffer* cb = windowFillCB->CB();
+	ID3D11ShaderResourceView* heightmapSRV = terrainShadows.texHeightMap->srv.get();
+	ID3D11UnorderedAccessView* windowUAV = shellTerrainTexture->uav.get();
+	ID3D11SamplerState* sampler = shellLinearSampler.get();
+	context->CSSetConstantBuffers(0, 1, &cb);
+	context->CSSetShaderResources(0, 1, &heightmapSRV);
+	context->CSSetSamplers(0, 1, &sampler);
+	context->CSSetUnorderedAccessViews(0, 1, &windowUAV, nullptr);
+	context->CSSetShader(cs, nullptr, 0);
+	globals::profiler->BeginPass("SnowDeformation::WindowFill");
+	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
+	globals::profiler->EndPass();
+
+	ID3D11Buffer* nullCB = nullptr;
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullCB);
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetSamplers(0, 1, &nullSampler);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	lastFillWorldspace = heightmap->worldspace;
 }
 
 void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)

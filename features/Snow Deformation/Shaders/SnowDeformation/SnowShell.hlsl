@@ -1396,7 +1396,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// ground; approximate at grazing angles). Buckets feed the histogram
 		// and the color bands: reds = shell buried under the rendered
 		// ground, yellow = inside z-fight range, greens/blues = clearance.
-		float deltaUp = input.WorldPos.z * (1.0 - sceneZ / max(shellZ, 1e-3));
+		// Slope correction: project the ray gap onto the terrain normal, so
+		// steep faces stop misreading horizontal offset as burial depth.
+		float3 gapVec = input.WorldPos * (1.0 - sceneZ / max(shellZ, 1e-3));
+		float deltaUp = dot(gapVec, normalize(input.TerrainNormalAlpha.xyz));
 		float camDist = length(gridLocal - WarpedHalfSpan);
 		uint band = camDist < 4000.0 ? 0u : (camDist < 8000.0 ? 1u : (camDist < 16000.0 ? 2u : 3u));
 		uint bucket = deltaUp < -32.0 ? 0u : deltaUp < -8.0 ? 1u :
@@ -1436,12 +1439,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellLODDebug == 3)
 	{
-		// Provenance: green = baked cell data (brightness = coverage), red =
-		// no data (unvisited cell; the VS raises these to eye level so the
-		// gap reads as a sheet). Blue reserved for heightmap-sourced texels.
+		// Provenance: green = baked cell data, blue = heightmap-sourced
+		// (texel .w = 1), red = no data at all (outside the worldspace; the
+		// VS raises these to eye level so the gap reads as a sheet).
+		// Brightness follows coverage.
 		float2 provT = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-		float provH = TerrainWindow.Load(int3((int2)clamp(provT, 0.0, (float)(TerrainDim - 1)), 0)).x;
-		preLit = provH > -50000.0 ? float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1) : float3(0.9, 0.1, 0.1);
+		float4 provTexel = TerrainWindow.Load(int3((int2)clamp(provT, 0.0, (float)(TerrainDim - 1)), 0));
+		preLit = provTexel.x <= -50000.0 ? float3(0.9, 0.1, 0.1) : (provTexel.w > 0.5 ? float3(0.1, 0.25 + 0.35 * pixelCoverage, 0.9) : float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1));
 	}
 
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
