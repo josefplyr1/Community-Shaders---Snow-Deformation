@@ -66,6 +66,8 @@ public:
 	static constexpr float kShellVertexSpacing = 128.0f;
 	static constexpr int kShellTexelsPerCell = 32;
 	static constexpr int kShellWindowCells = kShellWindowDim / kShellTexelsPerCell;
+	/** @brief Mip levels on the terrain window: far bands sample Nyquist-matched sentinel-aware averages instead of point-sampling full-res data. */
+	static constexpr uint32_t kShellWindowMips = 6;
 	/** @brief Height sentinel for window texels with no baked cell data. */
 	static constexpr float kShellMissingHeight = -100000.0f;
 
@@ -314,8 +316,27 @@ public:
 	/** @brief Installs both landscape hooks; the TESObjectLAND detour attaches after TruePBR's so it sees the final quad materials. Implemented in SnowDeformation/TerrainData.cpp. */
 	virtual void PostPostLoad() override;
 
-	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
+	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, provenance). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
+
+	/** @brief Downsample chain for the window mips: per-mip destination UAVs plus a full-size scratch copy of the source mip (D3D11 forbids SRV+UAV on one resource, even on disjoint subresources). */
+	winrt::com_ptr<ID3D11UnorderedAccessView> shellTerrainMipUAVs[kShellWindowMips];
+	winrt::com_ptr<ID3D11Texture2D> shellTerrainMipScratch;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellTerrainMipScratchSRV;
+
+	/** @brief Per-dispatch constants for the mip downsample. Layout must match the WINDOW_MIP cbuffer in TerrainWindowFillCS.hlsl. */
+	struct alignas(16) WindowMipCB
+	{
+		uint MipDstDim;
+		float3 padMip;
+	};
+	STATIC_ASSERT_ALIGNAS_16(WindowMipCB);
+	ConstantBuffer* windowMipCB = nullptr;
+
+	ID3D11ComputeShader* GetWindowMipCS();
+	ID3D11ComputeShader* windowMipCS = nullptr;
+	/** @brief Rebuilds the window's mip chain (sentinel-aware 2x2 averages) after each upload/fill. Implemented in SnowDeformation/TerrainData.cpp. */
+	void GenerateWindowMips();
 
 	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
 	struct alignas(16) ShellCB

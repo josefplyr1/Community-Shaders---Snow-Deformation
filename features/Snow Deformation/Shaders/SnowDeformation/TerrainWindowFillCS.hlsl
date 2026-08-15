@@ -10,6 +10,54 @@
 // Texel .w records provenance for the debug view: 1 = snow-line fallback,
 // 2 + score = LOD-classified.
 
+#if defined(WINDOW_MIP)
+// Mip downsample pass (run per level after each window rebuild): 2x2
+// sentinel-aware average. D3D11 forbids SRV+UAV on one resource, so the
+// source mip is staged through a scratch copy (t0) and only the destination
+// mip is bound as UAV.
+Texture2D<float4> MipSource : register(t0);
+RWTexture2D<float4> MipDest : register(u0);
+
+cbuffer WindowFillCB : register(b0)
+{
+	uint MipDstDim;
+	float3 padMip;
+}
+
+[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
+	if (id.x >= MipDstDim || id.y >= MipDstDim)
+		return;
+	int2 src = int2(id.xy) * 2;
+	float4 s00 = MipSource.Load(int3(src, 0));
+	float4 s10 = MipSource.Load(int3(src + int2(1, 0), 0));
+	float4 s01 = MipSource.Load(int3(src + int2(0, 1), 0));
+	float4 s11 = MipSource.Load(int3(src + int2(1, 1), 0));
+	float4 acc = 0.0;
+	float count = 0.0;
+	[flatten] if (s00.x > -50000.0)
+	{
+		acc += s00;
+		count += 1.0;
+	}
+	[flatten] if (s10.x > -50000.0)
+	{
+		acc += s10;
+		count += 1.0;
+	}
+	[flatten] if (s01.x > -50000.0)
+	{
+		acc += s01;
+		count += 1.0;
+	}
+	[flatten] if (s11.x > -50000.0)
+	{
+		acc += s11;
+		count += 1.0;
+	}
+	MipDest[id.xy] = count > 0.0 ? acc / count : float4(-100000.0, 0.0, 0.0, 0.0);
+}
+#else
+
 RWTexture2D<float4> TerrainWindow : register(u0);
 Texture2D<float> HeightMap : register(t0);
 // 2x2 block of level-32 LOD terrain diffuse tiles covering the window.
@@ -120,3 +168,4 @@ float ClassifyLODSnow(float3 color)
 
 	TerrainWindow[id.xy] = float4(z, coverage * SnowDepthUnits, coverage, provenance);
 }
+#endif  // WINDOW_MIP

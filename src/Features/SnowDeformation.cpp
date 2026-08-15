@@ -103,13 +103,13 @@ void SnowDeformation::SetupResources()
 		D3D11_TEXTURE2D_DESC terrainDesc = {
 			.Width = kShellWindowDim,
 			.Height = kShellWindowDim,
-			.MipLevels = 1,
+			.MipLevels = kShellWindowMips,
 			.ArraySize = 1,
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			// UAV: the far-fill CS writes heightmap-sourced texels in place
-			// after each CPU upload.
+			// after each CPU upload; the downsample chain writes mips 1+.
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
 		};
 
@@ -118,7 +118,7 @@ void SnowDeformation::SetupResources()
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = {
 				.MostDetailedMip = 0,
-				.MipLevels = 1 }
+				.MipLevels = kShellWindowMips }
 		};
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC terrainUavDesc = {
@@ -130,9 +130,29 @@ void SnowDeformation::SetupResources()
 		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
 		shellTerrainTexture->CreateSRV(terrainSrvDesc);
 		shellTerrainTexture->CreateUAV(terrainUavDesc);
+
+		for (uint32_t level = 1; level < kShellWindowMips; ++level) {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
+				.Format = terrainDesc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = level }
+			};
+			DX::ThrowIfFailed(globals::d3d::device->CreateUnorderedAccessView(shellTerrainTexture->resource.get(), &mipUavDesc, shellTerrainMipUAVs[level].put()));
+			Util::SetResourceName(shellTerrainMipUAVs[level].get(), "SnowDeformation::ShellTerrainWindow Mip UAV");
+		}
+
+		D3D11_TEXTURE2D_DESC scratchDesc = terrainDesc;
+		scratchDesc.MipLevels = 1;
+		scratchDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		DX::ThrowIfFailed(globals::d3d::device->CreateTexture2D(&scratchDesc, nullptr, shellTerrainMipScratch.put()));
+		Util::SetResourceName(shellTerrainMipScratch.get(), "SnowDeformation::ShellTerrainMipScratch");
+		D3D11_SHADER_RESOURCE_VIEW_DESC scratchSrvDesc = terrainSrvDesc;
+		scratchSrvDesc.Texture2D.MipLevels = 1;
+		DX::ThrowIfFailed(globals::d3d::device->CreateShaderResourceView(shellTerrainMipScratch.get(), &scratchSrvDesc, shellTerrainMipScratchSRV.put()));
 	}
 
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
+	windowMipCB = new ConstantBuffer(ConstantBufferDesc<WindowMipCB>(), "SnowDeformation::WindowMipCB");
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
@@ -458,6 +478,9 @@ void SnowDeformation::ClearShaderCache()
 	if (windowFillCS)
 		windowFillCS->Release();
 	windowFillCS = nullptr;
+	if (windowMipCS)
+		windowMipCS->Release();
+	windowMipCS = nullptr;
 	if (staticsVS)
 		staticsVS->Release();
 	staticsVS = nullptr;
