@@ -769,8 +769,8 @@ public:
 		{ "chopping", 150.0f, 50.0f },  // wood chopping blocks
 		{ "enchanting", 110.0f, 60.0f },
 		{ "alchemy", 110.0f, 60.0f },
-		{ "workbench", 130.0f, 60.0f },
-		{ "grind", 130.0f, 60.0f },  // grindstones / grinding wheels
+		{ "workbench", 130.0f, -60.0f },  // workbench meshes face away from the user (verified in-game); enchanting/alchemy match their own entries above
+		{ "grind", 130.0f, 60.0f },       // grindstones / grinding wheels
 		{ "tanningrack", 120.0f, 60.0f },
 		{ "anvil", 120.0f, 50.0f },
 		{ "marketstall", 110.0f, 0.0f },
