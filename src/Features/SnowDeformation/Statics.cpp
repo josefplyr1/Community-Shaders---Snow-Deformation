@@ -485,10 +485,11 @@ void SnowDeformation::RenderObjectHeightMap()
 							modelPath = stat->GetModel();
 						else if (auto* movable = base->As<RE::BGSMovableStatic>())
 							modelPath = movable->GetModel();
-						// Heat classification: generic flame FX first (they sit at
-						// ANY heat source, so they size by height, not by name),
-						// then the spec table, then the Survival warm-up formlist
-						// for anything the table does not know.
+						// Classification order: named heat (model table / flames),
+						// then the workspace table, then the Survival warm-up
+						// formlist LAST - patched warm-up lists add workstations
+						// (grindstones, anvils...), and those must stay
+						// slider-controlled workspaces, not fixed heat spots.
 						float heatRadius = 0.0f;
 						bool genericFlame = false;
 						std::string lowered;
@@ -509,39 +510,27 @@ void SnowDeformation::RenderObjectHeightMap()
 								}
 							}
 						}
-						if (heatRadius > 0.0f || genericFlame || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
+						if (heatRadius > 0.0f || genericFlame) {
 							auto pos = a_ref->GetPosition();
-							float landZ = pos.z;
-							tes->GetLandHeight(pos, landZ);
-							const bool grounded = pos.z - landZ < kGroundFireBand;
 							if (genericFlame) {
 								// Grounded flame = open fire; raised flame
 								// (brazier bowl, wall fire) melts a small spot
 								// on the ground below.
-								heatRadius = grounded ? kFireClearRadius : kRaisedFlameClearRadius;
-							} else if (heatRadius <= 0.0f) {
-								// Formlist-only match: modest circle when
-								// grounded, footprint-sized spot when raised.
-								float halfExtent = 20.0f;
-								if (auto* bound = base->As<RE::TESBoundObject>()) {
-									float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
-									float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
-									halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
-								}
-								heatRadius = grounded ? kUnknownHeatClearRadius :
-							                            std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
+								float landZ = pos.z;
+								tes->GetLandHeight(pos, landZ);
+								heatRadius = pos.z - landZ < kGroundFireBand ? kFireClearRadius : kRaisedFlameClearRadius;
 							}
 							heatRadius *= a_ref->GetScale();
 							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
 
-						// Workspace clearings: the shell only ever forms to half
-						// depth around worked spots (workstations, stalls,
-						// wells, shrines) - a half-strength melt bowl centered
-						// toward the working side; real trampling carves the
-						// rest. A full pre-trampled look via the deformation
-						// map read as mini mountains and was replaced by this.
+						// Workspace clearings: the shell only ever forms to
+						// partial depth around worked spots (workstations,
+						// stalls, wells, shrines) - a melt bowl centered toward
+						// the working side; real trampling carves the rest. A
+						// full pre-trampled look via the deformation map read
+						// as mini mountains and was replaced by this.
 						// TESFurniture derives from TESObjectACTI, so the model
 						// chain above already reached every workstation.
 						if (!lowered.empty()) {
@@ -556,9 +545,27 @@ void SnowDeformation::RenderObjectHeightMap()
 																	 pos.z, spec.radius * scale * zoneScale },
 										{ 0.0f, 1.0f, 1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f, 1.0f } });
 									gatherTrampleCount++;
-									break;
+									return RE::BSContainer::ForEachResult::kContinue;
 								}
 							}
+						}
+
+						// Survival warm-up formlist: heat neither table named.
+						// Modest circle when grounded (the list also holds
+						// candelabras), footprint-sized spot when raised.
+						if (survivalHeatSources && survivalHeatSources->HasForm(base)) {
+							float halfExtent = 20.0f;
+							if (auto* bound = base->As<RE::TESBoundObject>()) {
+								float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
+								float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
+								halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
+							}
+							auto pos = a_ref->GetPosition();
+							float landZ = pos.z;
+							tes->GetLandHeight(pos, landZ);
+							float radius = pos.z - landZ < kGroundFireBand ? kUnknownHeatClearRadius :
+						                                                     std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 1.0f, 1.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});

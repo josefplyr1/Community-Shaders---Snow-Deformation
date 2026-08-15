@@ -767,12 +767,12 @@ public:
 	static constexpr TrampleSpec kTrampleSpecs[] = {
 		{ "sawmill", 220.0f, 0.0f },
 		{ "millsaw", 220.0f, 0.0f },
-		{ "stable", 200.0f, 0.0f },
+		{ "stables", 200.0f, 0.0f },    // NOT "stable": clutter\ruins\ruinstable01 is a table
 		{ "chopping", 150.0f, 50.0f },  // wood chopping blocks
 		{ "enchanting", 110.0f, 60.0f },
 		{ "alchemy", 110.0f, 60.0f },
-		{ "workbench", 130.0f, -60.0f },  // workbench meshes face away from the user (verified in-game); enchanting/alchemy match their own entries above
-		{ "grind", 130.0f, 60.0f },       // grindstones / grinding wheels
+		{ "workbench", 140.0f, 0.0f },         // symmetric: workbench facing disagreed with itself across refs (round 230 behind, round 232 right) - a centered bowl cannot be wrong-sided
+		{ "sharpeningwheel", 130.0f, 60.0f },  // grindstones: furniture\clutter\blacksmithsharpeningwheelanimating.nif - no "grind" anywhere in the path
 		{ "tanningrack", 120.0f, 60.0f },
 		{ "anvil", 120.0f, 50.0f },
 		{ "marketstall", 110.0f, 0.0f },

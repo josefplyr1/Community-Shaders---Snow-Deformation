@@ -1225,7 +1225,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The march must see the CARVED surface (same floor rule as the
 			// geometry): without the carve, a wide trench reads as ringed by
 			// full-height snow and sits in permanent shadow even facing the
-			// sun.
+			// sun. Same rule for MELT bowls (fires, workspace clearings):
+			// without the melt, every bowl-floor pixel reads as ringed by
+			// full-height snow and the whole bowl darkens.
+			[branch] if (ObjectLiftCap > 0.0)
+			{
+				float sampleMelt = saturate(-SampleObjectBottom(GridOrigin + sampleLocal));
+				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+			}
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
 			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * BermHeightAmp;
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
