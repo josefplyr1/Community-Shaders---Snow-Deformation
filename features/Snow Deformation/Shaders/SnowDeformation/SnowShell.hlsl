@@ -289,9 +289,12 @@ float3 SampleTerrain(float2 gridLocal)
 // built at rebuild time), for the clipmaps LOD sampling of far vertices.
 float3 SampleTerrainLevel(float2 gridLocal, uint level)
 {
-	float texel = TerrainTexelSize * exp2((float)level);
 	float dim = (float)(TerrainDim >> level);
-	float2 t = (GridToTerrainOffset + gridLocal) / texel;
+	// Pyramid alignment: a mip texel represents the CENTER of its fine
+	// footprint, so t_L = (t_0 + 0.5)/2^L - 0.5. Skipping this samples every
+	// level half a coarse texel sideways — hundreds of units at deep mips,
+	// which buried the whole far shell on slopes.
+	float2 t = ((GridToTerrainOffset + gridLocal) / TerrainTexelSize + 0.5) * exp2(-(float)level) - 0.5;
 	t = clamp(t, 0.0, dim - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
