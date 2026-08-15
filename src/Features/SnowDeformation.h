@@ -782,7 +782,9 @@ public:
 		{ "marketstall", 110.0f, 0.0f },
 		{ "well01", 110.0f, 0.0f },  // bare "well" would substring-match too much
 		{ "shrine", 90.0f, 0.0f },
-		{ "bedroll", 130.0f, 0.0f, false, 1.0f },  // furniture\bedroll\*.nif; full clear - nobody sleeps in a buried bedroll
+		{ "bedroll", 130.0f, 0.0f, false, 1.0f },   // furniture\bedroll\*.nif; full clear - nobody sleeps in a buried bedroll
+		{ "haymound", 120.0f, 0.0f, false, 1.0f },  // clutter\hay\haymound*.nif; bedding stays clear like bedrolls
+		{ "haybale", 100.0f, 0.0f, false, 1.0f },   // hayscatter* deliberately absent: flat ground decals, a clearing reads wrong
 	};
 
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
