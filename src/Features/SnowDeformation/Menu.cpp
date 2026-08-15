@@ -64,17 +64,21 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttDs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Where snow exists on far terrain the game hasn't loaded (heights come from the worldspace heightmap the Terrain Shadows feature ships). Loaded terrain always uses its real snow textures instead."));
+			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead."));
 		bool distantChanged = false;
+		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
+		if (auto _ttLss = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view: brown = classified bare, blue-white = classified snow."));
+		ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
 		if (auto _ttDsl = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered."));
+			ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered, where no LOD terrain texture exists to read the answer from."));
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");
 		if (auto _ttDsn = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_north_tooltip"), "How far the snow line sinks toward the map's north edge, so the northern coast is snowy at sea level while southern plains at the same elevation stay bare."));
+			ImGui::Text("%s", T(TKEY("distant_snow_north_tooltip"), "How far the fallback snow line sinks toward the map's north edge, so the northern coast is snowy at sea level while southern plains at the same elevation stay bare."));
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_fade"), "Snow Line Fade"), &settings.DistantSnowLineFade, 100.0f, 6000.0f, "%.0f units");
 		if (auto _ttDsf = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the snow line."));
+			ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the fallback snow line."));
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
 		ImGui::TreePop();

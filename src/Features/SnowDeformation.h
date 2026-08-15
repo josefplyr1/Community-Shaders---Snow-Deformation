@@ -205,6 +205,8 @@ public:
 		float DistantSnowNorthDrop = 15000.0f;
 		/** @brief Half-width (world units) of the bare-to-snow blend band around the snow line. */
 		float DistantSnowLineFade = 1500.0f;
+		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
+		float LODSnowSensitivity = 0.5f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -566,9 +568,22 @@ public:
 		float SnowNorthDrop;
 		float SnowLineFade;
 		float SnowDepthUnits;
+
+		/** @brief 2x2 level-32 LOD diffuse tile block: SW corner world XY, per-tile world span (32 cells), snow-classification sensitivity. */
+		float2 LODTileBase;
+		float LODTileSpan;
+		float LODSnowSensitivity;
+
+		float4 LODTileValid;
 	};
 	STATIC_ASSERT_ALIGNAS_16(WindowFillCB);
 	ConstantBuffer* windowFillCB = nullptr;
+
+	/** @brief Level-32 LOD terrain diffuse tiles (loose xLODGen output, sRGB ignored), keyed by SW cell coords; misses are remembered so absent files are probed once. Cleared on worldspace change. */
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11ShaderResourceView>> lodTileCache;
+	std::unordered_set<uint64_t> lodTileMisses;
+	/** @brief Fetches (or loads) the level-32 LOD diffuse tile with the given SW cell coords for the current fill worldspace. Implemented in SnowDeformation/TerrainData.cpp. */
+	ID3D11ShaderResourceView* GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY);
 
 	/** @brief Fills sentinel window texels from the Terrain Shadows xLODGen heightmap (height + snow-line coverage, provenance in .w). Runs after each window upload. Implemented in SnowDeformation/TerrainData.cpp. */
 	void FillShellWindowFromHeightmap();

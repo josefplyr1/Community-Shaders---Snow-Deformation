@@ -1439,13 +1439,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellLODDebug == 3)
 	{
-		// Provenance: green = baked cell data, blue = heightmap-sourced
-		// (texel .w = 1), red = no data at all (outside the worldspace; the
-		// VS raises these to eye level so the gap reads as a sheet).
-		// Brightness follows coverage.
+		// Provenance: green = baked cell data; LOD-classified far texels
+		// (w = 2 + score) grade brown (classified bare) -> blue-white
+		// (classified snow) so the classification itself is inspectable;
+		// cyan = snow-line fallback (no LOD tile); red = no data at all
+		// (outside the worldspace; the VS raises these to eye level so the
+		// gap reads as a sheet).
 		float2 provT = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
 		float4 provTexel = TerrainWindow.Load(int3((int2)clamp(provT, 0.0, (float)(TerrainDim - 1)), 0));
-		preLit = provTexel.x <= -50000.0 ? float3(0.9, 0.1, 0.1) : (provTexel.w > 0.5 ? float3(0.1, 0.25 + 0.35 * pixelCoverage, 0.9) : float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1));
+		[flatten] if (provTexel.x <= -50000.0)
+			preLit = float3(0.9, 0.1, 0.1);
+		else if (provTexel.w > 1.5)
+			preLit = lerp(float3(0.45, 0.2, 0.08), float3(0.55, 0.75, 1.0), saturate(provTexel.w - 2.0));
+		else if (provTexel.w > 0.5)
+			preLit = float3(0.1, 0.7, 0.7) * (0.4 + 0.6 * pixelCoverage);
+		else preLit = float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1);
 	}
 
 	// Terrain Blending-style output: alpha rides every .w and the stochastic

@@ -51,7 +51,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RangeSkinsFadeM,
 	DistantSnowLineZ,
 	DistantSnowNorthDrop,
-	DistantSnowLineFade)
+	DistantSnowLineFade,
+	LODSnowSensitivity)
 
 void SnowDeformation::CreateDeformationTextures()
 {

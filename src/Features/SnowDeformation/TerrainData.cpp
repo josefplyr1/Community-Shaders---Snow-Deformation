@@ -1,5 +1,7 @@
 #include "Features/SnowDeformation.h"
 
+#include <DDSTextureLoader.h>
+
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
 #include "State.h"
@@ -299,6 +301,31 @@ ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()
 	return windowFillCS;
 }
 
+ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY)
+{
+	const uint64_t key = (uint64_t(uint32_t(a_cellX)) << 32) | uint32_t(a_cellY);
+	if (auto it = lodTileCache.find(key); it != lodTileCache.end())
+		return it->second.get();
+	if (lodTileMisses.contains(key))
+		return nullptr;
+
+	// sRGB ignored so classification runs on the stored gamma-space values
+	// regardless of how the DDS declares itself.
+	std::string path = std::format("Data\\textures\\terrain\\{}\\{}.32.{}.{}.dds", a_worldspace, a_worldspace, a_cellX, a_cellY);
+	std::wstring widePath(path.begin(), path.end());
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	if (FAILED(DirectX::CreateDDSTextureFromFileEx(globals::d3d::device, widePath.c_str(), 0,
+			D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0,
+			DirectX::DDS_LOADER_IGNORE_SRGB, nullptr, srv.put()))) {
+		logger::info("[SNOW DEFORMATION] LOD tile missing: {}", path);
+		lodTileMisses.insert(key);
+		return nullptr;
+	}
+	logger::debug("[SNOW DEFORMATION] LOD tile loaded: {}", path);
+	lodTileCache[key] = srv;
+	return srv.get();
+}
+
 void SnowDeformation::FillShellWindowFromHeightmap()
 {
 	auto& terrainShadows = globals::features::terrainShadows;
@@ -311,6 +338,11 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 		return;
 
 	const auto* heightmap = terrainShadows.cachedHeightmap;
+	if (lastFillWorldspace != heightmap->worldspace) {
+		lodTileCache.clear();
+		lodTileMisses.clear();
+	}
+
 	WindowFillCB cbData{};
 	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	cbData.WindowOriginWorld = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
@@ -327,15 +359,29 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	cbData.SnowNorthDrop = settings.DistantSnowNorthDrop;
 	cbData.SnowLineFade = std::max(settings.DistantSnowLineFade, 1.0f);
 	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);  // "Snow 01"
+
+	// 2x2 block of level-32 tiles (each spans exactly the window's 32 cells)
+	// anchored at the window origin's tile; covers the window at any offset.
+	constexpr int kTileCells = 32;
+	const int tileX0 = (int)std::floor((float)shellWindowCellX / kTileCells) * kTileCells;
+	const int tileY0 = (int)std::floor((float)shellWindowCellY / kTileCells) * kTileCells;
+	cbData.LODTileBase = { tileX0 * cellSize, tileY0 * cellSize };
+	cbData.LODTileSpan = kTileCells * cellSize;
+	cbData.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
+	ID3D11ShaderResourceView* tileSRVs[4] = {};
+	for (int tileI = 0; tileI < 4; ++tileI) {
+		tileSRVs[tileI] = GetLODTile(heightmap->worldspace, tileX0 + (tileI & 1) * kTileCells, tileY0 + (tileI >> 1) * kTileCells);
+		(&cbData.LODTileValid.x)[tileI] = tileSRVs[tileI] ? 1.0f : 0.0f;
+	}
 	windowFillCB->Update(cbData);
 
 	auto context = globals::d3d::context;
 	ID3D11Buffer* cb = windowFillCB->CB();
-	ID3D11ShaderResourceView* heightmapSRV = terrainShadows.texHeightMap->srv.get();
+	ID3D11ShaderResourceView* fillSRVs[5] = { terrainShadows.texHeightMap->srv.get(), tileSRVs[0], tileSRVs[1], tileSRVs[2], tileSRVs[3] };
 	ID3D11UnorderedAccessView* windowUAV = shellTerrainTexture->uav.get();
 	ID3D11SamplerState* sampler = shellLinearSampler.get();
 	context->CSSetConstantBuffers(0, 1, &cb);
-	context->CSSetShaderResources(0, 1, &heightmapSRV);
+	context->CSSetShaderResources(0, 5, fillSRVs);
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetUnorderedAccessViews(0, 1, &windowUAV, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
@@ -344,11 +390,11 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	globals::profiler->EndPass();
 
 	ID3D11Buffer* nullCB = nullptr;
-	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11ShaderResourceView* nullSRVs[5] = {};
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
 	ID3D11SamplerState* nullSampler = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCB);
-	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetShaderResources(0, 5, nullSRVs);
 	context->CSSetSamplers(0, 1, &nullSampler);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
