@@ -300,8 +300,10 @@ void SnowDeformation::DrawShell()
 		const int halfCells = (uGrids - 1) / 2;
 		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f, (cellY - halfCells) * 4096.0f,
 			(cellX + halfCells + 1) * 4096.0f, (cellY + halfCells + 1) * 4096.0f };
-		// ~15 m depth ramp just inside the seam.
-		cbData.SeamRampInv = 1.0f / 1024.0f;
+		// ~29 m depth ramp just inside the seam (widened per test: the seam
+		// square jumps a cell when the player crosses one, and the longer
+		// ramp softens the height step that jump produces).
+		cbData.SeamRampInv = 1.0f / 2048.0f;
 	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 

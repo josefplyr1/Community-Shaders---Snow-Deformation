@@ -226,7 +226,8 @@ public:
 		float SnowIsLinear;
 		float SnowRoughnessScale;
 		float LODReplaceEnable;
-		float padSnow;
+		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
+		float SnowHasNormal;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 

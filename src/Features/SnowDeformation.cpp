@@ -238,6 +238,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
 	data.SnowRoughnessScale = snowRoughnessScale;
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
+	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	return data;
 }
 
@@ -313,12 +314,13 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
-	// Horizon snow albedo (t102) for the LOD terrain recolor; the shader
-	// gates on LODReplaceEnable, which requires this SRV to exist.
+	// Horizon snow albedo (t102) + normals (t103) for the LOD terrain
+	// recolor; the shader gates on LODReplaceEnable/SnowHasNormal, which
+	// require these SRVs to exist.
 	EnsureShellSnowTextures();
 	if (shellSnowDiffuseSRV) {
-		ID3D11ShaderResourceView* horizonSnowSRV = shellSnowDiffuseSRV.get();
-		context->PSSetShaderResources(102, 1, &horizonSnowSRV);
+		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
+		context->PSSetShaderResources(102, 2, horizonSnowSRVs);
 	}
 
 	// New frame: publish last frame's statics-capture count and reset the

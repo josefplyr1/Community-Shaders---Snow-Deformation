@@ -7,8 +7,9 @@
 namespace SnowDeformation
 {
 	Texture2D<float> DeformationMap : register(t101);
-	// Shell snow albedo for the horizon LOD-terrain recolor.
+	// Shell snow albedo + tangent normals for the horizon LOD-terrain recolor.
 	Texture2D<float4> HorizonSnowAlbedo : register(t102);
+	Texture2D<float4> HorizonSnowNormal : register(t103);
 
 	// Must match kTextureDim in src/Features/SnowDeformation.h.
 	static const float MapDim = 2048.0;

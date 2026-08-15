@@ -364,7 +364,8 @@ namespace SharedData
 		float SnowIsLinear;
 		float SnowRoughnessScale;
 		float LODReplaceEnable;
-		float padSnow;
+		// Snow normal map bound at t103 (0 = legacy set without one).
+		float SnowHasNormal;
 	};
 
 	cbuffer FeatureData : register(b6)

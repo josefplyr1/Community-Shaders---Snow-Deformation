@@ -560,13 +560,34 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float rampDepth = terrain.y;
 		coverage = saturate(terrain.z);
 
-		// The shell now ends at the loaded-cell seam, where window heights are
-		// exact land vertices — the old far-field lift stack (neighbor max,
-		// ridge pads, 8-unit float) is gone. What remains is the bilinear-vs-
-		// triangulation bound: on twisted quads the interpolated height can dip
-		// a few units below the real mesh, so pad slightly with distance.
+		// Slim anti-pinhole at distance (restored after in-game holes): a
+		// 4-tap axis max of height+coverage with a CAPPED ridge pad fills the
+		// flickering pinholes where bilinear dips under the mesh's triangle
+		// diagonals or single texels read bare. The heavy 8-tap/150-unit-pad/
+		// 8-unit-float stack stays gone — the seam caps the range this runs at.
 		float camDist = length(gridLocal - WarpedHalfSpan);
-		terrainHeight += smoothstep(3000.0, 8000.0, camDist) * 3.0 * saturate(coverage);
+		[branch] if (camDist > 3000.0)
+		{
+			float farBlend = smoothstep(3000.0, 8000.0, camDist);
+			float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
+			float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
+			float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
+			float3 n3 = SampleTerrain(gridLocal - float2(0.0, TerrainTexelSize));
+			float h0 = n0.x > -50000.0 ? n0.x : terrainHeight;
+			float h1 = n1.x > -50000.0 ? n1.x : terrainHeight;
+			float h2 = n2.x > -50000.0 ? n2.x : terrainHeight;
+			float h3 = n3.x > -50000.0 ? n3.x : terrainHeight;
+			float maxHeight = max(max(h0, h1), max(h2, h3));
+			float c0 = n0.x > -50000.0 ? n0.z : 0.0;
+			float c1 = n1.x > -50000.0 ? n1.z : 0.0;
+			float c2 = n2.x > -50000.0 ? n2.z : 0.0;
+			float c3 = n3.x > -50000.0 ? n3.z : 0.0;
+			float maxCoverage = saturate(max(max(c0, c1), max(c2, c3)));
+			float ridgePad = min(0.25 * max(abs(h0 - h1), abs(h2 - h3)), 24.0);
+			terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
+			coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
+			terrainHeight += farBlend * 3.0 * saturate(coverage);
+		}
 
 		// Object height field: t4 holds the SLOPE-LIMITED snow-height field
 		// (terrain run through the angle-of-repose cone transform), t5 the

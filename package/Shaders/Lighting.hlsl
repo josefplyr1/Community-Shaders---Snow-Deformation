@@ -1475,6 +1475,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float3 snowGamma = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSkyrimGamma(snowSample) : snowSample;
 			baseColor.xyz = lerp(baseColor.xyz, Color::Diffuse(snowGamma), lodReplaceW);
 			glossiness = lerp(glossiness, 1.0 - SharedData::snowDeformationSettings.SnowRoughnessScale, lodReplaceW);
+			// Normal-map parity with the shell: perturb the LOD normal by the
+			// snow normal at the same world tiling. LOD normals are world-
+			// space up-ish, so a world-axis tangent frame is stable here.
+			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+			{
+				float3 snowNormalTS = SnowDeformation::HorizonSnowNormal.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).xyz * 2.0 - 1.0;
+				float3 lodTangent = normalize(cross(float3(0.0, 1.0, 0.0), normal.xyz));
+				float3 lodBitangent = cross(normal.xyz, lodTangent);
+				float3 snowWorldNormal = normalize(snowNormalTS.x * lodTangent + snowNormalTS.y * lodBitangent + max(snowNormalTS.z, 0.05) * normal.xyz);
+				normal.xyz = normalize(lerp(normal.xyz, snowWorldNormal, lodReplaceW));
+			}
 		}
 	}
 #	endif
