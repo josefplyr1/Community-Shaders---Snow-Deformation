@@ -290,57 +290,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		shellUploadScratch.data(), kShellWindowDim * 4 * sizeof(float), 0);
 
 	FillShellWindowFromHeightmap();
-	GenerateWindowMips();
-}
-
-ID3D11ComputeShader* SnowDeformation::GetWindowMipCS()
-{
-	if (!windowMipCS) {
-		logger::debug("Compiling TerrainWindowFillCS (WINDOW_MIP)");
-		windowMipCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", { { "WINDOW_MIP", "" } }, "cs_5_0"));
-	}
-	return windowMipCS;
-}
-
-void SnowDeformation::GenerateWindowMips()
-{
-	auto cs = GetWindowMipCS();
-	if (!cs || !shellTerrainMipScratch)
-		return;
-
-	auto context = globals::d3d::context;
-	context->CSSetShader(cs, nullptr, 0);
-	globals::profiler->BeginPass("SnowDeformation::WindowMips");
-	for (uint32_t level = 1; level < kShellWindowMips; ++level) {
-		const uint32_t srcDim = kShellWindowDim >> (level - 1);
-		// Stage the source mip through the scratch copy: D3D11 forbids one
-		// resource bound as SRV and UAV simultaneously, even on disjoint
-		// subresources.
-		D3D11_BOX srcBox{ 0, 0, 0, srcDim, srcDim, 1 };
-		context->CopySubresourceRegion(shellTerrainMipScratch.get(), 0, 0, 0, 0, shellTerrainTexture->resource.get(), level - 1, &srcBox);
-
-		WindowMipCB cbData{ .MipDstDim = (uint32_t)(kShellWindowDim >> level) };
-		windowMipCB->Update(cbData);
-		ID3D11Buffer* cb = windowMipCB->CB();
-		ID3D11ShaderResourceView* srcSRV = shellTerrainMipScratchSRV.get();
-		ID3D11UnorderedAccessView* dstUAV = shellTerrainMipUAVs[level].get();
-		context->CSSetConstantBuffers(0, 1, &cb);
-		context->CSSetShaderResources(0, 1, &srcSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &dstUAV, nullptr);
-		const uint32_t groups = ((kShellWindowDim >> level) + 7) / 8;
-		context->Dispatch(groups, groups, 1);
-
-		// Unbind before the next iteration copies FROM this level.
-		ID3D11UnorderedAccessView* nullUAV = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-	}
-	globals::profiler->EndPass();
-
-	ID3D11ShaderResourceView* nullSRV = nullptr;
-	ID3D11Buffer* nullCB = nullptr;
-	context->CSSetShaderResources(0, 1, &nullSRV);
-	context->CSSetConstantBuffers(0, 1, &nullCB);
-	context->CSSetShader(nullptr, nullptr, 0);
 }
 
 ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()

@@ -285,29 +285,6 @@ float3 SampleTerrain(float2 gridLocal)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Same bilinear on a coarser mip of the window (sentinel-aware averages
-// built at rebuild time), for the clipmaps LOD sampling of far vertices.
-float3 SampleTerrainLevel(float2 gridLocal, uint level)
-{
-	float dim = (float)(TerrainDim >> level);
-	// Pyramid alignment: a mip texel represents the CENTER of its fine
-	// footprint, so t_L = (t_0 + 0.5)/2^L - 0.5. Skipping this samples every
-	// level half a coarse texel sideways — hundreds of units at deep mips,
-	// which buried the whole far shell on slopes.
-	float2 t = ((GridToTerrainOffset + gridLocal) / TerrainTexelSize + 0.5) * exp2(-(float)level) - 0.5;
-	t = clamp(t, 0.0, dim - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2((int)dim - 1, (int)dim - 1));
-
-	float3 s00 = TerrainWindow.Load(int3(t0.x, t0.y, level)).xyz;
-	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, level)).xyz;
-	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, level)).xyz;
-	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, level)).xyz;
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
 // Bilinear helper at fractional texel coordinates (Load-based).
 float SampleDeformationBilinear(float2 t, float2 dims)
 {
@@ -611,34 +588,35 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	{
 		float3 terrain = SampleTerrainShaped(gridLocal);
 
-		// Clipmaps LOD sampling: once the vertex stride (fineStep = 8 * 2^lod)
-		// exceeds the 128-unit data texel (lod > 4), point-sampling full-res
-		// data means lattice reassignments land on "boulder or hollow" luck —
-		// the once-per-second jumps. Instead sample the Nyquist-matched MIP
-		// for the band and blend toward the next coarser mip; a band hand-off
-		// lands exactly on the next band's fine mip (same function, same
-		// position), so the morph completes by construction and transitions
-		// carry only the small inter-mip difference. Mips are sentinel-aware
-		// averages built at window-rebuild time. Border shaping is lost past
-		// lod 4 (~3.4k out) where its 64-unit scale is sub-pixel anyway.
-		float2 centeredM = gridLocal - WarpedHalfSpan;
-		float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
-		float2 ringStepM = GridSpacing * pow(kWarpGrowth, max(abs(uAxisM) - kWarpInnerVerts, 0.0));
-		float2 lodM = log2(max(ringStepM / GridSpacing, 1.0));
-		float maxLodM = max(lodM.x, lodM.y);
-		[branch] if (maxLodM > 4.0)
+		// Data morph (geometry-clipmaps style): the vertex stays put on its
+		// fine world lattice; its terrain data blends toward the 2x-coarser
+		// lattice's bilinear surface, reaching it exactly at the band switch —
+		// band transitions move ONLY the height signal, by the difference
+		// between two resolutions, and never slide geometry across the
+		// terrain. Coarse taps are unshaped (border noise is near-field
+		// cosmetics).
 		{
-			uint mipFine = (uint)min(floor(maxLodM) - 4.0, 4.0);
-			float3 fineData = SampleTerrainLevel(gridLocal, mipFine);
-			float3 coarseData = SampleTerrainLevel(gridLocal, mipFine + 1u);
-			[flatten] if (min(fineData.x, coarseData.x) > -50000.0)
+			float2 centeredM = gridLocal - WarpedHalfSpan;
+			float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
+			float2 ringStepM = GridSpacing * pow(kWarpGrowth, max(abs(uAxisM) - kWarpInnerVerts, 0.0));
+			float2 lodM = log2(max(ringStepM / GridSpacing, 1.0));
+			float morphT = frac(max(lodM.x, lodM.y));
+			[branch] if (max(lodM.x, lodM.y) > 0.0 && morphT > 0.001)
 			{
-				terrain = lerp(fineData, coarseData, frac(maxLodM));
-				// Mip averages sit below ridge crests, where the full-res
-				// mesh then tops the shell. The fine-vs-coarse gap is a free
-				// local-roughness measure: lift adaptively (rough ridges get
-				// more, plains get almost nothing), bounded and covered-only.
-				terrain.x += (min(abs(fineData.x - coarseData.x) * 0.5, 16.0) + 3.0) * saturate(terrain.z);
+				float2 coarseStepM = GridSpacing * exp2(floor(lodM) + 1.0);
+				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
+				float2 cBase = floor(absXYM / coarseStepM) * coarseStepM;
+				float2 cFrac = (absXYM - cBase) / coarseStepM;
+				float2 cLocal = cBase - GridOrigin;
+				float3 t00 = SampleTerrain(cLocal);
+				float3 t10 = SampleTerrain(cLocal + float2(coarseStepM.x, 0.0));
+				float3 t01 = SampleTerrain(cLocal + float2(0.0, coarseStepM.y));
+				float3 t11 = SampleTerrain(cLocal + coarseStepM);
+				// Any sentinel tap poisons the bilinear (even averaged it can
+				// sneak past a threshold) — keep the fine data at data edges.
+				float minTap = min(min(t00.x, t10.x), min(t01.x, t11.x));
+				[flatten] if (minTap > -50000.0)
+					terrain = lerp(terrain, lerp(lerp(t00, t10, cFrac.x), lerp(t01, t11, cFrac.x), cFrac.y), morphT);
 			}
 		}
 
@@ -646,15 +624,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float rampDepth = terrain.y;
 		coverage = saturate(terrain.z);
 
-		// Slim anti-pinhole in the mid range: a 4-tap axis max of
-		// height+coverage with a CAPPED ridge pad fills pinholes where
-		// bilinear dips under the mesh's triangle diagonals or single texels
-		// read bare. Skipped in mip territory (lod > 4): maxing full-res
-		// neighbors over the filtered mip surface would reintroduce the
-		// point-sample jumps the mips just removed, and the depth clamp
-		// covers residual dips there.
+		// Slim anti-pinhole at distance (restored after in-game holes): a
+		// 4-tap axis max of height+coverage with a CAPPED ridge pad fills the
+		// flickering pinholes where bilinear dips under the mesh's triangle
+		// diagonals or single texels read bare. The heavy 8-tap/150-unit-pad/
+		// 8-unit-float stack stays gone — the seam caps the range this runs at.
 		float camDist = length(gridLocal - WarpedHalfSpan);
-		[branch] if (camDist > 3000.0 && maxLodM <= 4.0)
+		[branch] if (camDist > 3000.0)
 		{
 			float farBlend = smoothstep(3000.0, 8000.0, camDist);
 			float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
@@ -1634,15 +1610,6 @@ float2 SnappedVertexXY(float2 u)
 	float2 anchor = floor(ShellCameraPosAdjust.xy / 512.0) * 512.0;
 	float ang = (float)az * (6.28318530 / kProbeAzimuths);
 	float2 probeXY = anchor + float2(cos(ang), sin(ang)) * kProbeRadius[ri];
-
-	// Beyond the loaded-cell seam the shell is parked underground and
-	// invisible — measuring it there reports huge fake deltas. Only real
-	// shell counts.
-	[branch] if (ShellEdgeFade(probeXY - GridOrigin) <= 0.0)
-	{
-		ProbeHeights[id.x] = kProbeInvalid;
-		return;
-	}
 
 	// Locate the quad by unsnapped vertex units, then rebuild its corners
 	// exactly as the VS does (snapping moves them by up to half a ring step).
