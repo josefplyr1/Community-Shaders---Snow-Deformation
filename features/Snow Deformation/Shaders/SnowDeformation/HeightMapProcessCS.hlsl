@@ -261,7 +261,15 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 					// neighbor and every bank gets cut down INTO the wall at
 					// the repose slope, terraced by the sparse cone steps.
 					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
-					field = max(field, terrain + DriftHeight * amp * profile * gateFade);
+					// Sheltered ground cannot accumulate a bank: the roof that
+					// melts the snow also blocks the drift. Without this gate a
+					// building's bank stacked directly against its walkway's
+					// melted strip - ~76 units of surface swing in a couple of
+					// texels, the canyon in every report. The hidden interior
+					// plateau stays ungated: it exists to keep the cone from
+					// cutting banks, and its ground is never visible.
+					float driftGate = lerp(1.0, 1.0 - saturate(melt / SHELTER_MELT), smoothstep(0.0, 20.0, outside));
+					field = max(field, terrain + DriftHeight * amp * profile * gateFade * driftGate);
 				}
 			}
 		}
