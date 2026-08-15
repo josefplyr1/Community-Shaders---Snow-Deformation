@@ -711,7 +711,8 @@ public:
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
 
 	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger) that fade coverage to bare ground. Fires get noisy-edged MELT BASINS instead: the shell's depth thins toward a small floor that never vanishes and never sinks below terrain (negative values in the shelter-mask channel; see CombineCS). */
-	static constexpr uint kMaxExclusions = 96;
+	/** @brief Must match MAX_EXCLUSIONS in HeightMapProcessCS.hlsl. When the gather overflows, the nearest sources win (distance sort in the gather). */
+	static constexpr uint kMaxExclusions = 256;
 	static constexpr float kDoorClearRadius = 110.0f;
 	static constexpr float kDoorForwardExtent = 70.0f;
 	static constexpr float kLoadDoorClearRadius = 150.0f;
@@ -721,8 +722,34 @@ public:
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
-	/** @brief Melt bowl radius for ground-level fires. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
+	/** @brief Melt bowl radius for ground-level fires — the heat-tier benchmark. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
 	static constexpr float kFireClearRadius = 300.0f;
+	/** @brief Raised generic flames (fxfire in brazier bowls, wall fires): small melt spot on the ground below. */
+	static constexpr float kRaisedFlameClearRadius = 80.0f;
+	/** @brief Grounded Survival-formlist heat the spec table does not name. Deliberately modest: the list also holds candelabras and the like, which must not crater like campfires. */
+	static constexpr float kUnknownHeatClearRadius = 140.0f;
+
+	/** @brief Heat-source classification: lowercase model-path substring -> melt bowl radius (kFireClearRadius 300 = campfire benchmark). First match wins, so specific names precede generic ones. Generic flame FX (fxfire) is handled separately BEFORE this table: fxfirewithembers would misfile as embers, and flames size by height, not name. */
+	struct HeatSourceSpec
+	{
+		const char* substring;
+		float radius;
+	};
+	static constexpr HeatSourceSpec kHeatSpecs[] = {
+		{ "giantcampfire", 450.0f },  // giant fires dwarf man-made ones; must precede "campfire"
+		{ "bonfire", 450.0f },
+		{ "campfire", 300.0f },
+		{ "firepit", 300.0f },
+		{ "hearth", 300.0f },
+		{ "smelter", 300.0f },
+		{ "forge", 260.0f },
+		{ "smolder", 160.0f },  // dying fires still radiate
+		{ "brazier", 150.0f },
+		{ "cookingspit", 140.0f },
+		{ "cookingpot", 140.0f },
+		{ "sconce", 80.0f },
+		{ "torch", 80.0f },  // wall torches; torchbug critters guarded at the call site
+	};
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 

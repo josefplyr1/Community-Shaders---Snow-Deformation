@@ -441,7 +441,10 @@ void SnowDeformation::RenderObjectHeightMap()
 			if (auto tes = RE::TES::GetSingleton()) {
 				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
 					[&](RE::TESObjectREFR* a_ref) {
-						if (staticExclusions.size() >= kMaxExclusions)
+						// Collect past the CB cap: the nearest-first sort below
+						// picks the winners, so a far sconce can never evict a
+						// near door. 4x cap bounds the pathological case.
+						if (staticExclusions.size() >= kMaxExclusions * 4)
 							return RE::BSContainer::ForEachResult::kStop;
 						if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
 							return RE::BSContainer::ForEachResult::kContinue;
@@ -481,41 +484,68 @@ void SnowDeformation::RenderObjectHeightMap()
 							modelPath = stat->GetModel();
 						else if (auto* movable = base->As<RE::BGSMovableStatic>())
 							modelPath = movable->GetModel();
-						bool campfire = false;
-						bool otherHeat = false;
+						// Heat classification: generic flame FX first (they sit at
+						// ANY heat source, so they size by height, not by name),
+						// then the spec table, then the Survival warm-up formlist
+						// for anything the table does not know.
+						float heatRadius = 0.0f;
+						bool genericFlame = false;
 						if (modelPath && modelPath[0]) {
 							std::string lowered(modelPath);
 							std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 								[](unsigned char c) { return (char)std::tolower(c); });
-							// fxfire covers the vanilla flame ACTIs at campsites
-							// and hearths, so heat works without the Survival
-							// plugin present.
-							campfire = lowered.find("campfire") != std::string::npos || lowered.find("firepit") != std::string::npos ||
-						               lowered.find("fxfire") != std::string::npos;
-							otherHeat = lowered.find("brazier") != std::string::npos;
-						}
-						if (campfire || otherHeat || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
-							// Raised heat (brazier bowls, sconces, forges) melts
-							// a spot sized from the object's own footprint;
-							// GROUND-level fires melt a full campfire basin
-							// regardless of model size (the flame ACTI at a fire
-							// pit is tiny, and its origin can sit above the logs).
-							float halfExtent = 20.0f;
-							if (auto* bound = base->As<RE::TESBoundObject>()) {
-								float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
-								float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
-								halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
+							if (lowered.find("torchbug") == std::string::npos) {
+								if (lowered.find("fxfire") != std::string::npos) {
+									genericFlame = true;
+								} else {
+									for (const auto& spec : kHeatSpecs) {
+										if (lowered.find(spec.substring) != std::string::npos) {
+											heatRadius = spec.radius;
+											break;
+										}
+									}
+								}
 							}
-							float radius = std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
+						}
+						if (heatRadius > 0.0f || genericFlame || (survivalHeatSources && survivalHeatSources->HasForm(base))) {
 							auto pos = a_ref->GetPosition();
 							float landZ = pos.z;
 							tes->GetLandHeight(pos, landZ);
-							if (campfire || pos.z - landZ < kGroundFireBand)
-								radius = std::max(radius, kFireClearRadius);
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+							const bool grounded = pos.z - landZ < kGroundFireBand;
+							if (genericFlame) {
+								// Grounded flame = open fire; raised flame
+								// (brazier bowl, wall fire) melts a small spot
+								// on the ground below.
+								heatRadius = grounded ? kFireClearRadius : kRaisedFlameClearRadius;
+							} else if (heatRadius <= 0.0f) {
+								// Formlist-only match: modest circle when
+								// grounded, footprint-sized spot when raised.
+								float halfExtent = 20.0f;
+								if (auto* bound = base->As<RE::TESBoundObject>()) {
+									float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
+									float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
+									halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
+								}
+								heatRadius = grounded ? kUnknownHeatClearRadius :
+							                            std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
+							}
+							heatRadius *= a_ref->GetScale();
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
+
+				// Overflow: keep the sources nearest the player.
+				if (staticExclusions.size() > kMaxExclusions) {
+					const auto playerPos = player->GetPosition();
+					std::partial_sort(staticExclusions.begin(), staticExclusions.begin() + kMaxExclusions, staticExclusions.end(),
+						[&](const auto& a_lhs, const auto& a_rhs) {
+							const float lhsDx = a_lhs.first.x - playerPos.x, lhsDy = a_lhs.first.y - playerPos.y;
+							const float rhsDx = a_rhs.first.x - playerPos.x, rhsDy = a_rhs.first.y - playerPos.y;
+							return lhsDx * lhsDx + lhsDy * lhsDy < rhsDx * rhsDx + rhsDy * rhsDy;
+						});
+					staticExclusions.resize(kMaxExclusions);
+				}
 			}
 		}
 	}
@@ -528,6 +558,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		ExclusionsCB exclusionData{};
 		uint32_t exclusionCount = 0;
 		for (const auto& [posRadius, dirExtType] : staticExclusions) {
+			if (exclusionCount >= kMaxExclusions)
+				break;
 			exclusionData.PosRadius[exclusionCount] = posRadius;
 			exclusionData.DirExtType[exclusionCount] = dirExtType;
 			exclusionCount++;

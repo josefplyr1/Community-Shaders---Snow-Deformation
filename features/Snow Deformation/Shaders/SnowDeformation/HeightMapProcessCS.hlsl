@@ -46,7 +46,7 @@ cbuffer HeightProcessCB : register(b0)
 	float4 CorpseSpheres[64];  // xyz world center, w radius
 }
 
-#define MAX_EXCLUSIONS 96
+#define MAX_EXCLUSIONS 256
 
 cbuffer DoorCB : register(b1)
 {
