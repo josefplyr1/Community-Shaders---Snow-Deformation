@@ -232,7 +232,11 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		for (uint obsI = 0; obsI < ObstructionCount; obsI++) {
 			float4 posExt = ObstructionPosExt[obsI];
 			float4 obsRot = ObstructionRot[obsI];
-			[branch] if (abs(obsRot.z - terrain) < 400.0)
+			// Smooth z-gate: a binary cutoff stepped the whole bank off along
+			// the 400-unit contour on sloped ground - a cliff through open
+			// snowfield at any slider value.
+			float gateFade = 1.0 - smoothstep(250.0, 500.0, abs(obsRot.z - terrain));
+			[branch] if (gateFade > 0.001)
 			{
 				float2 rel = worldXY - posExt.xy;
 				float2 local = float2(obsRot.y * rel.x - obsRot.x * rel.y, obsRot.x * rel.x + obsRot.y * rel.y);
@@ -257,7 +261,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 					// neighbor and every bank gets cut down INTO the wall at
 					// the repose slope, terraced by the sparse cone steps.
 					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
-					field = max(field, terrain + DriftHeight * amp * profile);
+					field = max(field, terrain + DriftHeight * amp * profile * gateFade);
 				}
 			}
 		}

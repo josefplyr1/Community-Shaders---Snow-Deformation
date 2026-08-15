@@ -204,6 +204,9 @@ void SnowDeformation::DrawSettings()
 			clearRequested = true;
 
 		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);
+		ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Shell: Exclusion Debug Plane"), &shellExclusionDebug);
+		if (auto _ttExcl = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_exclusion_debug_tooltip"), "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on."));
 		if (auto _ttPlane = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 

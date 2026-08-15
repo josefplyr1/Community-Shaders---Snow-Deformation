@@ -448,6 +448,8 @@ public:
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
 	bool shellDataDebug = false;
+	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
+	bool shellExclusionDebug = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	bool staticsDebugView = false;

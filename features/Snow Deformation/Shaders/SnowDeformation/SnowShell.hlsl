@@ -1330,7 +1330,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	float3 preLit = ambientPart + directDiffuse;
 
-	[branch] if (ShellDebugData != 0)
+	[branch] if (ShellDebugData == 2)
+	{
+		// Exclusion debug: R = drift field lift (48 units = full red),
+		// G = melt fraction (fires, workspaces, shelter), B = door/shelter
+		// suppression. Black = untouched by any of them.
+		float2 dbgWorldXY = GridOrigin + gridLocal;
+		float dbgMask = SampleObjectBottom(dbgWorldXY);
+		float dbgField = SampleObjectHeight(dbgWorldXY);
+		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
+		preLit = float3(saturate(dbgLift / 48.0), saturate(-dbgMask), saturate(dbgMask) * 0.7);
+	}
+	else if (ShellDebugData != 0)
 	{
 		// R = height, G = per-pixel coverage, B = ramp depth (40 units = full
 		// blue); class boundaries show as blue-intensity steps.

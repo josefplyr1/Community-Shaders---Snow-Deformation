@@ -1397,6 +1397,8 @@
     "feature.snow_deformation.road_meshes_depth_tooltip": "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield.",
     "feature.snow_deformation.shell_data_debug": "Shell: Data Debug Plane",
     "feature.snow_deformation.shell_data_debug_tooltip": "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader.",
+    "feature.snow_deformation.shell_exclusion_debug": "Shell: Exclusion Debug Plane",
+    "feature.snow_deformation.shell_exclusion_debug_tooltip": "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on.",
     "feature.snow_deformation.show_debug": "Show Deformation Map",
     "feature.snow_deformation.snow_borders": "Snow Borders",
     "feature.snow_deformation.snow_borders_tooltip": "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...).",
