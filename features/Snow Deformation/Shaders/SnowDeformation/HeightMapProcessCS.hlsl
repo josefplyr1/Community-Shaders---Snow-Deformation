@@ -176,9 +176,9 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	// ground beneath it is sheltered from snowfall. Consumed as MELT (thin
 	// shell floor, snow texture kept - a coverage kill exposed the
 	// mismatched projected snow beneath and cut a cliff at the roofline);
-	// the per-texel test is binary, so a center + 8-tap ring fraction with
-	// edge noise turns the cut into billows sinking under the eaves. Taps
-	// reuse the center terrain height: terrain varies slowly at ring scale.
+	// the per-texel test is binary, so a center + 8-tap ring fraction turns
+	// the cut into a smooth sink under the eaves. Taps reuse the center
+	// terrain height: terrain varies slowly at ring scale.
 	{
 		int2 texel = int2(dtid.xy);
 		int2 dimsI = int2(dims);
@@ -191,7 +191,8 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		[unroll] for (uint ringI = 0; ringI < 8; ringI++)
 			shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain);
 		shelterFrac *= 0.1;
-		shelterFrac *= 0.8 + 0.4 * ExclusionNoise(worldXY);
+		// Deliberately no edge noise: roofline sinks read best smooth (fire
+		// bowls keep their noisy rims; sheltered snow follows the structure).
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));
 	}
 

@@ -763,6 +763,8 @@ public:
 		float forwardBias;
 		/** @brief The station contains its own flame FX ref; generic-flame melt spots inside its footprint are suppressed so the workspace clearing alone governs it. */
 		bool ownsFlames = false;
+		/** @brief Fixed melt strength instead of the Workspace Clearing Height slider (0 = slider-controlled). Bedrolls clear fully: freshly laid down and slept in, whatever the workspace tuning. */
+		float meltStrength = 0.0f;
 	};
 	static constexpr TrampleSpec kTrampleSpecs[] = {
 		{ "smelter", 300.0f, 0.0f, true },  // smelters/forges are workspaces per Josef's call: both sliders apply, and their own flames must not add melt spots
@@ -780,6 +782,7 @@ public:
 		{ "marketstall", 110.0f, 0.0f },
 		{ "well01", 110.0f, 0.0f },  // bare "well" would substring-match too much
 		{ "shrine", 90.0f, 0.0f },
+		{ "bedroll", 130.0f, 0.0f, false, 1.0f },  // furniture\bedroll\*.nif; full clear - nobody sleeps in a buried bedroll
 	};
 
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
