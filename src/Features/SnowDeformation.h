@@ -153,8 +153,8 @@ public:
 		bool SnowTextureLinear = false;
 		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
 		float TrampleZoneScale = 0.75f;
-		/** @brief Peak height of wind-drifted snow banks against building walls, in world units. 0 disables wall drifts. */
-		float WallDriftHeight = 26.0f;
+		/** @brief Peak height of wind-drifted snow banks against building walls, in world units. 0 disables wall drifts. Default kept low: residual sharpness between wind hills and shadows is parked (Josef, round 247). */
+		float WallDriftHeight = 12.0f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */

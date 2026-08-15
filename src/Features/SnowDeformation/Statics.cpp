@@ -368,7 +368,22 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomRaw[0] = makeHeightTexture("SnowDeformation::HeightBottomRaw0");
 	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
 	heightTopFiltered = makeHeightTexture("SnowDeformation::HeightFieldFiltered");
-	heightBottomFiltered = makeHeightTexture("SnowDeformation::HeightShelterMask");
+	// The mask carries TWO independent channels (R = door suppression,
+	// G = melt fraction). A single winner-takes-all channel discarded melt
+	// wherever a door's faint influence tail reached - a ring of full-depth
+	// plateau snow around every sheltered door.
+	D3D11_TEXTURE2D_DESC maskDesc = heightDesc;
+	maskDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+	D3D11_SHADER_RESOURCE_VIEW_DESC maskSrvDesc = heightSrvDesc;
+	maskSrvDesc.Format = maskDesc.Format;
+	D3D11_RENDER_TARGET_VIEW_DESC maskRtvDesc = heightRtvDesc;
+	maskRtvDesc.Format = maskDesc.Format;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC maskUavDesc = heightUavDesc;
+	maskUavDesc.Format = maskDesc.Format;
+	heightBottomFiltered = new Texture2D(maskDesc, "SnowDeformation::HeightShelterMask");
+	heightBottomFiltered->CreateSRV(maskSrvDesc);
+	heightBottomFiltered->CreateRTV(maskRtvDesc);
+	heightBottomFiltered->CreateUAV(maskUavDesc);
 	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
 
 	// Skin-depth raster: R16F, SRV+RTV only (cleared and re-rasterized fresh
@@ -813,15 +828,18 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShaderResources(3, 1, &deformSRV);
 	{
 		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
-		ID3D11UnorderedAccessView* combineUAVs[2] = { heightTopFiltered->uav.get(), heightBottomFiltered->uav.get() };
+		// Field at u0, two-channel mask at u2 (u1 belongs to ScrollCS's raw
+		// bottoms and stays clear here).
+		ID3D11UnorderedAccessView* combineUAVs[3] = { heightTopFiltered->uav.get(), nullptr, heightBottomFiltered->uav.get() };
 		ID3D11Buffer* exclusionCB = doorsCB->CB();
 		context->CSSetConstantBuffers(1, 1, &exclusionCB);
 		context->CSSetShaderResources(0, 2, combineSRVs);
-		context->CSSetUnorderedAccessViews(0, 2, combineUAVs, nullptr);
+		context->CSSetUnorderedAccessViews(0, 3, combineUAVs, nullptr);
 		context->CSSetShader(heightCombineCS, nullptr, 0);
 		context->Dispatch(dispatchDim, dispatchDim, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
-		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+		ID3D11UnorderedAccessView* nullCombineUAVs[3] = { nullptr, nullptr, nullptr };
+		context->CSSetUnorderedAccessViews(0, 3, nullCombineUAVs, nullptr);
 		ID3D11Buffer* nullExclusionCB = nullptr;
 		context->CSSetConstantBuffers(1, 1, &nullExclusionCB);
 	}

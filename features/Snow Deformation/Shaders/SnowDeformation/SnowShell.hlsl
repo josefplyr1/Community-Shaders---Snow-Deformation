@@ -145,7 +145,7 @@ Texture2D<float> SceneDepth : register(t3);
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
 Texture2D<float> ObjectHeights : register(t4);
-Texture2D<float> ObjectBottoms : register(t5);
+Texture2D<float2> ObjectBottoms : register(t5);
 // Raw object tops (persistence-scrolled) and this frame's skin-depth raster,
 // shared with the trench patch: where the shell rides a captured object, its
 // layer wears the object's own skin depth instead of the landscape class
@@ -310,26 +310,28 @@ float SampleObjectHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-float SampleObjectBottom(float2 worldXY)
+float2 SampleObjectBottom(float2 worldXY)
 {
 	float2 dims;
 	bool valid;
 	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	// t5 is a signed MASK: positive 0-1 = shelter/door suppression, negative
-	// = fire melt fraction. Outside the window there is no knowledge, so
-	// nothing is suppressed or melted. (A raw-height sentinel here zeroed
-	// the VS coverage on every out-of-window vertex, flipping the
-	// bare-submerge term on all distant shell geometry.)
+	// t5 is the TWO-CHANNEL mask: x = door suppression 0-1, y = melt
+	// fraction 0-1 (fires, workspaces, sheltered ground) - independent
+	// channels, so a door's influence tail cannot discard the melt around
+	// it. Outside the window there is no knowledge, so nothing is
+	// suppressed or melted. (A raw-height sentinel here zeroed the VS
+	// coverage on every out-of-window vertex, flipping the bare-submerge
+	// term on all distant shell geometry.)
 	if (!valid)
-		return 0.0;
+		return float2(0.0, 0.0);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = ObjectBottoms.Load(int3(t0.x, t0.y, 0));
-	float s10 = ObjectBottoms.Load(int3(t1.x, t0.y, 0));
-	float s01 = ObjectBottoms.Load(int3(t0.x, t1.y, 0));
-	float s11 = ObjectBottoms.Load(int3(t1.x, t1.y, 0));
+	float2 s00 = ObjectBottoms.Load(int3(t0.x, t0.y, 0));
+	float2 s10 = ObjectBottoms.Load(int3(t1.x, t0.y, 0));
+	float2 s01 = ObjectBottoms.Load(int3(t0.x, t1.y, 0));
+	float2 s11 = ObjectBottoms.Load(int3(t1.x, t1.y, 0));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
@@ -586,14 +588,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			coverage = max(coverage, liftForce);
 			rampDepth = max(rampDepth, liftForce * 6.0);
 		}
-		// The mask carries two signals. Positive = shelter/door suppression,
-		// smooth 0-1, so sheltered clearings fade at their edges instead of
-		// cutting. Negative = fire melt fraction: depth thins toward
-		// kFireMeltFloor (coverage untouched), so fire basins keep a thin
-		// snow floor instead of fading to bare ground.
-		float shelterMask = SampleObjectBottom(worldXY);
-		coverage *= saturate(1.0 - shelterMask);
-		float melt = saturate(-shelterMask);
+		// The mask carries two independent channels. x = door suppression,
+		// smooth 0-1, so doorstep clearings fade at their edges instead of
+		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
+		// (coverage untouched), so melted ground keeps a thin snow floor
+		// instead of fading to bare ground.
+		float2 shelterMask = SampleObjectBottom(worldXY);
+		coverage *= saturate(1.0 - shelterMask.x);
+		float melt = saturate(shelterMask.y);
 		rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
 	}
 
@@ -1030,7 +1032,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above
 		// it); without an override the proximity fade dithers them into
 		// translucency like any other near-coincident surface.
-		pixelMelt = saturate(-SampleObjectBottom(GridOrigin + gridLocal));
+		pixelMelt = saturate(SampleObjectBottom(GridOrigin + gridLocal).y);
 	}
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
@@ -1242,7 +1244,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// full-height snow and the whole bowl darkens.
 			[branch] if (ObjectLiftCap > 0.0)
 			{
-				float sampleMelt = saturate(-SampleObjectBottom(GridOrigin + sampleLocal));
+				float sampleMelt = saturate(SampleObjectBottom(GridOrigin + sampleLocal).y);
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
@@ -1333,13 +1335,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (ShellDebugData == 2)
 	{
 		// Exclusion debug: R = drift field lift (48 units = full red),
-		// G = melt fraction (fires, workspaces, shelter), B = door/shelter
+		// G = melt fraction (fires, workspaces, shelter), B = door
 		// suppression. Black = untouched by any of them.
 		float2 dbgWorldXY = GridOrigin + gridLocal;
-		float dbgMask = SampleObjectBottom(dbgWorldXY);
+		float2 dbgMask = SampleObjectBottom(dbgWorldXY);
 		float dbgField = SampleObjectHeight(dbgWorldXY);
 		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
-		preLit = float3(saturate(dbgLift / 48.0), saturate(-dbgMask), saturate(dbgMask) * 0.7);
+		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);
 	}
 	else if (ShellDebugData != 0)
 	{

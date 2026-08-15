@@ -87,6 +87,11 @@ Texture2D<float4> TerrainWindow : register(t2);
 Texture2D<float> DeformMap : register(t3);  // CombineCS: corpse-mound refill gate
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
+// CombineCS only: the shelter mask, TWO independent channels (R = door
+// suppression, G = melt fraction). A single winner-takes-all channel
+// discarded melt wherever a door's faint influence tail reached - a ring
+// of full-depth plateau snow around every sheltered door.
+RWTexture2D<float2> OutMask : register(u2);
 
 // Cheap value noise for organic clearing edges.
 float ExclusionNoise(float2 worldXY)
@@ -371,10 +376,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	}
 
 	OutA[dtid.xy] = field;
-	// One mask channel, two signals: positive = door suppression (coverage
-	// kill to bare ground), negative = melt fraction (fires, workspace
-	// clearings, sheltered ground). Doors win where both apply.
-	OutB[dtid.xy] = suppress > 0.001 ? suppress : -melt;
+	OutMask[dtid.xy] = float2(suppress, melt);
 }
 
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).
