@@ -761,10 +761,12 @@ public:
 		const char* substring;
 		float radius;
 		float forwardBias;
+		/** @brief The station contains its own flame FX ref; generic-flame melt spots inside its footprint are suppressed so the workspace clearing alone governs it. */
+		bool ownsFlames = false;
 	};
 	static constexpr TrampleSpec kTrampleSpecs[] = {
-		{ "smelter", 300.0f, 0.0f },  // smelters/forges are workspaces per Josef's call: both sliders apply; their fxfire flames still melt for real
-		{ "forge", 260.0f, 0.0f },
+		{ "smelter", 300.0f, 0.0f, true },  // smelters/forges are workspaces per Josef's call: both sliders apply, and their own flames must not add melt spots
+		{ "forge", 260.0f, 0.0f, true },
 		{ "sawmill", 220.0f, 0.0f },
 		{ "millsaw", 220.0f, 0.0f },
 		{ "stables", 200.0f, 0.0f },    // NOT "stable": clutter\ruins\ruinstable01 is a table

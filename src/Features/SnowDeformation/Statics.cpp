@@ -438,6 +438,12 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		staticExclusions.clear();
 		uint32_t gatherTrampleCount = 0;
+		// Generic-flame entries by exclusion index, and the footprints of
+		// stations that own their flames (smelters, forges): a flame inside
+		// such a station must not add a melt spot on top of the
+		// slider-controlled workspace clearing.
+		std::vector<size_t> flameIndices;
+		std::vector<float4> stationFlameGuards;
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
@@ -521,6 +527,8 @@ void SnowDeformation::RenderObjectHeightMap()
 								heatRadius = pos.z - landZ < kGroundFireBand ? kFireClearRadius : kRaisedFlameClearRadius;
 							}
 							heatRadius *= a_ref->GetScale();
+							if (genericFlame)
+								flameIndices.push_back(staticExclusions.size());
 							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
@@ -545,6 +553,11 @@ void SnowDeformation::RenderObjectHeightMap()
 																	 pos.z, spec.radius * scale * zoneScale },
 										{ 0.0f, 1.0f, 1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f, 1.0f } });
 									gatherTrampleCount++;
+									// Physical footprint, NOT slider-scaled: the
+									// flame sits inside the structure no matter
+									// how small the clearing is tuned.
+									if (spec.ownsFlames)
+										stationFlameGuards.push_back({ pos.x, pos.y, pos.z, spec.radius * scale * 0.5f });
 									return RE::BSContainer::ForEachResult::kContinue;
 								}
 							}
@@ -569,6 +582,21 @@ void SnowDeformation::RenderObjectHeightMap()
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
+
+				// Drop flame melt spots that sit inside a flame-owning station
+				// (descending index order keeps the remaining indices valid).
+				if (!stationFlameGuards.empty() && !flameIndices.empty()) {
+					for (auto it = flameIndices.rbegin(); it != flameIndices.rend(); ++it) {
+						const auto& flame = staticExclusions[*it].first;
+						for (const auto& guard : stationFlameGuards) {
+							const float dx = flame.x - guard.x, dy = flame.y - guard.y;
+							if (dx * dx + dy * dy < guard.w * guard.w && std::abs(flame.z - guard.z) < 300.0f) {
+								staticExclusions.erase(staticExclusions.begin() + *it);
+								break;
+							}
+						}
+					}
+				}
 
 				statTrampleCount = gatherTrampleCount;
 
