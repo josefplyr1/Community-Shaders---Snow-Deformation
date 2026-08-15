@@ -207,6 +207,10 @@ public:
 		float DistantSnowLineFade = 1500.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
+		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
+		bool HorizonSnow = true;
+		/** @brief Where the horizon recolor ramps in, as a percent of the shell's reach (100 = exactly at the shell edge). */
+		float HorizonHandoffPct = 100.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -217,7 +221,15 @@ public:
 		uint EnableSnowDeformation;
 
 		uint DebugTerrainOverlay;
-		float3 padSnow;
+		/** @brief Horizon snow (LOD terrain recolor): distance ramp start and 1/band, aligned to the shell edge. */
+		float LODReplaceStart;
+		float LODReplaceFadeInv;
+		float LODSnowSensitivity;
+
+		float SnowIsLinear;
+		float SnowRoughnessScale;
+		float LODReplaceEnable;
+		float padSnow;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 

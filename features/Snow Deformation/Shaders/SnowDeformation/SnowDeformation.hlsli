@@ -7,9 +7,26 @@
 namespace SnowDeformation
 {
 	Texture2D<float> DeformationMap : register(t101);
+	// Shell snow albedo for the horizon LOD-terrain recolor.
+	Texture2D<float4> HorizonSnowAlbedo : register(t102);
 
 	// Must match kTextureDim in src/Features/SnowDeformation.h.
 	static const float MapDim = 2048.0;
+	// Must match kSnowUVTile in SnowShell.hlsl: identical world tiling on the
+	// shell and the recolored LOD is what makes the handoff invisible.
+	static const float SnowUVTile = 256.0;
+
+	// Snow classification of a baked LOD terrain texel: bright and
+	// desaturated (gamma-space input). Must match ClassifyLODSnow in
+	// TerrainWindowFillCS.hlsl so the shell's far coverage and the horizon
+	// recolor agree on where snow is.
+	float ClassifyLODSnow(float3 gammaColor)
+	{
+		float luminance = dot(gammaColor, float3(0.2126, 0.7152, 0.0722));
+		float saturation = max(gammaColor.r, max(gammaColor.g, gammaColor.b)) - min(gammaColor.r, min(gammaColor.g, gammaColor.b));
+		float lumLo = 0.62 - 0.64 * saturate(SharedData::snowDeformationSettings.LODSnowSensitivity);
+		return smoothstep(lumLo, lumLo + 0.12, luminance) * (1.0 - smoothstep(0.10, 0.22, saturation));
+	}
 
 	float2 GetDeformationUV(float2 absWorldXY)
 	{

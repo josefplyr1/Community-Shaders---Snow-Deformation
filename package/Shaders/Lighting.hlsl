@@ -866,7 +866,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && defined(LANDSCAPE)
+#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE))
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #	endif
 
@@ -1452,6 +1452,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	normal.xyz = TransformNormal(normal.xyz);
 	glossiness = normal.w;
 #	endif  // MODELSPACENORMALS
+
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
+	// Horizon snow: where the game's own LOD terrain bake reads as snow,
+	// wear the shell's snow material instead — same albedo, same world
+	// tiling, same roughness — so the shell's geometry hands off to
+	// identically-dressed terrain beyond its reach. Classification runs on
+	// the raw (gamma) bake, matching the window fill's thresholds; LOD
+	// meshes carry model-space normals ≈ world space, so normal.z gates
+	// cliffs back to rock even where the bake is pale.
+	[branch] if (SharedData::snowDeformationSettings.LODReplaceEnable > 0.5)
+	{
+		float lodSnowScore = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb);
+		float lodReplaceT = saturate((length(input.WorldPosition.xy) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
+		float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
+		[branch] if (lodReplaceW > 0.003)
+		{
+			// frac + explicit gradients: correct mip selection across the
+			// tile seam regardless of the sampler's address mode.
+			float2 snowRawUV = (input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
+			float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
+			float3 snowGamma = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSkyrimGamma(snowSample) : snowSample;
+			baseColor.xyz = lerp(baseColor.xyz, Color::Diffuse(snowGamma), lodReplaceW);
+			glossiness = lerp(glossiness, 1.0 - SharedData::snowDeformationSettings.SnowRoughnessScale, lodReplaceW);
+		}
+	}
+#	endif
 
 #	if defined(WORLD_MAP)
 	normal.xyz = GetWorldMapNormal(input, normal.xyz, rawBaseColor.xyz);

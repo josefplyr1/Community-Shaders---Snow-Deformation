@@ -353,7 +353,18 @@ namespace SharedData
 		uint EnableSnowDeformation;
 
 		uint DebugTerrainOverlay;
-		float3 padSnow;
+		// Horizon snow (LOD terrain recolor): distance ramp start and 1/band,
+		// aligned to the shell's edge so the geometry hands off seamlessly.
+		float LODReplaceStart;
+		float LODReplaceFadeInv;
+		// LOD snow classification sensitivity, shared with the window fill.
+		float LODSnowSensitivity;
+
+		// Snow albedo (t102) color space + material response for the recolor.
+		float SnowIsLinear;
+		float SnowRoughnessScale;
+		float LODReplaceEnable;
+		float padSnow;
 	};
 
 	cbuffer FeatureData : register(b6)

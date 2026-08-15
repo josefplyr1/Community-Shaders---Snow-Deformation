@@ -52,7 +52,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DistantSnowLineZ,
 	DistantSnowNorthDrop,
 	DistantSnowLineFade,
-	LODSnowSensitivity)
+	LODSnowSensitivity,
+	HorizonSnow,
+	HorizonHandoffPct)
 
 void SnowDeformation::CreateDeformationTextures()
 {
@@ -226,6 +228,19 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = debugTerrainOverlay ? 1u : 0u;
+
+	// Horizon snow: ramp aligned to the shell's reach so geometry hands off
+	// to the recolored LOD inside the shell's own edge fade.
+	EnsureShellSnowTextures();
+	const float shellSpacing = kShellGridSpacing * std::clamp(settings.RangeShellM, 94.0f, 750.0f) * kUnitsPerMeter / ShellWarpedHalfSpan(kShellGridSpacing);
+	const float shellSpan = ShellWarpedHalfSpan(shellSpacing);
+	constexpr float kHandoffBand = 4096.0f;
+	data.LODReplaceStart = std::max(shellSpan * std::clamp(settings.HorizonHandoffPct, 10.0f, 150.0f) / 100.0f - kHandoffBand, 0.0f);
+	data.LODReplaceFadeInv = 1.0f / kHandoffBand;
+	data.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
+	data.SnowIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
+	data.SnowRoughnessScale = snowRoughnessScale;
+	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	return data;
 }
 
@@ -301,6 +316,13 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+	// Horizon snow albedo (t102) for the LOD terrain recolor; the shader
+	// gates on LODReplaceEnable, which requires this SRV to exist.
+	EnsureShellSnowTextures();
+	if (shellSnowDiffuseSRV) {
+		ID3D11ShaderResourceView* horizonSnowSRV = shellSnowDiffuseSRV.get();
+		context->PSSetShaderResources(102, 1, &horizonSnowSRV);
+	}
 
 	// New frame: publish last frame's statics-capture count and reset the
 	// list before this frame's opaque rendering fills it again.

@@ -65,10 +65,16 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttDs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead."));
+		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
+		if (auto _ttHs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. Applies out to the edge of the world."));
+		ImGui::SliderFloat(T(TKEY("horizon_handoff"), "Horizon Handoff"), &settings.HorizonHandoffPct, 10.0f, 150.0f, "%.0f %%");
+		if (auto _ttHh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("horizon_handoff_tooltip"), "Where the recolor ramps in, as a percent of the Snow Shell range (100 = exactly at the shell's edge fade). Lower it to see the recolor closer and tune the blend; the goal is an undetectable swap at 100."));
 		bool distantChanged = false;
 		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttLss = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view: brown = classified bare, blue-white = classified snow."));
+			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view (brown = bare, blue-white = snow); the same setting drives the Horizon Snow recolor."));
 		ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
 		if (auto _ttDsl = Util::HoverTooltipWrapper())

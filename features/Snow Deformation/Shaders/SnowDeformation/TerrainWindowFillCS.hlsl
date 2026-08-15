@@ -61,11 +61,12 @@ cbuffer WindowFillCB : register(b0)
 // Snow classification of a baked LOD diffuse texel: bright and desaturated.
 // LOD bakes fold every landscape texture down, so snow arrives as near-white
 // with a slight blue cast while rock/dirt/grass stay darker or saturated.
+// Must match ClassifyLODSnow in SnowDeformation.hlsli (the horizon recolor).
 float ClassifyLODSnow(float3 color)
 {
 	float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
 	float saturation = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
-	float lumLo = lerp(0.62, 0.30, saturate(LODSnowSensitivity));
+	float lumLo = 0.62 - 0.64 * saturate(LODSnowSensitivity);
 	return smoothstep(lumLo, lumLo + 0.12, luminance) * (1.0 - smoothstep(0.10, 0.22, saturation));
 }
 
