@@ -68,8 +68,10 @@ cbuffer HeightProcessCB : register(b0)
 // the mismatched projected snow diffuse beneath).
 #define SHELTER_MELT 0.9
 // Soft-shelter ring radius in texels (4 world units each): widens the
-// binary per-texel roofline test into a gradual transition band.
-#define SHELTER_RING_TEXELS 6
+// per-texel roofline test into a gradual transition band. 10 texels =
+// a ~40-unit band, so a full-depth sink slopes at ~20 degrees instead
+// of presenting a snow cliff at the roofline.
+#define SHELTER_RING_TEXELS 10
 
 cbuffer DoorCB : register(b1)
 {
@@ -200,11 +202,11 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		static const int2 kShelterRing[8] = {
 			int2(SHELTER_RING_TEXELS, 0), int2(-SHELTER_RING_TEXELS, 0),
 			int2(0, SHELTER_RING_TEXELS), int2(0, -SHELTER_RING_TEXELS),
-			int2(4, 4), int2(4, -4), int2(-4, 4), int2(-4, -4)
+			int2(7, 7), int2(7, -7), int2(-7, 7), int2(-7, -7)
 		};
 		static const int2 kShelterRingInner[8] = {
-			int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3),
-			int2(2, 2), int2(2, -2), int2(-2, 2), int2(-2, -2)
+			int2(5, 0), int2(-5, 0), int2(0, 5), int2(0, -5),
+			int2(4, 4), int2(4, -4), int2(-4, 4), int2(-4, -4)
 		};
 		float shelterFrac = ShelterTap(texel, dimsI, terrain) * 2.0;
 		[unroll] for (uint ringI = 0; ringI < 8; ringI++)
@@ -236,27 +238,24 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 				float2 local = float2(obsRot.y * rel.x - obsRot.x * rel.y, obsRot.x * rel.x + obsRot.y * rel.y);
 				float2 q = abs(local) - posExt.zw;
 				float outside = length(max(q, 0.0));
-				[branch] if (outside < 0.5)
+				[branch] if (outside < DRIFT_BAND)
 				{
-					// Inside the footprint: hold a full-height plateau, hidden
-					// by the building itself. Without it the un-lifted interior
-					// is the cone transform's lowest neighbor and every wall
-					// bank gets cut down INTO the wall at the repose slope,
-					// terraced by the sparse cone steps - snow that climbs
-					// down the wall as stairs instead of banking up it.
-					float amp = DRIFT_BASE + DRIFT_WIND * windStrength;
-					field = max(field, terrain + DriftHeight * amp);
-				}
-				else if (outside < DRIFT_BAND)
-				{
-					float2 nLocal = normalize(float2(max(q.x, 0.0) * sign(local.x), max(q.y, 0.0) * sign(local.y)));
-					float2 nWorld = float2(obsRot.y * nLocal.x + obsRot.x * nLocal.y, -obsRot.x * nLocal.x + obsRot.y * nLocal.y);
-					float windward = saturate(-dot(nWorld, windDir));
-					// Windward earns extra height over the all-around baseline.
-					// No leeward scour: an active melt strip beside walls read
-					// as an error trench, not a wind shadow - leeward is simply
-					// the wall that never earns the windward bonus.
+					// Windwardness from the RADIAL direction around the object,
+					// not the nearest-face normal: face normals flip instantly
+					// at box corners, seaming a full windward bank against a
+					// baseline leeward one - a cliff at every slider value. The
+					// radial direction varies continuously around walls,
+					// corners and the interior alike, so bank height glides
+					// from windward maximum to leeward baseline. No leeward
+					// scour: leeward simply never earns the windward bonus.
+					float relLen = length(rel);
+					float windward = relLen > 0.001 ? saturate(-dot(rel / relLen, windDir)) : 0.0;
 					float amp = DRIFT_BASE + DRIFT_WIND * windward * windStrength;
+					// Inside the footprint (outside == 0) the profile is 1: a
+					// hidden plateau, continuous with the wall banks. Without
+					// it the un-lifted interior is the cone transform's lowest
+					// neighbor and every bank gets cut down INTO the wall at
+					// the repose slope, terraced by the sparse cone steps.
 					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
 					field = max(field, terrain + DriftHeight * amp * profile);
 				}
