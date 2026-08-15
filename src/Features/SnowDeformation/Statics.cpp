@@ -437,7 +437,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
 		}
 		staticExclusions.clear();
-		trampleZones.clear();
+		uint32_t gatherTrampleCount = 0;
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
@@ -536,25 +536,34 @@ void SnowDeformation::RenderObjectHeightMap()
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
 
-						// Trample zones: worked ground around furniture and
-						// activity areas becomes partial compression in the
-						// deformation map (heat wins when a model matched both).
+						// Workspace clearings: the shell only ever forms to half
+						// depth around worked spots (workstations, stalls,
+						// wells, shrines) - a half-strength melt bowl centered
+						// toward the working side; real trampling carves the
+						// rest. A full pre-trampled look via the deformation
+						// map read as mini mountains and was replaced by this.
 						// TESFurniture derives from TESObjectACTI, so the model
 						// chain above already reached every workstation.
-						if (!lowered.empty() && trampleZones.size() < kMaxTrampleZones) {
+						if (!lowered.empty()) {
 							for (const auto& spec : kTrampleSpecs) {
 								if (lowered.find(spec.substring) != std::string::npos) {
 									auto pos = a_ref->GetPosition();
 									float angleZ = a_ref->GetAngleZ();
 									float scale = a_ref->GetScale();
-									trampleZones.push_back({ { pos.x, pos.y, pos.z, spec.radius * scale },
-										{ std::sin(angleZ), std::cos(angleZ), spec.forwardBias * scale, 0.0f } });
+									float zoneScale = std::max(settings.TrampleZoneScale, 0.0f);
+									staticExclusions.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
+																	 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
+																	 pos.z, spec.radius * scale * zoneScale },
+										{ 0.0f, 1.0f, kTrampleMeltStrength, 1.0f } });
+									gatherTrampleCount++;
 									break;
 								}
 							}
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
+
+				statTrampleCount = gatherTrampleCount;
 
 				// Overflow: keep the sources nearest the player.
 				if (staticExclusions.size() > kMaxExclusions) {
@@ -588,22 +597,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		exclusionData.ExclusionCount = exclusionCount;
 		statExclusionCount = exclusionCount;
 		doorsCB->Update(exclusionData);
-	}
-
-	// Trample zones ride their own small CB into the deformation update CS.
-	{
-		TrampleCB trampleData{};
-		uint32_t trampleCount = 0;
-		for (const auto& [posRadius, dirBias] : trampleZones) {
-			if (trampleCount >= kMaxTrampleZones)
-				break;
-			trampleData.PosRadius[trampleCount] = posRadius;
-			trampleData.DirBias[trampleCount] = dirBias;
-			trampleCount++;
-		}
-		trampleData.TrampleCount = trampleCount;
-		statTrampleCount = trampleCount;
-		trampleCB->Update(trampleData);
 	}
 
 	uint previous = heightCurrent;

@@ -133,6 +133,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("border_trampled_fade"), "Trampled Border Fade"), &settings.SnowBorderTrampledFade, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttTf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("border_trampled_fade_tooltip"), "How gradually TRAMPLED snow (trench floors) blends out toward a class border, letting the ground beneath show through faintly. Too high and the landscape becomes too visible under trenches."));
+		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
+		if (auto _ttWcs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the half-depth snow bowls around workstations, stalls, wells and shrines. Applies within a second."));
 		ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttUf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
@@ -216,7 +219,7 @@ void SnowDeformation::DrawSettings()
 		if (auto* sky = RE::Sky::GetSingleton())
 			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
 				Util::Units::RadiansToDegrees(sky->windAngle));
-		ImGui::Text("Exclusion zones: %u, trample zones: %u (Survival heat list %s)", statExclusionCount,
+		ImGui::Text("Exclusion zones: %u, workspace clearings: %u (Survival heat list %s)", statExclusionCount,
 			statTrampleCount, survivalHeatSources ? "found" : "absent");
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
 			snowMasksSizeForUI(),
