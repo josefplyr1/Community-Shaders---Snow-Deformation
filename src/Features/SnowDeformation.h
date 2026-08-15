@@ -765,6 +765,10 @@ public:
 		bool ownsFlames = false;
 		/** @brief Fixed melt strength instead of the Workspace Clearing Height slider (0 = slider-controlled). Bedrolls clear fully: freshly laid down and slept in, whatever the workspace tuning. */
 		float meltStrength = 0.0f;
+		/** @brief Bowl elongation along the object's facing (1 = circle; 1.75 stretches a bedroll's clearing to its shape), centered on the mesh. */
+		float aspect = 1.0f;
+		/** @brief Smooth bowl edge (no noise): bedding melts flush like shelters, so a bedroll inside a tent joins the tent's sink cleanly instead of scribbling a noisy rim across it. */
+		bool smoothEdge = false;
 	};
 	static constexpr TrampleSpec kTrampleSpecs[] = {
 		{ "smelter", 300.0f, 0.0f, true },  // smelters/forges are workspaces per Josef's call: both sliders apply, and their own flames must not add melt spots
@@ -782,9 +786,9 @@ public:
 		{ "marketstall", 110.0f, 0.0f },
 		{ "well01", 110.0f, 0.0f },  // bare "well" would substring-match too much
 		{ "shrine", 90.0f, 0.0f },
-		{ "bedroll", 130.0f, 0.0f, false, 1.0f },   // furniture\bedroll\*.nif; full clear - nobody sleeps in a buried bedroll
-		{ "haymound", 120.0f, 0.0f, false, 1.0f },  // clutter\hay\haymound*.nif; bedding stays clear like bedrolls
-		{ "haybale", 100.0f, 0.0f, false, 1.0f },   // hayscatter* deliberately absent: flat ground decals, a clearing reads wrong
+		{ "bedroll", 160.0f, 0.0f, false, 1.0f, 1.75f, true },  // furniture\bedroll\*.nif; full clear - nobody sleeps in a buried bedroll
+		{ "haymound", 120.0f, 0.0f, false, 1.0f, 1.0f, true },  // clutter\hay\haymound*.nif; bedding stays clear like bedrolls
+		{ "haybale", 100.0f, 0.0f, false, 1.0f, 1.0f, true },   // hayscatter* deliberately absent: flat ground decals, a clearing reads wrong
 	};
 
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
@@ -796,7 +800,7 @@ public:
 	struct alignas(16) ExclusionsCB
 	{
 		float4 PosRadius[kMaxExclusions];   ///< xyz = position, w = radius
-		float4 DirExtType[kMaxExclusions];  ///< xy = facing dir, z = forward extent (doors) / melt strength (fires), w = type (0 door, 1 fire)
+		float4 DirExtType[kMaxExclusions];  ///< doors (w=0): xy = facing, z = forward extent. Fires (w=1 noisy, w=2 smooth-edged): xy = elongation axis x (aspect-1) (zero = circle), z = melt strength
 		uint ExclusionCount;
 		float pad[3];
 	};

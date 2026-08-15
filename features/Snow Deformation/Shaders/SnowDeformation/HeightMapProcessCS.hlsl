@@ -60,7 +60,7 @@ cbuffer HeightProcessCB : register(b0)
 cbuffer DoorCB : register(b1)
 {
 	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius
-	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // xy = facing, z = forward extent (doors) / melt strength (fires), w = type (0 door, 1 fire)
+	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // doors (w=0): xy = facing, z = forward extent. Fires (w=1 noisy, w=2 smooth): xy = elongation axis x (aspect-1), z = melt strength
 	uint ExclusionCount;
 	float3 exclusionPad;
 }
@@ -227,14 +227,28 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			}
 			else
 			{
-				// Fire: wide melt bowl - full melt in the core, then a long
-				// gradual rise (whoever tends the fire also cleared the snow
-				// around it). Two noise octaves: fine wobble plus large-scale
-				// shape irregularity so no two bowls read as stamped circles.
-				// dirExtType.z scales melt strength per source.
-				float noisy = 0.7 + 0.35 * ExclusionNoise(worldXY) + 0.35 * ExclusionNoise(worldXY * 0.3);
+				// Melt bowl - full melt in the core, then a long gradual
+				// rise. Type 1 (fires): two noise octaves, fine wobble plus
+				// large-scale shape irregularity, so no two bowls read as
+				// stamped circles. Type 2 (bedding): smooth edge, so a
+				// bedroll's bowl joins a tent's shelter sink cleanly.
+				// dirExtType.xy = elongation axis x (aspect-1): compressing
+				// the along-axis distance stretches the bowl into an oval
+				// centered on the object. dirExtType.z = melt strength.
+				float2 dEff = d;
+				float axisLen = length(dirExtType.xy);
+				[branch] if (axisLen > 0.001)
+				{
+					float2 axisDir = dirExtType.xy / axisLen;
+					dEff -= axisDir * dot(d, axisDir) * (axisLen / (1.0 + axisLen));
+				}
+				float noisy = 1.0;
+				[branch] if (dirExtType.w < 1.5)
+				{
+					noisy = 0.7 + 0.35 * ExclusionNoise(worldXY) + 0.35 * ExclusionNoise(worldXY * 0.3);
+				}
 				float noisyRadius = radius * noisy;
-				float dist = length(d);
+				float dist = length(dEff);
 				float influence = (1.0 - smoothstep(noisyRadius * 0.35, noisyRadius, dist)) * dirExtType.z;
 				field = lerp(field, terrain, influence);
 				melt = max(melt, influence);

@@ -476,7 +476,7 @@ void SnowDeformation::RenderObjectHeightMap()
 						if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
 							if (HasActiveLight(a_ref->Get3D())) {
 								auto pos = a_ref->GetPosition();
-								staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+								staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
 							}
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
@@ -529,7 +529,7 @@ void SnowDeformation::RenderObjectHeightMap()
 							heatRadius *= a_ref->GetScale();
 							if (genericFlame)
 								flameIndices.push_back(staticExclusions.size());
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
 							return RE::BSContainer::ForEachResult::kContinue;
 						}
 
@@ -551,10 +551,15 @@ void SnowDeformation::RenderObjectHeightMap()
 									const float meltStrength = spec.meltStrength > 0.0f ?
 								                                   spec.meltStrength :
 								                                   1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f;
+									// Elongation axis rides the facing (length =
+									// aspect - 1; zero = circle); type 2 = smooth
+									// bowl edge for bedding.
+									const float elongation = std::max(spec.aspect, 1.0f) - 1.0f;
 									staticExclusions.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
 																	 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
 																	 pos.z, spec.radius * scale * zoneScale },
-										{ 0.0f, 1.0f, meltStrength, 1.0f } });
+										{ std::sin(angleZ) * elongation, std::cos(angleZ) * elongation, meltStrength,
+											spec.smoothEdge ? 2.0f : 1.0f } });
 									gatherTrampleCount++;
 									// Physical footprint, NOT slider-scaled: the
 									// flame sits inside the structure no matter
@@ -581,7 +586,7 @@ void SnowDeformation::RenderObjectHeightMap()
 							tes->GetLandHeight(pos, landZ);
 							float radius = pos.z - landZ < kGroundFireBand ? kUnknownHeatClearRadius :
 						                                                     std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 0.0f, 1.0f, 1.0f } });
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
