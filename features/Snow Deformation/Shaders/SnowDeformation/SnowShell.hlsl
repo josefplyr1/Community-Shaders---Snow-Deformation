@@ -203,6 +203,27 @@ float InverseWarpAxis(float w)
 	return sign(w) * (min(a, kWarpInnerVerts) + ext);
 }
 
+// CDLOD-style geomorph for the warped outer rings: each vertex slides
+// between a fine and a 2x coarser lattice by a continuous morph weight.
+// Both lattice endpoints are (near-)static world points, so camera motion
+// never makes a vertex hop — the old per-ring snapping resampled the field
+// in full ring-step jumps, which read as distant up/down flicker and
+// popping holes. Lattices are centered on the grid center (inner vertices
+// land exactly on the level-0 lattice, so the morph zone joins the linear
+// zone without a crack); the center steps 8 units with the camera, so
+// endpoints micro-shift by at most 8 units — a sixteenth of a data texel.
+// Takes/returns CENTERED coordinates (gridLocal - WarpedHalfSpan).
+float2 GeomorphVertexXY(float2 centered, float2 u)
+{
+	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
+	float2 lod = log2(max(ringStep / GridSpacing, 1.0));
+	float2 fineStep = GridSpacing * exp2(floor(lod));
+	float2 coarseStep = fineStep * 2.0;
+	float2 fine = floor(centered / fineStep + 0.5) * fineStep;
+	float2 coarse = floor(centered / coarseStep + 0.5) * coarseStep;
+	return lerp(fine, coarse, frac(lod));
+}
+
 // Shell edge fade: the shell dissolves at the loaded-cell seam, where the
 // game swaps full terrain for LOD meshes and the horizon recolor takes over
 // in the same snow material. The warped-span fade stays as the fallback for
@@ -223,7 +244,9 @@ float ShellEdgeFade(float2 gridLocal)
 
 struct VS_OUTPUT
 {
-	float4 Position : SV_POSITION;
+	// noperspective centroid: required interpolation for SV_Position when
+	// the PS writes conservative depth (SV_DepthLessEqual).
+	linear noperspective centroid float4 Position : SV_POSITION;
 	float4 CurrentClip : TEXCOORD0;
 	float4 PreviousClip : TEXCOORD1;
 	float3 WorldPos : TEXCOORD2;
@@ -635,6 +658,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float depth = rampDepth + (-8.0) * bare;
 		depth = lerp(-8.0, depth, edgeFade);
 
+		// Touch-down toe: compress the last few units of positive depth so
+		// the blanket's rim meets the ground at class borders instead of
+		// hanging a hovering lip over the bare side (visible under-gap at
+		// grazing angles). Trench floors (kTrenchFloor 5) pass unchanged.
+		[flatten] if (depth > 0.0)
+			depth *= smoothstep(0.0, 5.0, depth);
+
 		// Deformation carves only where the layer is actually raised; the
 		// negative-depth submerge at class edges is untouched. The carved floor
 		// never drops below kTrenchFloor units (or the un-carved depth when
@@ -725,19 +755,10 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// (the warped grid's min corner), so all field sampling is unchanged.
 	float2 u = gridPos - (float)GridDim * 0.5;
 	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
-	float2 absXY = GridOrigin + gridLocal;
 
-	// World-anchored outer rings: warped-zone vertex offsets are camera-
-	// relative, so distant geometry morphs as the camera moves. Snapping each
-	// vertex to its own ring's step in world space pins it; a vertex hops one
-	// ring-step only when the camera crosses one, which distance and TAA
-	// absorb. The inner linear region is already stable through GridOrigin's
-	// whole-texel snapping.
-	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
-	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
-	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
-	absXY = lerp(absXY, snapped, snapT);
-	gridLocal = absXY - GridOrigin;
+	// Outer rings geomorph between world-anchored lattices (see
+	// GeomorphVertexXY) — vertices slide instead of hopping ring steps.
+	gridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
 
 	float coverage;
 	float terrainHeight;
@@ -788,14 +809,9 @@ TessControlPoint main(uint vertexID : SV_VertexID)
 	// their edge vertices exactly.
 	float2 u = gridPos - (float)GridDim * 0.5;
 	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
-	float2 absXY = GridOrigin + gridLocal;
-	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
-	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
-	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
-	absXY = lerp(absXY, snapped, snapT);
 
 	TessControlPoint cp;
-	cp.GridLocal = absXY - GridOrigin;
+	cp.GridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
 	return cp;
 }
 #endif
@@ -975,6 +991,9 @@ RWStructuredBuffer<uint> LODHistogram : register(u1);
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
+	// Conservative depth (may only move toward the camera): carries the
+	// anti-z-fight clamp while keeping early-Z alive.
+	float DepthLE : SV_DepthLessEqual;
 #	ifndef SNOW_LOD_HISTOGRAM
 	float4 MotionVectors : SV_Target1;
 	float4 NormalGlossiness : SV_Target2;
@@ -1031,8 +1050,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
 
-	// Depth reads shared by the edge dissolve and the proximity fade below.
-	float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+	// Depth reads shared by the edge dissolve, the proximity fade below and
+	// the conservative depth clamp at the tail.
+	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
+	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
 
 	// User-tunable dissolve band (depth units): how much of the ramp's tail
@@ -1489,6 +1510,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
 	psout.Masks2 = float4(0.0, 0.0, 0.0, alpha);
 #	endif
+
+	// Conservative depth clamp: where the shell falls just behind the
+	// rendered ground (bilinear dips, LOD decimation in the seam overlap),
+	// pull its depth to just in front — the z-fight/pinhole class loses at
+	// the source without moving geometry. Legitimate occlusion is preserved:
+	// the clamp only fires within a short world-space window behind the
+	// surface. Skipped in debug views so the heatmap measures raw deltas.
+	psout.DepthLE = input.Position.z;
+	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > sceneZ && shellZ - sceneZ < 48.0)
+		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
+
 	return psout;
 }
 #endif
@@ -1512,12 +1544,8 @@ static const float kProbeInvalid = 3.0e38;
 
 float2 SnappedVertexXY(float2 u)
 {
-	float2 vLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
-	float2 absXY = GridOrigin + vLocal;
-	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
-	float2 snapT = saturate(ringStep / GridSpacing - 1.0);
-	float2 snapped = floor(absXY / ringStep + 0.5) * ringStep;
-	return lerp(absXY, snapped, snapT);
+	float2 centered = float2(WarpAxis(u.x), WarpAxis(u.y));
+	return GridOrigin + WarpedHalfSpan + GeomorphVertexXY(centered, u);
 }
 
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
