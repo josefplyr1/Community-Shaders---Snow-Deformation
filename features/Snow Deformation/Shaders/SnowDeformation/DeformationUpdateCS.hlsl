@@ -6,12 +6,16 @@
 // Texel value = normalized depression depth (0 = untouched, 1 = ground).
 
 #define MAX_STAMPS 256
+#define MAX_TRAMPLE_ZONES 64
 
 // Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
 // Refill multiplier at full supply and full wind; interior texels with a
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
+// Compression held by a trample zone: partially trodden, visibly shallower
+// than a real trail (those carve to 1.0 and max over this).
+#define TRAMPLE_DEPTH 0.55
 
 cbuffer PerFrame : register(b0)
 {
@@ -34,6 +38,14 @@ cbuffer PerFrame : register(b0)
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth, w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule segment start)
+}
+
+cbuffer TrampleCB : register(b1)
+{
+	float4 TramplePosRadius[MAX_TRAMPLE_ZONES];  // xyz = position, w = radius
+	float4 TrampleDirBias[MAX_TRAMPLE_ZONES];    // xy = facing dir, z = forward bias, w = unused
+	uint TrampleCount;
+	float3 padTrample;
 }
 
 Texture2D<float> PreviousDeformation : register(t0);
@@ -126,6 +138,26 @@ float StampNoise(float2 p)
 			// high values hold full depth almost to the edge.
 			float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
 			deformation = max(deformation, Stamps[i].z * falloff);
+		}
+	}
+
+	// Trample zones: regularly worked ground (workstations, wood yards,
+	// shrines) holds a partial compression floor, re-asserted every frame.
+	// Actor trails max over it; refill pulls it down each frame and this
+	// puts it back, so the spot stays trodden while its object is present.
+	// The patch center rides forward along the object's facing (where the
+	// user stands); noisy edges keep it from reading as a stamped disc.
+	for (uint zoneI = 0; zoneI < TrampleCount; zoneI++) {
+		float2 center = TramplePosRadius[zoneI].xy + TrampleDirBias[zoneI].xy * TrampleDirBias[zoneI].z;
+		float radius = TramplePosRadius[zoneI].w;
+		float2 dz = worldPos - center;
+		float distSq = dot(dz, dz);
+		float zoneGate = radius * 1.3;
+		[branch] if (distSq < zoneGate * zoneGate)
+		{
+			float noisyRadius = radius * (0.75 + 0.5 * StampNoise(worldPos * 0.04));
+			float influence = 1.0 - smoothstep(noisyRadius * 0.35, noisyRadius, sqrt(distSq));
+			deformation = max(deformation, TRAMPLE_DEPTH * influence);
 		}
 	}
 

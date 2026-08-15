@@ -750,6 +750,48 @@ public:
 		{ "sconce", 80.0f },
 		{ "torch", 80.0f },  // wall torches; torchbug critters guarded at the call site
 	};
+
+	// ---- Trample zones: worked ground held as partial compression in the deformation map ----
+
+	/** @brief Trample classification: lowercase model-path substring -> patch radius + forward bias (units the patch center rides along the object's facing, toward the working side; 0 = symmetric area). Heat wins when both would match a model. First match wins: enchanting/alchemy precede the generic "workbench" their models also contain. */
+	struct TrampleSpec
+	{
+		const char* substring;
+		float radius;
+		float forwardBias;
+	};
+	static constexpr TrampleSpec kTrampleSpecs[] = {
+		{ "sawmill", 220.0f, 0.0f },
+		{ "millsaw", 220.0f, 0.0f },
+		{ "stable", 200.0f, 0.0f },
+		{ "chopping", 150.0f, 50.0f },  // wood chopping blocks
+		{ "enchanting", 110.0f, 60.0f },
+		{ "alchemy", 110.0f, 60.0f },
+		{ "workbench", 130.0f, 60.0f },
+		{ "grind", 130.0f, 60.0f },  // grindstones / grinding wheels
+		{ "tanningrack", 120.0f, 60.0f },
+		{ "anvil", 120.0f, 50.0f },
+		{ "marketstall", 110.0f, 0.0f },
+		{ "well01", 110.0f, 0.0f },  // bare "well" would substring-match too much
+		{ "shrine", 90.0f, 0.0f },
+	};
+
+	static constexpr uint kMaxTrampleZones = 64;
+
+	/** @brief Layout must match TrampleCB in DeformationUpdateCS.hlsl. Zones are re-asserted into the deformation map every frame: compressed white snow that actor trails max over and refill can never fully close while the zone is present. */
+	struct alignas(16) TrampleCB
+	{
+		float4 PosRadius[kMaxTrampleZones];  ///< xyz = position, w = radius
+		float4 DirBias[kMaxTrampleZones];    ///< xy = facing dir, z = forward bias, w = unused
+		uint TrampleCount;
+		float3 padTrample;
+	};
+	STATIC_ASSERT_ALIGNAS_16(TrampleCB);
+	ConstantBuffer* trampleCB = nullptr;
+	/** @brief Cadence-gathered trample zones, uploaded alongside the exclusions. */
+	std::vector<std::pair<float4, float4>> trampleZones;
+	/** @brief Trample zones uploaded this frame, for the debug readout. */
+	uint32_t statTrampleCount = 0;
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 

@@ -121,6 +121,7 @@ void SnowDeformation::SetupResources()
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
+	trampleCB = new ConstantBuffer(ConstantBufferDesc<TrampleCB>(), "SnowDeformation::TrampleCB");
 
 	CreateHeightFieldResources();
 
@@ -345,8 +346,8 @@ void SnowDeformation::Prepass()
 	currentTexture = 1 - currentTexture;
 
 	{
-		ID3D11Buffer* buffers[1] = { perFrame->CB() };
-		context->CSSetConstantBuffers(0, 1, buffers);
+		ID3D11Buffer* buffers[2] = { perFrame->CB(), trampleCB->CB() };
+		context->CSSetConstantBuffers(0, 2, buffers);
 
 		ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -362,8 +363,8 @@ void SnowDeformation::Prepass()
 
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullBuffer);
+	ID3D11Buffer* nullBuffers[2] = { nullptr, nullptr };
+	context->CSSetConstantBuffers(0, 2, nullBuffers);
 
 	ID3D11ShaderResourceView* nullSrvs[1] = { nullptr };
 	context->CSSetShaderResources(0, 1, nullSrvs);

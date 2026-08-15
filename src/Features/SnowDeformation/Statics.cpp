@@ -437,6 +437,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
 		}
 		staticExclusions.clear();
+		trampleZones.clear();
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
 				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
@@ -490,8 +491,9 @@ void SnowDeformation::RenderObjectHeightMap()
 						// for anything the table does not know.
 						float heatRadius = 0.0f;
 						bool genericFlame = false;
+						std::string lowered;
 						if (modelPath && modelPath[0]) {
-							std::string lowered(modelPath);
+							lowered.assign(modelPath);
 							std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 								[](unsigned char c) { return (char)std::tolower(c); });
 							if (lowered.find("torchbug") == std::string::npos) {
@@ -531,6 +533,25 @@ void SnowDeformation::RenderObjectHeightMap()
 							}
 							heatRadius *= a_ref->GetScale();
 							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 1.0f, 1.0f, 1.0f } });
+							return RE::BSContainer::ForEachResult::kContinue;
+						}
+
+						// Trample zones: worked ground around furniture and
+						// activity areas becomes partial compression in the
+						// deformation map (heat wins when a model matched both).
+						// TESFurniture derives from TESObjectACTI, so the model
+						// chain above already reached every workstation.
+						if (!lowered.empty() && trampleZones.size() < kMaxTrampleZones) {
+							for (const auto& spec : kTrampleSpecs) {
+								if (lowered.find(spec.substring) != std::string::npos) {
+									auto pos = a_ref->GetPosition();
+									float angleZ = a_ref->GetAngleZ();
+									float scale = a_ref->GetScale();
+									trampleZones.push_back({ { pos.x, pos.y, pos.z, spec.radius * scale },
+										{ std::sin(angleZ), std::cos(angleZ), spec.forwardBias * scale, 0.0f } });
+									break;
+								}
+							}
 						}
 						return RE::BSContainer::ForEachResult::kContinue;
 					});
@@ -567,6 +588,22 @@ void SnowDeformation::RenderObjectHeightMap()
 		exclusionData.ExclusionCount = exclusionCount;
 		statExclusionCount = exclusionCount;
 		doorsCB->Update(exclusionData);
+	}
+
+	// Trample zones ride their own small CB into the deformation update CS.
+	{
+		TrampleCB trampleData{};
+		uint32_t trampleCount = 0;
+		for (const auto& [posRadius, dirBias] : trampleZones) {
+			if (trampleCount >= kMaxTrampleZones)
+				break;
+			trampleData.PosRadius[trampleCount] = posRadius;
+			trampleData.DirBias[trampleCount] = dirBias;
+			trampleCount++;
+		}
+		trampleData.TrampleCount = trampleCount;
+		statTrampleCount = trampleCount;
+		trampleCB->Update(trampleData);
 	}
 
 	uint previous = heightCurrent;

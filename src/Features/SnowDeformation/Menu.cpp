@@ -216,8 +216,8 @@ void SnowDeformation::DrawSettings()
 		if (auto* sky = RE::Sky::GetSingleton())
 			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
 				Util::Units::RadiansToDegrees(sky->windAngle));
-		ImGui::Text("Exclusion zones: %u (Survival heat list %s)", statExclusionCount,
-			survivalHeatSources ? "found" : "absent");
+		ImGui::Text("Exclusion zones: %u, trample zones: %u (Survival heat list %s)", statExclusionCount,
+			statTrampleCount, survivalHeatSources ? "found" : "absent");
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
 			snowMasksSizeForUI(),
 			(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
