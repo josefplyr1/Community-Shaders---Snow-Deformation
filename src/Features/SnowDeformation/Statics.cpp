@@ -419,12 +419,19 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.CorpseMoundCap = kCorpseMoundCap;
 	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
 		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
-	// Live wind for the wall-drift bias, same source as the refill drift.
-	processData.WindBiasH = { 0.0f, 0.0f };
+	// Wind for the wall-drift bias, same source as the refill drift but
+	// temporally smoothed (~8 s): drifted banks are slow accumulation and
+	// must not pump up and down with per-frame gusts.
+	float2 windNow = { 0.0f, 0.0f };
 	if (auto* sky = RE::Sky::GetSingleton()) {
 		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
-		processData.WindBiasH = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
+		windNow = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
+	const float windDt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.016f;
+	const float windBlend = std::clamp(windDt / 8.0f, 0.0f, 1.0f);
+	driftWind.x += (windNow.x - driftWind.x) * windBlend;
+	driftWind.y += (windNow.y - driftWind.y) * windBlend;
+	processData.WindBiasH = driftWind;
 	processData.DriftHeight = std::max(settings.WallDriftHeight, 0.0f);
 	processData.ObstructionCount = (uint32_t)obstructions.size();
 	for (size_t obsI = 0; obsI < obstructions.size(); obsI++) {
@@ -595,6 +602,7 @@ void SnowDeformation::RenderObjectHeightMap()
 								const float extY = (boundObj->boundData.boundMax.y - boundObj->boundData.boundMin.y) * 0.5f * scale;
 								const float extZ = (boundObj->boundData.boundMax.z - boundObj->boundData.boundMin.z) * 0.5f * scale;
 								if (extZ >= kObstructionMinHeight && std::min(extX, extY) >= kObstructionMinFootprint &&
+									std::max(extX, extY) <= kObstructionMaxFootprint &&
 									lowered.find("tree") == std::string::npos && lowered.find("pine") == std::string::npos) {
 									const float centerX = (boundObj->boundData.boundMax.x + boundObj->boundData.boundMin.x) * 0.5f * scale;
 									const float centerY = (boundObj->boundData.boundMax.y + boundObj->boundData.boundMin.y) * 0.5f * scale;

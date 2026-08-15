@@ -154,8 +154,10 @@ float SampleTerrainHeight(float2 worldXY)
 	OutB[dtid.xy] = bottom;
 }
 
-// 1 when the raster at p shows a floating structure well above the given
-// terrain height (walkway, roof, bridge, tent canvas).
+// How strongly the raster at p reads as a floating structure above the
+// given terrain height (walkway, roof, bridge, tent canvas). CONTINUOUS:
+// a binary test quantized the ring average into visible melt terraces
+// under eaves - stairs descending toward the wall.
 float ShelterTap(int2 p, int2 dims, float terrain)
 {
 	p = clamp(p, int2(0, 0), dims - 1);
@@ -164,8 +166,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	[branch] if (top > -50000.0)
 	{
 		float bottom = InB[p];
-		if (bottom - terrain >= 40.0 && top - terrain > 60.0)
-			result = 1.0;
+		result = smoothstep(20.0, 60.0, bottom - terrain) * smoothstep(40.0, 80.0, top - terrain);
 	}
 	return result;
 }
@@ -203,10 +204,15 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			int2(0, SHELTER_RING_TEXELS), int2(0, -SHELTER_RING_TEXELS),
 			int2(4, 4), int2(4, -4), int2(-4, 4), int2(-4, -4)
 		};
+		static const int2 kShelterRingInner[8] = {
+			int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3),
+			int2(2, 2), int2(2, -2), int2(-2, 2), int2(-2, -2)
+		};
 		float shelterFrac = ShelterTap(texel, dimsI, terrain) * 2.0;
 		[unroll] for (uint ringI = 0; ringI < 8; ringI++)
-			shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain);
-		shelterFrac *= 0.1;
+			shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain) +
+			               ShelterTap(texel + kShelterRingInner[ringI], dimsI, terrain);
+		shelterFrac /= 18.0;
 		// Deliberately no edge noise: roofline sinks read best smooth (fire
 		// bowls keep their noisy rims; sheltered snow follows the structure).
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));

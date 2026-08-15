@@ -811,9 +811,12 @@ public:
 
 	// ---- Wall drifts: banks where wind piles snow against large statics ----
 
-	/** @brief OBND half-extent thresholds for the obstruction gather: tall enough and wide enough to dam drifting snow (buildings, towers, huge rocks; 175 half-height ~= 350-unit structures and up). */
+	/** @brief OBND half-extent thresholds for the obstruction gather: tall enough and wide enough to dam drifting snow (buildings, towers, huge rocks; 175 half-height ~= 350-unit structures and up). The max cap rejects compound/village meshes whose sloppy bounds swallow open walkable ground - their interior plateau renders as a floating snow sheet. */
 	static constexpr float kObstructionMinHeight = 175.0f;
 	static constexpr float kObstructionMinFootprint = 100.0f;
+	static constexpr float kObstructionMaxFootprint = 700.0f;
+	/** @brief Wind for the drift bias, exponentially smoothed (~8 s): drifts are slow accumulation and must not breathe with per-frame gusts. */
+	float2 driftWind = { 0.0f, 0.0f };
 	/** @brief Cadence-gathered obstruction OBBs, copied into HeightProcessCB every frame. */
 	std::vector<std::pair<float4, float4>> obstructions;
 	/** @brief Obstructions in the last gather, for the debug readout. */
