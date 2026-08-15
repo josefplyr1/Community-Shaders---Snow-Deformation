@@ -554,7 +554,7 @@ void SnowDeformation::RenderObjectHeightMap()
 									staticExclusions.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
 																	 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
 																	 pos.z, spec.radius * scale * zoneScale },
-										{ 0.0f, 1.0f, kTrampleMeltStrength, 1.0f } });
+										{ 0.0f, 1.0f, 1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f, 1.0f } });
 									gatherTrampleCount++;
 									break;
 								}

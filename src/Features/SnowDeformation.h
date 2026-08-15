@@ -151,8 +151,10 @@ public:
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
 		bool SnowTextureLinear = false;
-		/** @brief Radius multiplier for the half-depth workspace clearings (workstations, stalls, wells, shrines). */
+		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
 		float TrampleZoneScale = 0.75f;
+		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
+		float TrampleZoneHeight = 50.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 64.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -755,7 +757,7 @@ public:
 
 	// ---- Workspace clearings: the shell never fully forms around worked spots ----
 
-	/** @brief Workspace classification: lowercase model-path substring -> clearing radius + forward bias (units the bowl center rides along the object's facing, toward the working side; 0 = symmetric area). These become HALF-DEPTH melt bowls (kTrampleMeltStrength), so actual actor trampling carves the visible tracks. Heat wins when both would match a model. First match wins: enchanting/alchemy precede the generic "workbench" their models also contain. */
+	/** @brief Workspace classification: lowercase model-path substring -> clearing radius + forward bias (units the bowl center rides along the object's facing, toward the working side; 0 = symmetric area). These become partial melt bowls (Settings::TrampleZoneHeight percent of depth remains), so actual actor trampling carves the visible tracks. Heat wins when both would match a model. First match wins: enchanting/alchemy precede the generic "workbench" their models also contain. */
 	struct TrampleSpec
 	{
 		const char* substring;
@@ -778,8 +780,6 @@ public:
 		{ "shrine", 90.0f, 0.0f },
 	};
 
-	/** @brief Melt strength of a workspace clearing: the shell holds ~half its class depth there. A full-depth pre-trampled look read as "mini mountains" around the object (Josef's verdict); the half-depth bowl leaves real trampling to tell the story. */
-	static constexpr float kTrampleMeltStrength = 0.5f;
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
 	uint32_t statTrampleCount = 0;
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
