@@ -219,9 +219,20 @@ float2 GeomorphVertexXY(float2 centered, float2 u)
 	float2 lod = log2(max(ringStep / GridSpacing, 1.0));
 	float2 fineStep = GridSpacing * exp2(floor(lod));
 	float2 coarseStep = fineStep * 2.0;
-	float2 fine = floor(centered / fineStep + 0.5) * fineStep;
-	float2 coarse = floor(centered / coarseStep + 0.5) * coarseStep;
-	return lerp(fine, coarse, frac(lod));
+	// Snap on ABSOLUTE world coordinates. Snapping the camera-relative offset
+	// instead pins the lattice to the camera, so every distant vertex slides
+	// along with it and crawls across the terrain resampling heights — the
+	// surface morphs continuously instead of standing still. World snapping
+	// pins the lattice to the world: a vertex index is reassigned to a new
+	// lattice point only when the camera crosses a step, and because whole
+	// ring bands share one power-of-two lattice, the SET of occupied points
+	// (hence the rendered surface) barely changes when that happens.
+	float2 absXY = GridOrigin + WarpedHalfSpan + centered;
+	float2 fine = floor(absXY / fineStep + 0.5) * fineStep;
+	float2 coarse = floor(absXY / coarseStep + 0.5) * coarseStep;
+	// Inner linear zone is exact: GridOrigin is GridSpacing-snapped and
+	// WarpAxis returns whole steps there, so snapping to fineStep is a no-op.
+	return lerp(fine, coarse, frac(lod)) - (GridOrigin + WarpedHalfSpan);
 }
 
 // Shell edge fade: the shell dissolves at the loaded-cell seam, where the
@@ -1344,6 +1355,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
 		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));
+		// Depth agreement: the march ran on the PRE-shell depth. Where the
+		// shell drapes well above what that ray hit (rocks buried under the
+		// drift field), the mask holds the buried object's own shadowing and
+		// would print it through the snow. Trust it only where the shell
+		// hugs the surface the march actually saw.
+		sssBlend *= 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
@@ -1517,8 +1534,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the source without moving geometry. Legitimate occlusion is preserved:
 	// the clamp only fires within a short world-space window behind the
 	// surface. Skipped in debug views so the heatmap measures raw deltas.
+	// FAR FIELD ONLY: anything standing in the snow (actor legs, props) sits
+	// just in front of the shell surface and would otherwise be overdrawn by
+	// the clamp — it cannot tell a legitimate occluder from a coincident
+	// terrain surface. Z-fighting is a distance problem, so the clamp starts
+	// well beyond anything the player stands next to.
 	psout.DepthLE = input.Position.z;
-	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > sceneZ && shellZ - sceneZ < 48.0)
+	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
+	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 
 	return psout;
