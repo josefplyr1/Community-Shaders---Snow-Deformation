@@ -24,6 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowTextureLinear,
 	TrampleZoneScale,
 	TrampleZoneHeight,
+	WallDriftHeight,
 	SnowBorderNoise,
 	SnowBorderSmoothness,
 	SnowBorderTrampledFade,

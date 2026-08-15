@@ -419,6 +419,18 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.CorpseMoundCap = kCorpseMoundCap;
 	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
 		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
+	// Live wind for the wall-drift bias, same source as the refill drift.
+	processData.WindBiasH = { 0.0f, 0.0f };
+	if (auto* sky = RE::Sky::GetSingleton()) {
+		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
+		processData.WindBiasH = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
+	}
+	processData.DriftHeight = std::max(settings.WallDriftHeight, 0.0f);
+	processData.ObstructionCount = (uint32_t)obstructions.size();
+	for (size_t obsI = 0; obsI < obstructions.size(); obsI++) {
+		processData.ObstructionPosExt[obsI] = obstructions[obsI].first;
+		processData.ObstructionRot[obsI] = obstructions[obsI].second;
+	}
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -437,6 +449,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
 		}
 		staticExclusions.clear();
+		obstructions.clear();
 		uint32_t gatherTrampleCount = 0;
 		// Generic-flame entries by exclusion index, and the footprints of
 		// stations that own their flames (smelters, forges): a flame inside
@@ -571,6 +584,30 @@ void SnowDeformation::RenderObjectHeightMap()
 							}
 						}
 
+						// Wall-drift obstructions: big grounded statics dam
+						// drifting snow (buildings, towers, huge rocks). OBND
+						// half-extents gate; trees excluded - their bounds are
+						// mostly canopy air.
+						if (obstructions.size() < kMaxObstructions) {
+							if (auto* boundObj = base->As<RE::TESBoundObject>()) {
+								const float scale = a_ref->GetScale();
+								const float extX = (boundObj->boundData.boundMax.x - boundObj->boundData.boundMin.x) * 0.5f * scale;
+								const float extY = (boundObj->boundData.boundMax.y - boundObj->boundData.boundMin.y) * 0.5f * scale;
+								const float extZ = (boundObj->boundData.boundMax.z - boundObj->boundData.boundMin.z) * 0.5f * scale;
+								if (extZ >= kObstructionMinHeight && std::min(extX, extY) >= kObstructionMinFootprint &&
+									lowered.find("tree") == std::string::npos && lowered.find("pine") == std::string::npos) {
+									const float centerX = (boundObj->boundData.boundMax.x + boundObj->boundData.boundMin.x) * 0.5f * scale;
+									const float centerY = (boundObj->boundData.boundMax.y + boundObj->boundData.boundMin.y) * 0.5f * scale;
+									auto pos = a_ref->GetPosition();
+									const float angleZ = a_ref->GetAngleZ();
+									const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
+									obstructions.push_back({ { pos.x + cosZ * centerX + sinZ * centerY,
+																 pos.y - sinZ * centerX + cosZ * centerY, extX, extY },
+										{ sinZ, cosZ, pos.z, 0.0f } });
+								}
+							}
+						}
+
 						// Survival warm-up formlist: heat neither table named.
 						// Modest circle when grounded (the list also holds
 						// candelabras), footprint-sized spot when raised.
@@ -607,6 +644,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				}
 
 				statTrampleCount = gatherTrampleCount;
+				statObstructionCount = (uint32_t)obstructions.size();
 
 				// Overflow: keep the sources nearest the player.
 				if (staticExclusions.size() > kMaxExclusions) {

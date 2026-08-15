@@ -23,6 +23,8 @@
 //
 // Sentinels: top empty = -100000, bottom empty = +100000.
 
+#define MAX_OBSTRUCTIONS 48
+
 cbuffer HeightProcessCB : register(b0)
 {
 	int2 ScrollDelta;
@@ -43,11 +45,25 @@ cbuffer HeightProcessCB : register(b0)
 
 	uint CorpseSphereCount;  // resting dead actors' collision spheres
 	float CorpseMoundCap;    // max mound height above terrain
-	float2 padH;
+	float2 WindBiasH;        // unit wind direction (blowing toward) x strength 0-1
 	float4 CorpseSpheres[64];  // xyz world center, w radius
+
+	float DriftHeight;  // peak wall-drift bank height (0 disables)
+	uint ObstructionCount;
+	float2 padObs;
+	float4 ObstructionPosExt[MAX_OBSTRUCTIONS];  // xy world center, zw half extents (local XY)
+	float4 ObstructionRot[MAX_OBSTRUCTIONS];     // xy = sin/cos of Z rotation, z = foundation height
 }
 
 #define MAX_EXCLUSIONS 256
+
+// Wall drifts: band width past the wall, baseline bank fraction in calm
+// weather, extra fraction earned by windward alignment x wind strength,
+// and the leeward wind-shadow scour strength (melt channel).
+#define DRIFT_BAND 140.0
+#define DRIFT_BASE 0.3
+#define DRIFT_WIND 0.7
+#define LEE_SCOUR 0.35
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
 // dusting (the shell keeps covering the ground - bare ground would expose
@@ -194,6 +210,44 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		// Deliberately no edge noise: roofline sinks read best smooth (fire
 		// bowls keep their noisy rims; sheltered snow follows the structure).
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));
+	}
+
+	// Wall drifts: wind piles snow into banks against large statics
+	// (buildings, towers, boulders), passed as OBB footprints. Windward
+	// walls (outward normal facing INTO the wind) bank toward full
+	// DriftHeight, calm weather keeps a modest all-around bank, and the
+	// leeward wind shadow scours a shallow strip via the melt channel.
+	// The cone transform downstream rounds every bank into a natural
+	// slope; exclusions run AFTER this, so doorways stay swept through
+	// the banks.
+	[branch] if (DriftHeight > 0.01)
+	{
+		float windStrength = length(WindBiasH);
+		float2 windDir = windStrength > 0.001 ? WindBiasH / windStrength : float2(0.0, 0.0);
+		for (uint obsI = 0; obsI < ObstructionCount; obsI++) {
+			float4 posExt = ObstructionPosExt[obsI];
+			float4 obsRot = ObstructionRot[obsI];
+			[branch] if (abs(obsRot.z - terrain) < 400.0)
+			{
+				float2 rel = worldXY - posExt.xy;
+				float2 local = float2(obsRot.y * rel.x - obsRot.x * rel.y, obsRot.x * rel.x + obsRot.y * rel.y);
+				float2 q = abs(local) - posExt.zw;
+				float outside = length(max(q, 0.0));
+				[branch] if (outside > 0.5 && outside < DRIFT_BAND)
+				{
+					float2 nLocal = normalize(float2(max(q.x, 0.0) * sign(local.x), max(q.y, 0.0) * sign(local.y)));
+					float2 nWorld = float2(obsRot.y * nLocal.x + obsRot.x * nLocal.y, -obsRot.x * nLocal.x + obsRot.y * nLocal.y);
+					float windward = saturate(-dot(nWorld, windDir));
+					float lee = saturate(dot(nWorld, windDir));
+					// Leeward loses its baseline bank to the wind shadow;
+					// windward earns the full extra.
+					float amp = DRIFT_BASE * (1.0 - lee * windStrength) + DRIFT_WIND * windward * windStrength;
+					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
+					field = max(field, terrain + DriftHeight * amp * profile);
+					melt = max(melt, LEE_SCOUR * lee * windStrength * (1.0 - smoothstep(0.0, DRIFT_BAND * 0.5, outside)));
+				}
+			}
+		}
 	}
 
 	// Exclusion zones: pull the field back to terrain, then either suppress
