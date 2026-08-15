@@ -218,21 +218,18 @@ float2 GeomorphVertexXY(float2 centered, float2 u)
 	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
 	float2 lod = log2(max(ringStep / GridSpacing, 1.0));
 	float2 fineStep = GridSpacing * exp2(floor(lod));
-	float2 coarseStep = fineStep * 2.0;
-	// Snap on ABSOLUTE world coordinates. Snapping the camera-relative offset
-	// instead pins the lattice to the camera, so every distant vertex slides
-	// along with it and crawls across the terrain resampling heights — the
-	// surface morphs continuously instead of standing still. World snapping
-	// pins the lattice to the world: a vertex index is reassigned to a new
-	// lattice point only when the camera crosses a step, and because whole
-	// ring bands share one power-of-two lattice, the SET of occupied points
-	// (hence the rendered surface) barely changes when that happens.
-	float2 absXY = GridOrigin + WarpedHalfSpan + centered;
-	float2 fine = floor(absXY / fineStep + 0.5) * fineStep;
-	float2 coarse = floor(absXY / coarseStep + 0.5) * coarseStep;
+	// PURE world-lattice snap — vertices never slide in XY. Whole ring bands
+	// share one power-of-two lattice snapped on ABSOLUTE world coordinates,
+	// so the set of rendered points (the surface) is world-static; camera
+	// steps only reassign which vertex index owns which lattice point. The
+	// LOD transition happens in the sampled DATA instead (ShellSurfaceZ
+	// blends terrain data toward the coarser lattice's surface, clipmaps-
+	// style), so nothing crawls across the terrain — which also makes the
+	// motion vectors' zero-motion assertion true by construction.
 	// Inner linear zone is exact: GridOrigin is GridSpacing-snapped and
 	// WarpAxis returns whole steps there, so snapping to fineStep is a no-op.
-	return lerp(fine, coarse, frac(lod)) - (GridOrigin + WarpedHalfSpan);
+	float2 absXY = GridOrigin + WarpedHalfSpan + centered;
+	return floor(absXY / fineStep + 0.5) * fineStep - (GridOrigin + WarpedHalfSpan);
 }
 
 // Shell edge fade: the shell dissolves at the loaded-cell seam, where the
@@ -590,6 +587,39 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	else
 	{
 		float3 terrain = SampleTerrainShaped(gridLocal);
+
+		// Data morph (geometry-clipmaps style): the vertex stays put on its
+		// fine world lattice; its terrain data blends toward the 2x-coarser
+		// lattice's bilinear surface, reaching it exactly at the band switch —
+		// band transitions move ONLY the height signal, by the difference
+		// between two resolutions, and never slide geometry across the
+		// terrain. Coarse taps are unshaped (border noise is near-field
+		// cosmetics).
+		{
+			float2 centeredM = gridLocal - WarpedHalfSpan;
+			float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
+			float2 ringStepM = GridSpacing * pow(kWarpGrowth, max(abs(uAxisM) - kWarpInnerVerts, 0.0));
+			float2 lodM = log2(max(ringStepM / GridSpacing, 1.0));
+			float morphT = frac(max(lodM.x, lodM.y));
+			[branch] if (max(lodM.x, lodM.y) > 0.0 && morphT > 0.001)
+			{
+				float2 coarseStepM = GridSpacing * exp2(floor(lodM) + 1.0);
+				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
+				float2 cBase = floor(absXYM / coarseStepM) * coarseStepM;
+				float2 cFrac = (absXYM - cBase) / coarseStepM;
+				float2 cLocal = cBase - GridOrigin;
+				float3 t00 = SampleTerrain(cLocal);
+				float3 t10 = SampleTerrain(cLocal + float2(coarseStepM.x, 0.0));
+				float3 t01 = SampleTerrain(cLocal + float2(0.0, coarseStepM.y));
+				float3 t11 = SampleTerrain(cLocal + coarseStepM);
+				// Any sentinel tap poisons the bilinear (even averaged it can
+				// sneak past a threshold) — keep the fine data at data edges.
+				float minTap = min(min(t00.x, t10.x), min(t01.x, t11.x));
+				[flatten] if (minTap > -50000.0)
+					terrain = lerp(terrain, lerp(lerp(t00, t10, cFrac.x), lerp(t01, t11, cFrac.x), cFrac.y), morphT);
+			}
+		}
+
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
 		coverage = saturate(terrain.z);
