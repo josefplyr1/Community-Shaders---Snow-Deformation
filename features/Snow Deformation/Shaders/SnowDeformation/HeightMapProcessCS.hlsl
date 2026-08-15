@@ -58,12 +58,10 @@ cbuffer HeightProcessCB : register(b0)
 #define MAX_EXCLUSIONS 256
 
 // Wall drifts: band width past the wall, baseline bank fraction in calm
-// weather, extra fraction earned by windward alignment x wind strength,
-// and the leeward wind-shadow scour strength (melt channel).
+// weather, extra fraction earned by windward alignment x wind strength.
 #define DRIFT_BAND 140.0
 #define DRIFT_BASE 0.3
 #define DRIFT_WIND 0.7
-#define LEE_SCOUR 0.35
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
 // dusting (the shell keeps covering the ground - bare ground would expose
@@ -221,11 +219,10 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	// Wall drifts: wind piles snow into banks against large statics
 	// (buildings, towers, boulders), passed as OBB footprints. Windward
 	// walls (outward normal facing INTO the wind) bank toward full
-	// DriftHeight, calm weather keeps a modest all-around bank, and the
-	// leeward wind shadow scours a shallow strip via the melt channel.
-	// The cone transform downstream rounds every bank into a natural
-	// slope; exclusions run AFTER this, so doorways stay swept through
-	// the banks.
+	// DriftHeight; calm weather keeps a modest all-around bank; leeward
+	// walls simply never earn the windward bonus. The cone transform
+	// downstream rounds every bank into a natural slope; exclusions run
+	// AFTER this, so doorways stay swept through the banks.
 	[branch] if (DriftHeight > 0.01)
 	{
 		float windStrength = length(WindBiasH);
@@ -255,13 +252,13 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 					float2 nLocal = normalize(float2(max(q.x, 0.0) * sign(local.x), max(q.y, 0.0) * sign(local.y)));
 					float2 nWorld = float2(obsRot.y * nLocal.x + obsRot.x * nLocal.y, -obsRot.x * nLocal.x + obsRot.y * nLocal.y);
 					float windward = saturate(-dot(nWorld, windDir));
-					float lee = saturate(dot(nWorld, windDir));
-					// Leeward loses its baseline bank to the wind shadow;
-					// windward earns the full extra.
-					float amp = DRIFT_BASE * (1.0 - lee * windStrength) + DRIFT_WIND * windward * windStrength;
+					// Windward earns extra height over the all-around baseline.
+					// No leeward scour: an active melt strip beside walls read
+					// as an error trench, not a wind shadow - leeward is simply
+					// the wall that never earns the windward bonus.
+					float amp = DRIFT_BASE + DRIFT_WIND * windward * windStrength;
 					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
 					field = max(field, terrain + DriftHeight * amp * profile);
-					melt = max(melt, LEE_SCOUR * lee * windStrength * (1.0 - smoothstep(0.0, DRIFT_BAND * 0.5, outside)));
 				}
 			}
 		}

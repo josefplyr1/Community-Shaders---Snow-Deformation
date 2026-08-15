@@ -578,6 +578,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
 			rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
 			terrainHeight = max(terrainHeight, field);
+			// Drift failsafe: a field standing well proud IS snow. Force
+			// coverage and a minimum depth so banks raised over bare or
+			// low-coverage ground (dirt patches at walls) never dither into
+			// holes or submerge out of the surface.
+			float liftForce = smoothstep(6.0, 20.0, lift);
+			coverage = max(coverage, liftForce);
+			rampDepth = max(rampDepth, liftForce * 6.0);
 		}
 		// The mask carries two signals. Positive = shelter/door suppression,
 		// smooth 0-1, so sheltered clearings fade at their edges instead of
@@ -960,7 +967,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shallower/negative classes (where coverage stays ~1 and the coverage
 	// term can't blend) dissolves stochastically as the shell thins, instead
 	// of presenting a bare geometric plunge with a thin z-fight strip.
-	float pixelBare = saturate(1.0 - pixelCoverage);
 	// Mirror of the VS object-depth cap, so alpha and dither agree with the
 	// capped geometry over captured objects.
 	float pixelClassDepth = pixelTerrain.y;
@@ -973,8 +979,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float capLift = capField - pixelTerrain.x;
 			float capT = smoothstep(0.25, 1.0, capLift / max(pixelClassDepth, 1.0));
 			pixelClassDepth = lerp(pixelClassDepth, min(pixelClassDepth, SampleObjectDepthCap(capWorldXY)), capT);
+			// Drift failsafe, mirroring ShellSurfaceZ: raised banks are snow
+			// regardless of the ground class beneath.
+			float liftForce = smoothstep(6.0, 20.0, capLift);
+			pixelCoverage = max(pixelCoverage, liftForce);
+			pixelClassDepth = max(pixelClassDepth, liftForce * 6.0);
 		}
 	}
+	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
 

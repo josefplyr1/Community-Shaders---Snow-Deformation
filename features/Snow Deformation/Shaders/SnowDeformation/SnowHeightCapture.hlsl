@@ -37,6 +37,7 @@ struct VS_OUTPUT
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
 	float SkinDepth : TEXCOORD1;
+	float2 WorldXY : TEXCOORD2;
 };
 
 #ifdef VSHADER
@@ -70,11 +71,44 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Position = float4(ndc.x, ndc.y, 0.5, 1.0);
 	vsout.WorldZ = worldAbs.z;
 	vsout.SkinDepth = skinDepth;
+	vsout.WorldXY = worldAbs.xy;
 	return vsout;
 }
 #endif
 
 #ifdef PSHADER
+// Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
+// window addressing is read here; names carry an H so they cannot clash
+// with StaticCB's.
+cbuffer HeightProcessCB : register(b0)
+{
+	int2 ScrollDeltaH;
+	uint ClearAllH;
+	uint ConeStepH;
+	float2 HeightWindowCenterH;
+	float HeightHalfExtentH;
+	float SlopePerUnitH;
+	float2 TerrainWindowOriginH;
+	float TerrainTexelSizeH;
+	uint TerrainDimH;
+}
+
+Texture2D<float4> TerrainWindowCapture : register(t2);
+
+float CaptureTerrainHeight(float2 worldXY)
+{
+	float2 t = (worldXY - TerrainWindowOriginH) / TerrainTexelSizeH;
+	t = clamp(t, 0.0, (float)(TerrainDimH - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDimH - 1, TerrainDimH - 1));
+	float s00 = TerrainWindowCapture.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = TerrainWindowCapture.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = TerrainWindowCapture.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = TerrainWindowCapture.Load(int3(t1.x, t1.y, 0)).x;
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
 struct PS_OUTPUT
 {
 	// RT0 blends MAX (object top surface), RT1 blends MIN (object bottom),
@@ -88,7 +122,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 {
 	PS_OUTPUT psout;
 	psout.Top = input.WorldZ;
-	psout.Bottom = input.WorldZ;
+	// Bottoms accept only genuinely ELEVATED undersides: grounded geometry
+	// (support posts, rocks, low clutter) min-blending into the channel
+	// vetoed the floating-structure shelter test under walkways and roofs,
+	// leaving unmelted snow plateaus beneath them. Grounded fragments write
+	// the bottom-empty sentinel, a no-op under MIN blending.
+	float terrain = CaptureTerrainHeight(input.WorldXY);
+	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
 	psout.SkinDepth = input.SkinDepth;
 	return psout;
 }

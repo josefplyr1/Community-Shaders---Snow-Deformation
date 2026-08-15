@@ -722,6 +722,12 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
+	// The capture PS rejects grounded fragments from the bottoms raster
+	// (elevated undersides only); it reads terrain via the process CB.
+	ID3D11Buffer* captureCB0 = heightProcessCB->CB();
+	context->PSSetConstantBuffers(0, 1, &captureCB0);
+	ID3D11ShaderResourceView* captureTerrainSRV = shellTerrainTexture->srv.get();
+	context->PSSetShaderResources(2, 1, &captureTerrainSRV);
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
 	for (const auto& cap : capturedStatics) {
@@ -791,8 +797,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(nullptr, nullptr, 0);
 	ID3D11Buffer* nullCB1 = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB1);
+	context->PSSetConstantBuffers(0, 1, &nullCB1);
 	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(2, 1, &nullSmoothSRV);
 
 	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
 	// (bottomFiltered); bare ground under floating walkways/roofs/bridges.
