@@ -8,8 +8,9 @@
 // CombineCS  builds the base snow-height field (terrain, lifted only by
 //            corpse burial mounds) and the shelter mask: where the raw maps
 //            show a structure floating well above the ground (walkways,
-//            roofs, bridges), the ground beneath is sheltered from snowfall
-//            (no snow under roofs).
+//            roofs, bridges, tents), the ground beneath is sheltered from
+//            snowfall - a soft melt down to a light dusting, never a
+//            coverage kill.
 //            Exclusion zones: doors clear the field and add to the mask
 //            (coverage fades to bare ground); fires write NEGATIVE mask
 //            values instead - a melt fraction that thins the shell's depth
@@ -47,6 +48,14 @@ cbuffer HeightProcessCB : register(b0)
 }
 
 #define MAX_EXCLUSIONS 256
+
+// Shelter melt strength: snow under roofs/tents/walkways thins to a light
+// dusting (the shell keeps covering the ground - bare ground would expose
+// the mismatched projected snow diffuse beneath).
+#define SHELTER_MELT 0.9
+// Soft-shelter ring radius in texels (4 world units each): widens the
+// binary per-texel roofline test into a gradual transition band.
+#define SHELTER_RING_TEXELS 6
 
 cbuffer DoorCB : register(b1)
 {
@@ -129,6 +138,22 @@ float SampleTerrainHeight(float2 worldXY)
 	OutB[dtid.xy] = bottom;
 }
 
+// 1 when the raster at p shows a floating structure well above the given
+// terrain height (walkway, roof, bridge, tent canvas).
+float ShelterTap(int2 p, int2 dims, float terrain)
+{
+	p = clamp(p, int2(0, 0), dims - 1);
+	float result = 0.0;
+	float top = InA[p];
+	[branch] if (top > -50000.0)
+	{
+		float bottom = InB[p];
+		if (bottom - terrain >= 40.0 && top - terrain > 60.0)
+			result = 1.0;
+	}
+	return result;
+}
+
 // InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
 									 : SV_DispatchThreadID) {
@@ -148,13 +173,26 @@ float SampleTerrainHeight(float2 worldXY)
 	// against the landscape shell and 45-degree spike cones at range). The
 	// raster feeds just the floating-structure test: a bottom well clear of
 	// the ground with a top high above it is a walkway/roof/bridge, and the
-	// ground beneath it is sheltered from snowfall.
-	float top = InA[dtid.xy];
-	[branch] if (top > -50000.0)
+	// ground beneath it is sheltered from snowfall. Consumed as MELT (thin
+	// shell floor, snow texture kept - a coverage kill exposed the
+	// mismatched projected snow beneath and cut a cliff at the roofline);
+	// the per-texel test is binary, so a center + 8-tap ring fraction with
+	// edge noise turns the cut into billows sinking under the eaves. Taps
+	// reuse the center terrain height: terrain varies slowly at ring scale.
 	{
-		float bottom = InB[dtid.xy];
-		if (bottom - terrain >= 40.0 && top - terrain > 60.0)
-			suppress = 1.0;  // floating structure: bare ground beneath
+		int2 texel = int2(dtid.xy);
+		int2 dimsI = int2(dims);
+		static const int2 kShelterRing[8] = {
+			int2(SHELTER_RING_TEXELS, 0), int2(-SHELTER_RING_TEXELS, 0),
+			int2(0, SHELTER_RING_TEXELS), int2(0, -SHELTER_RING_TEXELS),
+			int2(4, 4), int2(4, -4), int2(-4, 4), int2(-4, -4)
+		};
+		float shelterFrac = ShelterTap(texel, dimsI, terrain) * 2.0;
+		[unroll] for (uint ringI = 0; ringI < 8; ringI++)
+			shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain);
+		shelterFrac *= 0.1;
+		shelterFrac *= 0.8 + 0.4 * ExclusionNoise(worldXY);
+		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));
 	}
 
 	// Exclusion zones: pull the field back to terrain, then either suppress
@@ -239,9 +277,9 @@ float SampleTerrainHeight(float2 worldXY)
 	}
 
 	OutA[dtid.xy] = field;
-	// One mask channel, two signals: positive = shelter/door suppression
-	// (coverage kill), negative = fire melt fraction (depth reduction).
-	// Shelter wins where both apply - bare ground has nothing to melt.
+	// One mask channel, two signals: positive = door suppression (coverage
+	// kill to bare ground), negative = melt fraction (fires, workspace
+	// clearings, sheltered ground). Doors win where both apply.
 	OutB[dtid.xy] = suppress > 0.001 ? suppress : -melt;
 }
 
