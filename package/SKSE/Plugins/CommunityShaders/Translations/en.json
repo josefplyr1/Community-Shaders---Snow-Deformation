@@ -1429,7 +1429,7 @@
     "feature.snow_deformation.workspace_clearing_height": "Workspace Clearing Height",
     "feature.snow_deformation.workspace_clearing_height_tooltip": "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second.",
     "feature.snow_deformation.workspace_clearing_size": "Workspace Clearing Size",
-    "feature.snow_deformation.workspace_clearing_size_tooltip": "Radius multiplier for the snow bowls around workstations, stalls, wells and shrines. Applies within a second.",
+    "feature.snow_deformation.workspace_clearing_size_tooltip": "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second.",
     "feature.sss.albedo_handling": "Albedo Handling",
     "feature.sss.base_profile": "Base Profile",
     "feature.sss.blur_radius": "Blur Radius",

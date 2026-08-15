@@ -745,8 +745,6 @@ public:
 		{ "campfire", 300.0f },
 		{ "firepit", 300.0f },
 		{ "hearth", 300.0f },
-		{ "smelter", 300.0f },
-		{ "forge", 260.0f },
 		{ "smolder", 160.0f },  // dying fires still radiate
 		{ "brazier", 150.0f },
 		{ "cookingspit", 140.0f },
@@ -765,6 +763,8 @@ public:
 		float forwardBias;
 	};
 	static constexpr TrampleSpec kTrampleSpecs[] = {
+		{ "smelter", 300.0f, 0.0f },  // smelters/forges are workspaces per Josef's call: both sliders apply; their fxfire flames still melt for real
+		{ "forge", 260.0f, 0.0f },
 		{ "sawmill", 220.0f, 0.0f },
 		{ "millsaw", 220.0f, 0.0f },
 		{ "stables", 200.0f, 0.0f },    // NOT "stable": clutter\ruins\ruinstable01 is a table
