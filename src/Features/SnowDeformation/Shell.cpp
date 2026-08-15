@@ -298,11 +298,13 @@ void SnowDeformation::DrawShell()
 		const int cellX = (int)std::floor(playerPos.x / 4096.0f);
 		const int cellY = (int)std::floor(playerPos.y / 4096.0f);
 		const int halfCells = (uGrids - 1) / 2;
-		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f, (cellY - halfCells) * 4096.0f,
-			(cellX + halfCells + 1) * 4096.0f, (cellY + halfCells + 1) * 4096.0f };
-		// ~29 m depth ramp just inside the seam (widened per test: the seam
-		// square jumps a cell when the player crosses one, and the longer
-		// ramp softens the height step that jump produces).
+		// The fade band sits ~29 m OUTSIDE the true boundary, over the
+		// recolored LOD terrain: full-height shell up to the seam, melting
+		// into same-material ground beyond it. Ending the fade AT the seam
+		// left a visible unshelled strip of full terrain just inside it.
+		constexpr float kSeamOverlap = 2048.0f;
+		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f - kSeamOverlap, (cellY - halfCells) * 4096.0f - kSeamOverlap,
+			(cellX + halfCells + 1) * 4096.0f + kSeamOverlap, (cellY + halfCells + 1) * 4096.0f + kSeamOverlap };
 		cbData.SeamRampInv = 1.0f / 2048.0f;
 	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
