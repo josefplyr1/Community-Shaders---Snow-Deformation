@@ -50,7 +50,9 @@ cbuffer HeightProcessCB : register(b0)
 
 	float DriftHeight;  // peak wall-drift bank height (0 disables)
 	uint ObstructionCount;
-	float2 padObs;
+	// Rounded-class depth, for the object snow cone seed.
+	float ObjectSnowDepth;
+	float padObs;
 	float4 ObstructionPosExt[MAX_OBSTRUCTIONS];  // xy world center, zw half extents (local XY)
 	float4 ObstructionRot[MAX_OBSTRUCTIONS];     // xy = sin/cos of Z rotation, z = foundation height
 }
@@ -377,6 +379,75 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	OutA[dtid.xy] = field;
 	OutMask[dtid.xy] = float2(suppress, melt);
+}
+
+// Object snow cone seed. InA = raw object top raster. OutA = snow DEPTH above
+// the local surface, not an absolute height: a field in absolute height cannot
+// climb from the terrain to the top of a tall narrow object within its own
+// footprint, so stacked stones and pillars would carry no snow at all.
+// Zero marks a rim the layer must taper to: off the footprint, or a column
+// standing well above a neighbour (an internal step, e.g. one stone on
+// another). The cone passes then raise the interior at the angle of repose.
+[numthreads(8, 8, 1)] void ObjectConeSeedCS(uint3 dtid
+											: SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+
+	float top = InA[dtid.xy];
+	if (top < -50000.0) {
+		OutA[dtid.xy] = 0.0;
+		return;
+	}
+
+	// Internal rims: a step taller than the layer sheds it the same way the
+	// outer silhouette does. Floored so shallow settings do not read ordinary
+	// surface roughness as a cliff.
+	float rimDrop = max(ObjectSnowDepth, 8.0);
+	bool rim = false;
+	[unroll] for (int i = 0; i < 4; i++)
+	{
+		int2 offs = int2(i == 0 ? 1 : (i == 1 ? -1 : 0), i == 2 ? 1 : (i == 3 ? -1 : 0));
+		int2 p = int2(dtid.xy) + offs;
+		if (any(p < 0) || any(p >= int2(dims)))
+			continue;
+		float n = InA[uint2(p)];
+		if (n < -50000.0 || (top - n) > rimDrop)
+			rim = true;
+	}
+
+	OutA[dtid.xy] = rim ? 0.0 : ObjectSnowDepth;
+}
+
+// InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be
+// reused here: its terrain clamp belongs to an absolute-height field and would
+// pin a depth field to world Z.
+[numthreads(8, 8, 1)] void ObjectConeCS(uint3 dtid
+										: SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+
+	float texel = HeightHalfExtent * 2.0 / dims.x;
+	float h = InA[dtid.xy];
+
+	[unroll] for (int dy = -1; dy <= 1; dy++)
+	{
+		[unroll] for (int dx = -1; dx <= 1; dx++)
+		{
+			if (dx == 0 && dy == 0)
+				continue;
+			int2 p = int2(dtid.xy) + int2(dx, dy) * int(ConeStep);
+			if (any(p < 0) || any(p >= int2(dims)))
+				continue;
+			float dist = length(float2(dx, dy)) * ConeStep * texel;
+			h = min(h, InA[uint2(p)] + SlopePerUnit * dist);
+		}
+	}
+
+	OutA[dtid.xy] = max(h, 0.0);
 }
 
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).

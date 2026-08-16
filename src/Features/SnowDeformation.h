@@ -33,7 +33,7 @@ public:
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
 
-	/** @brief Skyrim world units per meter (1 unit ≈ 1.43 cm). Range sliders are in meters. */
+	/** @brief Skyrim world units per meter (1 unit â‰ˆ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
 
 	// ---- Snow shell: a camera-following grid of real snow geometry ----
@@ -142,11 +142,13 @@ public:
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
-		float ObjectsSnowDepth = 0.0f;
+		float ObjectsSnowDepth = 3.0f;
 		/** @brief Statics skin, rounded class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. Default 0 like the flat class, per in-game tuning. */
-		float SnowMeshesDepth = 0.0f;
+		float SnowMeshesDepth = 3.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
+		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
+		bool ObjectTrenches = false;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
@@ -198,6 +200,8 @@ public:
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
 		float RangeSkinsFadeM = 100.0f;
+		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
+		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Distant snow line (world Z units): heightmap-sourced far terrain above this height gets snow coverage. */
 		float DistantSnowLineZ = 5000.0f;
 		/** @brief How far the snow line sinks (world units) toward the worldspace's north edge, so the northern coast is snowy at sea level. */
@@ -334,7 +338,7 @@ public:
 
 		// Precomputed on CPU so all shader-side field sampling happens in
 		// small grid-local coordinates (absolute world XY at ~1e5 magnitude
-		// destroys float32 finite differences → shimmering normals).
+		// destroys float32 finite differences â†’ shimmering normals).
 		float2 GridToTerrainOffset;
 		float2 GridToDeformOffset;
 
@@ -481,7 +485,8 @@ public:
 	bool shellExclusionDebug = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
-	bool staticsDebugView = false;
+	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
+	int staticsDebugView = 0;
 
 	// ---- Distant-snow / LOD diagnostics (runtime-only) ----
 
@@ -734,7 +739,16 @@ public:
 		float RoundedDepth;
 		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
 		float VertexCountF;
-		float padStat2;
+		/** @brief >0.5: the object top raster is bound at PS t11 for this draw (skin rim-wall gate). */
+		float HasObjectTop;
+		/** @brief World-unit distance by which the skin's geometric height has collapsed to zero at the deepest class; the material dissolve (SkinFadeStart/End) continues past it. */
+		float SkinHeightFadeEnd;
+		/** @brief >0.5: this draw keeps the tuned pre-rework skin behaviour (road and bridge meshes); set from the capture's road flag. */
+		float LegacySkin;
+		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
+		float MoundSteepness;
+		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
+		float ObjectTrenches;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -774,8 +788,10 @@ public:
 	// 4096 units at 4-unit texels, following the camera. Halving the texel
 	// (512 -> 1024) shrank the visible raster squares on the patch top
 	// sheet; kHeightTexel in SnowStaticsShell.hlsl must match.
-	static constexpr uint kHeightMapDim = 1024;
-	static constexpr float kHeightMapHalfExtent = 2048.0f;
+	// Dim and half-extent move together: the 4-unit texel is baked into
+	// kHeightTexel in SnowStaticsShell.hlsl.
+	static constexpr uint kHeightMapDim = 2048;
+	static constexpr float kHeightMapHalfExtent = 4096.0f;
 	/** @brief Height sentinels for texels no object covers. */
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
@@ -796,6 +812,8 @@ public:
 	Texture2D* heightTopFiltered = nullptr;
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightScratch = nullptr;
+	/** @brief Cone-transformed snow SURFACE height over the object top raster; the skin's edge taper reads it with one tap. */
+	Texture2D* objectSnowCone = nullptr;
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
@@ -809,6 +827,8 @@ public:
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;
+	ID3D11ComputeShader* objectConeSeedCS = nullptr;
+	ID3D11ComputeShader* objectConeCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
@@ -844,7 +864,9 @@ public:
 		/** @brief Peak wall-drift bank height in world units, from Settings::WallDriftHeight. */
 		float DriftHeight;
 		uint ObstructionCount;
-		float2 padObs;
+		/** @brief Rounded-class snow depth, seeding the object snow cone. */
+		float ObjectSnowDepth;
+		float padObs;
 		/** @brief Building/large-static OBB footprints: xy = world center, zw = half extents (local XY). */
 		float4 ObstructionPosExt[kMaxObstructions];
 		/** @brief xy = sin/cos of the ref's Z rotation, z = foundation height (z-gate). */
@@ -869,7 +891,7 @@ public:
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
-	/** @brief Melt bowl radius for ground-level fires — the heat-tier benchmark. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
+	/** @brief Melt bowl radius for ground-level fires â€” the heat-tier benchmark. Generous: full melt only in the inner ~35% ("the camper cleared the snow"), then a long noisy rise. */
 	static constexpr float kFireClearRadius = 300.0f;
 	/** @brief Raised generic flames (fxfire in brazier bowls, wall fires): small melt spot on the ground below. */
 	static constexpr float kRaisedFlameClearRadius = 80.0f;

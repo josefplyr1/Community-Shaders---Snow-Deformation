@@ -81,6 +81,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the fallback snow line."));
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
+		ImGui::Separator();
+		ImGui::SliderFloat(T(TKEY("range_skins_geometry"), "Object Snow Geometry Range"), &settings.RangeSkinsGeometryM, 10.0f, 200.0f, "%.0f m");
+		if (auto _ttRkg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before Distant Snow Blend starts dissolving it, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
 		ImGui::TreePop();
 	}
 
@@ -118,6 +122,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttModels = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh."));
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
+		ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
+		if (auto _ttOt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
 		if (auto _ttRoad = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
@@ -239,7 +246,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
-		ImGui::Checkbox(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView);
+		{
+			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha" };
+			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
+			if (auto _ttSdv = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Edge taper: red = height the slump allows, green = up-facing, blue = no height data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends."));
+		}
 		if (auto _ttSdv = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
 

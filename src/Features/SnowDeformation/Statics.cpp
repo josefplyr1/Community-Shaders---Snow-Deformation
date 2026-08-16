@@ -319,6 +319,10 @@ bool SnowDeformation::EnsureStaticsShaders()
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightConeCS)
 		heightConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeCS"));
+	if (!objectConeSeedCS)
+		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
+	if (!objectConeCS)
+		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -385,6 +389,7 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomFiltered->CreateRTV(maskRtvDesc);
 	heightBottomFiltered->CreateUAV(maskUavDesc);
 	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
+	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
 
 	// Skin-depth raster: R16F, SRV+RTV only (cleared and re-rasterized fresh
 	// every frame).
@@ -790,6 +795,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		// The raster VS zeroes skin depth for objects that may not carve, so
+		// both gates have to reach this pass; without them every object reads
+		// as non-carving and the trench patch dies everywhere, roads included.
+		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -866,6 +876,41 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetShaderResources(0, 1, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 		std::swap(coneIn, coneOut);
+	}
+
+	// Object snow cone: the same repose transform run over the OBJECT top
+	// raster, giving the skin's edge taper a ready-made snow surface to read.
+	// Seeded at full class depth over covered columns and at terrain height
+	// off them, so each object's layer slopes down to the ground at its rim.
+	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
+		// One shared field for both classes: seed it with the deeper of the
+		// two and let each class normalize against it (see SkinLift.RimT).
+		processData.ObjectSnowDepth = std::max({ settings.SnowMeshesDepth, settings.ObjectsSnowDepth, 0.1f });
+		heightProcessCB->Update(processData);
+		context->CSSetShader(objectConeSeedCS, nullptr, 0);
+		ID3D11ShaderResourceView* seedSRV = heightTopRaw[heightCurrent]->srv.get();
+		ID3D11UnorderedAccessView* seedUAV = objectSnowCone->uav.get();
+		context->CSSetShaderResources(0, 1, &seedSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &seedUAV, nullptr);
+		context->Dispatch(dispatchDim, dispatchDim, 1);
+		context->CSSetShaderResources(0, 1, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+
+		context->CSSetShader(objectConeCS, nullptr, 0);
+		Texture2D* objIn = objectSnowCone;
+		Texture2D* objOut = heightScratch;
+		for (uint step : kConeSteps) {
+			processData.ConeStep = step;
+			heightProcessCB->Update(processData);
+			ID3D11ShaderResourceView* objSRV = objIn->srv.get();
+			ID3D11UnorderedAccessView* objUAV = objOut->uav.get();
+			context->CSSetShaderResources(0, 1, &objSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &objUAV, nullptr);
+			context->Dispatch(dispatchDim, dispatchDim, 1);
+			context->CSSetShaderResources(0, 1, nullCsSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+			std::swap(objIn, objOut);
+		}
 	}
 
 	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
@@ -1073,7 +1118,10 @@ void SnowDeformation::DrawCapturedStatics()
 	// shader adds displacement-map relief along the inflate normal. The DS
 	// binds its needs directly so the path is self-sufficient even if the
 	// landscape shell's tessellation is unavailable.
-	const bool tessellateSkins = settings.ReliefDepth > 0.01f && staticsTessVS && staticsHS && staticsDS;
+	// Every class tessellates, relief or not: the vertical lift resolves its
+	// rim over whatever vertices the source mesh happens to carry there, and
+	// low-poly meshes have far too few. Relief stays gated inside the DS.
+	const bool tessellateSkins = staticsTessVS && staticsHS && staticsDS;
 	if (tessellateSkins) {
 		context->VSSetShader(staticsTessVS, nullptr, 0);
 		context->HSSetShader(staticsHS, nullptr, 0);
@@ -1081,6 +1129,12 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11Buffer* cb0 = shellCB->CB();
 		context->HSSetConstantBuffers(0, 1, &cb0);
 		context->DSSetConstantBuffers(0, 1, &cb0);
+		// The DS evaluates the lift per generated vertex and the HS sizes
+		// tessellation against the class collapse range, so both need the
+		// per-object block.
+		ID3D11Buffer* dsCB1 = staticsCB->CB();
+		context->HSSetConstantBuffers(1, 1, &dsCB1);
+		context->DSSetConstantBuffers(1, 1, &dsCB1);
 		ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
 		context->DSSetShaderResources(1, 1, &dsDeformSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
@@ -1100,6 +1154,23 @@ void SnowDeformation::DrawCapturedStatics()
 		if (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second)
 			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
 	};
+
+	// Object top raster (PS t11): the skin PS reads it to keep its rim wall
+	// alive through the steepness gates. Same raster the patch binds to its
+	// VS further down.
+	ID3D11ShaderResourceView* objectTopSRV = (heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv) ?
+	                                             heightTopRaw[heightCurrent]->srv.get() :
+	                                             nullptr;
+	context->PSSetShaderResources(11, 1, &objectTopSRV);
+	// The VS reads the same raster for the edge taper; the patch rebinds VS
+	// t11 for itself further down. The DS reads it too when tessellating.
+	context->VSSetShaderResources(11, 1, &objectTopSRV);
+	context->DSSetShaderResources(11, 1, &objectTopSRV);
+	// Cone field (t13): the edge taper's single read.
+	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
+	context->VSSetShaderResources(13, 1, &coneSRV);
+	context->DSSetShaderResources(13, 1, &coneSRV);
+	context->PSSetShaderResources(13, 1, &coneSRV);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
@@ -1201,6 +1272,11 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
 		context->VSSetShaderResources(10, 1, &smoothSRV);
 		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
+		scb.HasObjectTop = objectTopSRV ? 1.0f : 0.0f;
+		scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
+		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
+		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);
@@ -1223,6 +1299,12 @@ void SnowDeformation::DrawCapturedStatics()
 	context->IASetInputLayout(nullptr);
 	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
+	context->VSSetShaderResources(11, 1, &nullSmoothSRV);
+	context->DSSetShaderResources(11, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(11, 1, &nullSmoothSRV);
+	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
+	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through
@@ -1276,6 +1358,9 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.RoundedDepth = settings.SnowMeshesDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		// The patch only has texels where the raster already permitted carving,
+		// so the per-pixel trench terms must not gate it a second time.
+		scb.ObjectTrenches = 1.0f;
 		staticsCB->Update(scb);
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };

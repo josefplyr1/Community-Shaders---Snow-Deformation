@@ -146,7 +146,22 @@ cbuffer StaticCB : register(b1)
 	float HasSmoothedNormals;
 	float RoundedDepth;  // rounded-class depth (rocks, drifts, logs)
 	float VertexCountF;  // index of the flatness-stats element in SmoothedNormals
-	float padStat2;
+	// >0.5: the object top raster is bound at PS t11 this draw.
+	float HasObjectTop;
+
+	// Distance (world units) by which the geometric height has collapsed to
+	// zero at the deepest class; the material dissolve runs past it.
+	float SkinHeightFadeEnd;
+
+	// >0.5: keep the tuned pre-rework skin behaviour (road and bridge meshes).
+	float LegacySkin;
+
+	// Angle of repose (1.0 = 45 degrees); sets the edge taper width.
+	float MoundSteepness;
+
+	// >0.5: trenches are carved on this draw. Roads always carve; other
+	// objects are gated by the setting until the object trench work lands.
+	float ObjectTrenches;
 }
 
 Texture2D<float> DeformationMap : register(t1);
@@ -170,6 +185,21 @@ SamplerState SnowSampler : register(s0);
 #endif
 
 static const float kSnowUVTile = 256.0;
+
+// Minimum lift. At exactly zero the skin is coincident with its source mesh
+// and z-fights it invisible; a tenth of a unit clears that without reading as
+// a coat, so a class slider at 0 is a flat sheet rather than a 1-unit layer.
+static const float kMinSkinLift = 0.1;
+
+// World width of the cornice roll on flat plates, and the band over which a
+// surface standing below another counts as sheltered from snowfall.
+static const float kCorniceRoll = 4.0;
+static const float kShelterNear = 8.0;
+static const float kShelterFar = 32.0;
+// Depth a fully sheltered surface keeps. The landscape shell thins under
+// roofs to a dusting rather than killing coverage; matching it stops the
+// object's own projected snow being exposed where the skin steps aside.
+static const float kShelterDust = 1.0;
 
 // Bilinear deformation sample from grid-local XY (world - GridOrigin);
 // matches the terrain shell's window math. Returns 0 outside the window.
@@ -322,16 +352,25 @@ struct VS_OUTPUT
 	float2 GridLocal : TEXCOORD4;
 	float Coverage : TEXCOORD5;
 	float Flat : TEXCOORD6;
+	// Lift height in world units. Interpolated, so unlike the geometric face
+	// normal it varies smoothly across a triangle.
+	float Lift : TEXCOORD7;
 };
 
-#ifdef PATCH
-// Top-down object rasters the patch drapes over. Visible to both stages:
-// the VS places geometry on them, the PS clips the silhouette overhang.
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
+// Top-down object top-surface raster. The patch drapes over it (the VS places
+// geometry, the PS clips the silhouette overhang); the skin PS uses it to
+// separate its own rim wall from a bare object face.
 Texture2D<float> ObjectTopRaw : register(t11);
+// Cone-transformed snow surface over the same window: the angle of repose
+// already applied, so the edge taper is one read instead of a ring walk.
+Texture2D<float> ObjectSnowCone : register(t13);
+#endif
+#ifdef PATCH
 Texture2D<float> ObjectSkinDepth : register(t12);
 #endif
 
-#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
 
 // One texel of the object height raster in world units; must match
 // kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
@@ -349,6 +388,13 @@ float2 PatchTexel(float2 worldXY, float2 dims)
 
 float PatchTop(float2 worldXY)
 {
+	// Outside the window: sentinel, never the clamped edge texel. The patch
+	// grid never leaves the window, but skin draws reach the full capture
+	// range, where a clamped read returns an unrelated object's top.
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+
 	float2 dims;
 	ObjectTopRaw.GetDimensions(dims.x, dims.y);
 	float2 t = PatchTexel(worldXY, dims);
@@ -357,6 +403,30 @@ float PatchTop(float2 worldXY)
 	return max(max(ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0))),
 		max(ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0))));
 }
+
+// Snow DEPTH the repose field allows above the local surface, bilinear over
+// the window. Outside it there is no data, so nothing is limited.
+float ObjectConeDepth(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return 1000000.0;
+
+	float2 dims;
+	ObjectSnowCone.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = ObjectSnowCone.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+#endif
+
+#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
 float PatchSkinDepth(float2 worldXY)
 {
@@ -595,6 +665,8 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	// patch does not otherwise use for shading.
 	vsout.Coverage = StaticsDebugView != 0.0 ? v.Deform : 1.0;
 	vsout.Flat = StaticsDebugView != 0.0 ? saturate(v.SkinDepth / 8.0) : 0.0;
+	// The patch is exempt from the lift gates; its walls are real geometry.
+	vsout.Lift = 1e6;
 	[branch] if (v.Killed > 0.5)
 	{
 		// NaN position: the rasterizer culls every primitive touching it,
@@ -740,18 +812,181 @@ VS_OUTPUT main(TessFactorsPatch factors, float2 domainUV : SV_DomainLocation, co
 }
 #endif
 
-#if defined(VSHADER) && !defined(PATCH)
-// Skin surface evaluation, shared by the legacy VS and the tessellated
-// control-point VS: object -> world transform, pillow inflation and the
-// class/up-facing depth logic.
-struct SkinVertex
+#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
+// Distance at which this class's geometric layer has fully collapsed. The
+// hull shader retires tessellation over the same range: once the layer has no
+// height there is no rim shape left to resolve.
+float SkinCollapseEnd(float depthBase)
+{
+	return max(SkinHeightFadeEnd, 1.0) * lerp(0.4, 1.0, saturate(depthBase / 25.0));
+}
+#endif
+
+#if (defined(VSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
+// Lift evaluation: class depth, up-facing mask, edge taper and distance
+// collapse. Called per GENERATED vertex by the domain shader, so the mask and
+// the taper resolve at tessellated density; evaluating them at source vertices
+// and interpolating smears the transition diagonally across whole faces, which
+// on low-poly meshes is the width of the object.
+struct SkinLift
 {
 	float3 WorldAbs;
-	float3 NormalWS;
-	float3 InflateWS;
-	float Coverage;
-	float Flat;
 	float Depth;
+	// Depth before the distance collapse. Coverage keys off this so the
+	// material keeps drawing to the capture range after the geometry has
+	// flattened; gating on the collapsed depth deletes distant shells.
+	float CoverDepth;
+	// Distance to the nearest rim, normalized: 0 at the rim, 1 in the
+	// interior. Drives the cornice roll's shading.
+	float RimT;
+	// Debug view only: the two masks, unmultiplied.
+	float Support;
+	float UpFacing;
+};
+
+SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat)
+{
+	// The layer grows straight up for every class. Displacing along the
+	// normal expands a mesh in all directions at once, so a rock gains girth
+	// with its cover and the silhouette bloats; a vertical lift leaves the
+	// footprint alone. It also thins the layer measured perpendicular to a
+	// slope by cos(slope), which is how snow actually settles.
+	float3 liftWS = float3(0.0, 0.0, 1.0);
+	// Roads keep the pre-rework direction (see LegacySkin); flat-class roads
+	// already lifted vertically, so only rounded road meshes differ here.
+	[flatten] if (LegacySkin > 0.5 && isFlat < 0.5)
+		liftWS = smoothWS;
+	// Minimum coat: at depth 0 the skin sits coincident with its own source
+	// mesh and z-fights itself invisible; the snow cover stays visible as a
+	// thin coat no matter the class sliders.
+	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift);
+
+	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
+	// bare, matching the vanilla projection's extent). flat meshes gate hard
+	// on the raw normal so plank sides stay clean; rounded meshes ramp over
+	// almost the whole up-facing range of the SMOOTHED normal.
+	// The layer stays geometrically uncarved: trench relief is traced per
+	// pixel in the PS instead.
+	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, smoothWS.z);
+	float depth = depthBase * upFacing;
+
+	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
+	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
+	// snow has no silhouette left to pop. Range scales with class depth against
+	// the depth sliders' 25-unit maximum.
+	// Roads are exempt: their height must stay in step with the landscape
+	// shell they meet at the verge, and that shell does not collapse.
+	// Edge taper: the cone field already holds the highest snow surface the
+	// angle of repose permits at each column, so the layer thins toward every
+	// rim and keeps full depth in the middle. Sampling a grid transform is
+	// isotropic; the ring walk it replaces approximated the same distance from
+	// eight directions and faceted every curved rim into spikes.
+	// Both classes read the field, but they read different SHAPES out of it.
+	// The depth guard skips the read wherever the layer is already gone.
+	float support = 1.0;
+	float rimT = 1.0;
+	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
+	{
+		// The field is seeded with the deepest class in play, so normalizing
+		// by that recovers distance-to-rim: 0 at the rim, 1 in the interior.
+		float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+		float steep = clamp(MoundSteepness, 0.5, 3.0);
+		rimT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
+		float allowed;
+		[flatten] if (isFlat > 0.5)
+		{
+			// Cornice. Snow on a thin plate has the cohesion to carry full
+			// depth out to the rim and roll over in the last sliver; slumping
+			// it across the plate would erase the overhang that makes a
+			// snowed plank or eave read correctly. Quarter-circle rollover.
+			// The roll is a FIXED world width, not a fraction of the ramp:
+			// the ramp's length scales with depth, so a proportional roll is
+			// wider than the plank itself at deep settings and the whole
+			// plate turns into rollover.
+			float rollFrac = saturate(kCorniceRoll * steep / coneSeed);
+			float u = saturate(rimT / max(rollFrac, 1e-3));
+			float toRim = 1.0 - u;
+			rimT = u;
+			allowed = depthBase * sqrt(saturate(1.0 - toRim * toRim));
+		}
+		else
+		{
+			// Slump at the angle of repose, which is what a rock wants.
+			allowed = depthBase * rimT;
+		}
+		depth = min(depth, allowed);
+		support = saturate(allowed / max(depthBase, 0.01));
+
+		// Shelter: a surface standing well below the topmost object at its own
+		// column has something over it — a walkway under a roof, a stone tucked
+		// beneath the next one up — and takes little snowfall. On a convex body
+		// a flank point IS the top of its own column, so rocks are unaffected.
+		// Thinned to a dusting rather than removed: the landscape shell never
+		// kills coverage under shelter either, and stepping aside entirely
+		// exposes the object's own projected snow, which agrees with nothing.
+		float objTop = PatchTop(worldBase.xy);
+		[flatten] if (objTop > -50000.0)
+		{
+			float shelterAmt = smoothstep(kShelterNear, kShelterFar, objTop - worldBase.z);
+			depth = lerp(depth, min(depth, kShelterDust), shelterAmt);
+		}
+	}
+
+	// The shape is settled here; everything past this point is distance LOD.
+	float coverDepth = depth;
+
+	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
+	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
+	// snow has no silhouette left to pop. Range scales with class depth against
+	// the depth sliders' 25-unit maximum.
+	// Roads are exempt: their height must stay in step with the landscape
+	// shell they meet at the verge, and that shell does not collapse.
+	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5)
+	{
+		float collapseEnd = SkinCollapseEnd(depthBase);
+		float camDist = length(worldBase - ShellCameraPosAdjust.xyz);
+		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
+	}
+
+	SkinLift o;
+	o.WorldAbs = worldBase + liftWS * depth;
+	o.Depth = depth;
+	o.CoverDepth = coverDepth;
+	o.RimT = rimT;
+	o.Support = support;
+	o.UpFacing = upFacing;
+	return o;
+}
+
+// Displaced snow shades by the smooth surface it forms, not the flat face
+// beneath; undisplaced vertices keep the raw normal.
+float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float depth, float rimT)
+{
+	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift);
+	[branch] if (isFlat > 0.5)
+	{
+		// Flat snow shades by the plate it sits on — a per-plank gradient
+		// stamps the same lighting onto every instance. The cornice roll is
+		// the exception: geometry that curves over but shades flat reads as a
+		// cut edge, so the last sliver before the rim bends toward the
+		// smoothed normal and nothing inboard of it changes.
+		float roll = 1.0 - smoothstep(0.0, 0.35, rimT);
+		return normalize(lerp(nrmWS, smoothWS, roll * 0.8));
+	}
+	return normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
+}
+#endif
+
+#if defined(VSHADER) && !defined(PATCH)
+// Object -> world transform and the smoothed-normal lookup. The lift is
+// applied separately so the domain shader can evaluate it per generated
+// vertex.
+struct SkinVertex
+{
+	float3 WorldBase;
+	float3 NormalWS;
+	float3 SmoothWS;
+	float Flat;
 };
 
 SkinVertex BuildSkinVertex(VS_INPUT input)
@@ -791,53 +1026,18 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 		dot(WorldRow0.xyz, nrmMS),
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS)));
-	float3 inflateWS = normalize(float3(
+	// Position-averaged normal in world space. The mask, the shading normal
+	// and the domain shader's relief all key off the SURFACE; only the lift
+	// uses a direction of its own.
+	float3 smoothWS = normalize(float3(
 		dot(WorldRow0.xyz, inflateMS),
 		dot(WorldRow1.xyz, inflateMS),
 		dot(WorldRow2.xyz, inflateMS)));
-	// flat class: displacement goes straight up; no pillow, no mushroom
-	// rims, no per-plank shading gradient. The snow on a walkway is a
-	// featureless flat sheet.
-	[flatten] if (isFlat > 0.5)
-		inflateWS = float3(0.0, 0.0, 1.0);
-	// Minimum coat: at depth 0 the skin sits coincident with its own source
-	// mesh and z-fights itself invisible; the snow cover stays visible as a
-	// thin coat no matter the class sliders.
-	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), 1.0);
-
-	float2 gridLocal = worldAbs.xy - GridOrigin;
-
-	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
-	// bare, matching the vanilla projection's extent). flat meshes gate on
-	// the raw normal: their straight-up inflate direction would paint the
-	// sides white. rounded meshes use the drape ramp: with a hard 0.4-0.7
-	// gate a deep layer becomes a full-height cap hovering over bare sides,
-	// joined by near-vertical skirts. Ramping depth over almost the whole
-	// up-facing range pins the shell's edges to the mesh; it puffs at the
-	// top and meets the surface in a sloped snow lip.
-	// The layer stays geometrically uncarved: on low-poly meshes a carved
-	// vertex would drag whole 100+-unit triangles down with it; trench
-	// relief is traced per pixel in the PS instead.
-	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, inflateWS.z);
-	float depth = depthBase * upFacing;
-
-	worldAbs += inflateWS * depth;
-
 	SkinVertex v;
-	v.WorldAbs = worldAbs;
-	// Displaced snow shades by the smooth surface it forms, not the flat
-	// face beneath; undisplaced vertices keep the raw normal. flat meshes
-	// always shade by the raw normal; the smoothed-normal lerp stamps an
-	// identical shading gradient onto every plank instance.
-	v.NormalWS = isFlat > 0.5 ? nrmWS : normalize(lerp(nrmWS, inflateWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
-	v.InflateWS = inflateWS;
-	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
-	// pixel. Thresholding in the VS makes low-poly rocks flip whole FACES
-	// between snowed and bare (blocky patches); thresholding the interpolated
-	// normal instead varies smoothly across faces.
-	v.Coverage = nrmWS.z;
+	v.WorldBase = worldAbs;
+	v.NormalWS = nrmWS;
+	v.SmoothWS = smoothWS;
 	v.Flat = isFlat;
-	v.Depth = depth;
 	return v;
 }
 
@@ -845,41 +1045,46 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 VS_OUTPUT main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);
+	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat);
 
-	float3 rel = v.WorldAbs - ShellCameraPosAdjust.xyz;
-	float3 prevRel = v.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
+	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
+	float3 prevRel = lift.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	vsout.NormalWS = v.NormalWS;
-	vsout.Coverage = v.Coverage;
-	vsout.GridLocal = v.WorldAbs.xy - GridOrigin;
-	vsout.Flat = v.Flat;
+	vsout.NormalWS = SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
+	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
+	// pixel. Thresholding here makes low-poly rocks flip whole FACES between
+	// snowed and bare; thresholding the interpolated normal varies smoothly.
+	// Debug view: smuggle the two lift masks through the shading interpolants.
+	vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : v.NormalWS.z;
+	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
+	vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : v.Flat;
+	vsout.Lift = lift.CoverDepth;
 	return vsout;
 }
 #else
-// Tessellated control-point VS: full skin evaluation, no clip transform;
-// the domain shader displaces and projects.
+// Tessellated control-point VS: transform only, UNDISPLACED. The lift is the
+// domain shader's job so it lands on generated vertices.
 struct TessControlPoint
 {
-	float3 WorldAbs : TEXCOORD0;
+	float3 WorldBase : TEXCOORD0;
 	float3 NormalWS : TEXCOORD1;
-	float3 InflateWS : TEXCOORD2;
-	// x = raw-normal coverage, y = flat class, z = inflated depth.
-	float3 CoverageFlatDepth : TEXCOORD3;
+	float3 SmoothWS : TEXCOORD2;
+	float Flat : TEXCOORD3;
 };
 
 TessControlPoint main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);
 	TessControlPoint cp;
-	cp.WorldAbs = v.WorldAbs;
+	cp.WorldBase = v.WorldBase;
 	cp.NormalWS = v.NormalWS;
-	cp.InflateWS = v.InflateWS;
-	cp.CoverageFlatDepth = float3(v.Coverage, v.Flat, v.Depth);
+	cp.SmoothWS = v.SmoothWS;
+	cp.Flat = v.Flat;
 	return cp;
 }
 #endif
@@ -888,10 +1093,10 @@ TessControlPoint main(VS_INPUT input)
 #if (defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
 struct TessControlPoint
 {
-	float3 WorldAbs : TEXCOORD0;
+	float3 WorldBase : TEXCOORD0;
 	float3 NormalWS : TEXCOORD1;
-	float3 InflateWS : TEXCOORD2;
-	float3 CoverageFlatDepth : TEXCOORD3;
+	float3 SmoothWS : TEXCOORD2;
+	float Flat : TEXCOORD3;
 };
 
 struct TessFactors
@@ -907,21 +1112,26 @@ struct TessFactors
 // distance rule would waste factors on tiny triangles and starve huge
 // ones. Shared mesh edges carry identical control points on both sides,
 // so the symmetric rule is crack-free.
-float EdgeTessFactor(float3 worldA, float3 worldB)
+float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 {
 	float3 mid = 0.5 * (worldA + worldB);
 	float dist = length(mid - ShellCameraPosAdjust.xyz);
 	float targetLen = max(4.0, dist * 0.01);
-	return clamp(length(worldA - worldB) / targetLen, 1.0, 16.0);
+	// Retire subdivision over the geometry range, reaching no subdivision at
+	// the distance where the layer itself has collapsed.
+	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, dist);
+	return clamp(length(worldA - worldB) / targetLen * rangeFade, 1.0, 16.0);
 }
 
 TessFactors PatchConstants(InputPatch<TessControlPoint, 3> patch)
 {
 	TessFactors f;
+	// Class is a per-mesh constant, so any control point answers for the patch.
+	float collapseEnd = SkinCollapseEnd(max(lerp(RoundedDepth, ObjectsDepth, patch[0].Flat), kMinSkinLift));
 	// Tri-domain edge order: edge i is opposite control point i.
-	f.Edge[0] = EdgeTessFactor(patch[1].WorldAbs, patch[2].WorldAbs);
-	f.Edge[1] = EdgeTessFactor(patch[2].WorldAbs, patch[0].WorldAbs);
-	f.Edge[2] = EdgeTessFactor(patch[0].WorldAbs, patch[1].WorldAbs);
+	f.Edge[0] = EdgeTessFactor(patch[1].WorldBase, patch[2].WorldBase, collapseEnd);
+	f.Edge[1] = EdgeTessFactor(patch[2].WorldBase, patch[0].WorldBase, collapseEnd);
+	f.Edge[2] = EdgeTessFactor(patch[0].WorldBase, patch[1].WorldBase, collapseEnd);
 	f.Inside = max(max(f.Edge[0], f.Edge[1]), f.Edge[2]);
 	return f;
 }
@@ -941,17 +1151,24 @@ TessControlPoint main(InputPatch<TessControlPoint, 3> patch, uint i : SV_OutputC
 [domain("tri")]
 VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const OutputPatch<TessControlPoint, 3> patch)
 {
-	float3 worldAbs = patch[0].WorldAbs * bary.x + patch[1].WorldAbs * bary.y + patch[2].WorldAbs * bary.z;
+	float3 worldBase = patch[0].WorldBase * bary.x + patch[1].WorldBase * bary.y + patch[2].WorldBase * bary.z;
 	// Guarded normalization: control points with opposing normals (hard
 	// mesh edges) interpolate to near-zero vectors whose normalization
 	// explodes into arbitrary directions; those regions also get no relief.
 	float3 nSum = patch[0].NormalWS * bary.x + patch[1].NormalWS * bary.y + patch[2].NormalWS * bary.z;
-	float3 iSum = patch[0].InflateWS * bary.x + patch[1].InflateWS * bary.y + patch[2].InflateWS * bary.z;
+	float3 iSum = patch[0].SmoothWS * bary.x + patch[1].SmoothWS * bary.y + patch[2].SmoothWS * bary.z;
 	float interpHealth = min(length(nSum), length(iSum));
 	float3 normalWS = nSum / max(length(nSum), 1e-3);
 	float3 inflateWS = iSum / max(length(iSum), 1e-3);
-	float3 cfd = patch[0].CoverageFlatDepth * bary.x + patch[1].CoverageFlatDepth * bary.y + patch[2].CoverageFlatDepth * bary.z;
+	float isFlat = patch[0].Flat * bary.x + patch[1].Flat * bary.y + patch[2].Flat * bary.z;
+
+	// The lift is evaluated HERE, per generated vertex: the up-facing mask and
+	// the edge taper get tessellated density instead of being interpolated
+	// across a source face.
+	SkinLift lift = ApplySkinLift(worldBase, normalWS, inflateWS, isFlat);
+	float3 worldAbs = lift.WorldAbs;
 	float2 gridLocal = worldAbs.xy - GridOrigin;
+	normalWS = SkinShadingNormal(normalWS, inflateWS, isFlat, lift.Depth, lift.RimT);
 
 	// Relief from the displacement map, same recipe as the landscape shell:
 	// top-projected snow UV, gated by the inflated depth (bare and thin
@@ -961,13 +1178,13 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	{
 		float camDist = length(worldAbs - ShellCameraPosAdjust.xyz);
 		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
-		[branch] if (reliefFade > 0.001 && cfd.z > 0.5)
+		[branch] if (reliefFade > 0.001 && lift.Depth > 0.5)
 		{
 			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
 			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
 			float carve = saturate(SampleDeformation(gridLocal));
-			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(cfd.z / 6.0) * (1.0 - carve) * saturate(inflateWS.z) * smoothstep(0.3, 0.7, interpHealth));
+			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(lift.Depth / 6.0) * (1.0 - carve) * saturate(inflateWS.z) * smoothstep(0.3, 0.7, interpHealth));
 		}
 	}
 
@@ -980,9 +1197,11 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
 	vsout.NormalWS = normalWS;
-	vsout.Coverage = cfd.x;
+	// Debug view: smuggle the two lift masks through the shading interpolants.
+	vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : nSum.z / max(length(nSum), 1e-3);
 	vsout.GridLocal = gridLocal;
-	vsout.Flat = cfd.y;
+	vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : isFlat;
+	vsout.Lift = lift.CoverDepth;
 	return vsout;
 }
 #endif
@@ -1044,6 +1263,17 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
 	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
+}
+
+// Two-plane projection blend, on the SAMPLES. Flat-topped pixels never touch
+// the side plane, so the second set of stochastic taps is only paid for on
+// slopes and rims.
+float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTaps, float sideWeight)
+{
+	float4 c = SampleSnowMap(tex, topTaps);
+	[branch] if (sideWeight > 0.001)
+		c = lerp(c, SampleSnowMap(tex, sideTaps), sideWeight);
+	return c;
 }
 
 struct PS_OUTPUT
@@ -1108,6 +1338,39 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 normalWS = normalize(input.NormalWS);
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
+
+	// Rim wall: the band where a lifted cap reaches back down to the object's
+	// edge is near-vertical whatever the depth (its geometry is the object's
+	// own side face with the top edge dragged up), so the steepness gates
+	// below erase it and the cap loses its side. The object's top raster
+	// separates the two cases exactly: shell ABOVE the object's own top
+	// surface is rim wall, shell at or below it is a bare object face.
+	// View-independent, and it leaves house walls and boulder flanks (both
+	// far below their object's top) to the gates.
+	float shoulderWall = 0.0;
+	// Gate inputs kept at function scope for the debug view below.
+	float wallClearance = 0.0;
+	float wallHasData = 0.0;
+#	ifndef PATCH
+	[branch] if (HasObjectTop > 0.5)
+	{
+		float objTop = PatchTop(worldXY);
+		[flatten] if (objTop > -50000.0)
+		{
+			// Fraction of the class depth, and the band opens essentially at
+			// the object's surface: the rim wall has to reach all the way down
+			// to the rock or it hangs with a gap under it. Safe only because
+			// the lift is vertical â€” a flank vertex barely rises (upFacing
+			// approaches zero there), so it cannot clear the top surface the
+			// way normal inflation used to push it out and over.
+			float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+			wallClearance = ((input.WorldPos.z + ShellCameraPosAdjust.z) - objTop) / liftBase;
+			wallHasData = 1.0;
+			shoulderWall = smoothstep(0.0, 0.15, wallClearance);
+		}
+	}
+#	endif
+
 	// Per-pixel up-facing gate from the interpolated raw normal (see the VS
 	// note on Coverage): smooth accumulation edges on low-poly meshes.
 	// strict gate: nothing steeper than ~66 degrees wears snow. A wide gate
@@ -1128,8 +1391,30 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// blockiness cannot return. The PATCH is exempt: its trench walls are
 	// legitimately steep real geometry.
 	float3 geoFacing = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
-	pixelCoverage *= smoothstep(0.22, 0.42, abs(geoFacing.z));
+	// Coverage follows the layer's own HEIGHT, not the geometric face normal.
+	// geoFacing is a screen-derivative of world position and therefore
+	// constant across a triangle, so thresholding it quantizes coverage per
+	// triangle and tears every rim into sawtooth teeth at any tessellation
+	// density. Interpolated lift varies smoothly, and the edge taper already
+	// drives it to zero on rims and vertical faces, so walls stay bare
+	// without a facing test.
+	// Narrow band, and jittered in world space. A wide ramp puts a broad area
+	// into partial alpha, which the dither resolves into the translucent film
+	// that used to sheet down house walls; and a clean threshold on a linearly
+	// interpolated field traces the mesh's own polygons, so the contour comes
+	// out faceted. The jitter breaks that contour without widening the band.
+	float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+	float liftEdge = 0.06 * liftBase * (0.6 + 0.8 * CoverageNoise(worldXY * 3.0));
+	float liftCoverage = smoothstep(liftEdge * 0.55, liftEdge, input.Lift);
+	pixelCoverage *= liftCoverage;
 #	endif
+	// Applied after every steepness multiply; the rim wall is exempt from all
+	// of them.
+	pixelCoverage = max(pixelCoverage, shoulderWall);
+	// Coverage debug: the facing gates' product, and the two seam blends,
+	// captured separately so the rim band's owner is readable at a glance.
+	float dbgFacing = pixelCoverage;
+	float dbgSeam = 1.0;
 
 	// Per-pixel trench relief: the vertex layer stays uncarved (cliff edges
 	// measure 20-160 units; no vertex ever lands inside a trail), so the
@@ -1139,6 +1424,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// feet and props z-test into the trench. PATCH pixels have real carved
 	// geometry and a VS gradient normal; neither applies there.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
+	// Object trenching is parked until it can be done properly; roads keep
+	// theirs, since theirs is the tuned case.
+	bool carveObject = ObjectTrenches > 0.5 || LegacySkin > 0.5;
 	float2 trenchGridLocal = input.GridLocal;
 	float3 viewDirWS = normalize(input.WorldPos);
 	// Ray parameter (world units along the view ray) to the parallax hit;
@@ -1154,7 +1442,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	//   replace a flank; discarding a log's side pixels (whose map column
 	//   carries the trail) punches see-through holes.
 	// Far trails and painted-flat trails keep the parallax relief instead.
-	[branch] if (input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.005 && length(input.WorldPos.xy) < 950.0)
+	[branch] if (carveObject && input.Flat < 0.5 && RoundedDepth > 1.0 && pixelDeform > 0.005 && length(input.WorldPos.xy) < 950.0)
 	{
 		// Sharp hand-off band: the skin stays FULL height (its carve lives
 		// in the patch), so every percent of trample it survives is a
@@ -1168,7 +1456,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Parallax relief for the trails the patch does not cover. flat-class
 	// trails never parallax; a raised flat overlay would occlude its own
 	// illusion; they keep only the compression darkening.
-	[branch] if (input.Flat < 0.5 && pixelDeform > 0.001 && pixelCoverage > 0.35)
+	[branch] if (carveObject && input.Flat < 0.5 && pixelDeform > 0.001 && pixelCoverage > 0.35)
 	{
 		float pomDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 25.0);
 		[branch] if (pomDepth > 0.5)
@@ -1235,7 +1523,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Hard down-facing kill: snow accumulates on TOPS only. The interpolated
 	// raw normal is negative on every underside pixel, whatever the noise or
 	// seam blends below decide.
-	coverageAlpha *= smoothstep(-0.05, 0.1, input.Coverage);
+	coverageAlpha *= max(smoothstep(-0.05, 0.1, input.Coverage), shoulderWall);
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells dither into
@@ -1252,7 +1540,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float seamNoise = (CoverageNoise(worldXY * 0.5) - 0.5) * BorderNoise * 0.5;
 		float bandLow = -(4.0 + BorderSmooth * 0.5);
 		float bandHigh = 2.0 + BorderSmooth * 0.125;
-		coverageAlpha *= smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
+		float groundBand = smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
+		coverageAlpha *= groundBand;
+		dbgSeam *= groundBand;
 	}
 
 	// Snow<->Snow Fade; Terrain Blending's technique adapted: the fade is
@@ -1269,7 +1559,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[flatten] if (preShellZ - postShellZ > 1.0)  // the landscape shell is behind this pixel
 		{
 			float skinZ = input.CurrentClip.w;
-			coverageAlpha *= smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
+			float snowSeam = smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
+			coverageAlpha *= snowSeam;
+			dbgSeam *= snowSeam;
 		}
 	}
 
@@ -1285,7 +1577,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// floors, so relaxing the guarantee alone changes nothing. Up-facing
 	// pixels only: the top-down map column carries the trail on flanks too,
 	// and wearing those punches see-through holes in trench walls.
-	[branch] if (TrenchFloorFade > 0.001)
+	[branch] if (carveObject && TrenchFloorFade > 0.001)
 	{
 		coverageAlpha *= 1.0 - TrenchFloorFade * smoothstep(0.45, 0.95, pixelDeform) * smoothstep(0.35, 0.65, normalWS.z);
 	}
@@ -1297,7 +1589,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// down house walls and pole sides. (A harder cull cuts gap windows into
 	// the drape's skirts; full relaxation lets the veils through.) The
 	// PATCH is exempt: its trench walls are steep real geometry.
-	coverageAlpha *= smoothstep(0.06, 0.18, abs(geoFacing.z));
+	coverageAlpha *= max(liftCoverage, shoulderWall);
 #	else
 	// Silhouette clip, view-independent: the max-of-4 raster placement
 	// extends object tops up to a texel past the silhouette, so rim
@@ -1333,6 +1625,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// turning blank white.
 	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
+	// Captured before the override: mode 2 renders the value the dither sees.
+	float dbgAlpha = coverageAlpha;
 	// Debug view: full visibility; the dither must not hide geometry the
 	// diagnosis needs to see.
 	[branch] if (StaticsDebugView != 0.0)
@@ -1344,21 +1638,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Snow texture taps; shared by albedo, normal and RMAOS, sampled at the
 	// parallax-corrected position so the texture rides the relief. Steep
 	// drape sides re-project along the facing wall plane: the top-down
-	// projection stretches down a puffed shell's flanks, and the stochastic
-	// cells follow the same plane so the anti-tiling stays coherent instead
-	// of smearing.
+	// projection stretches down a puffed shell's flanks.
+	// Two projections, blended as SAMPLES rather than as coordinates. Lerping
+	// the UVs produces a coordinate field that belongs to neither plane, so
+	// the whole transition band smears; the sides are also where the shell's
+	// rim lives, which is where that smear reads as streaks.
 	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
-	float2 snowCellXY = worldXY;
 	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
-	[branch] if (snowSteepness > 0.001)
-	{
-		float worldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
-		float2 sidePlane = abs(normalWS.x) > abs(normalWS.y) ? float2(worldXY.y, worldZAbs) : float2(worldXY.x, worldZAbs);
-		snowUV = lerp(snowUV, (SnowUVOffset + sidePlane) / kSnowUVTile, snowSteepness);
-		snowCellXY = lerp(worldXY, sidePlane, snowSteepness);
-	}
+	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+	float2 snowSidePlane = abs(normalWS.x) > abs(normalWS.y) ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
+	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, snowCellXY);
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
+	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
 
 	// Object trench detail: shading-only berm ridge along trails, plus the
 	// disturbance weight for the crisp grain below. The landscape shell's
@@ -1387,11 +1679,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// same map (crisp grain), weighted by the disturbance itself.
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
-		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
+		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
 		[branch] if (disturb > 0.01)
 		{
-			SnowTaps crispTaps = ComputeSnowTaps(snowUV * max(ObjCrispScaleV, 1.0), snowCellXY);
-			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
+			float crispScale = max(ObjCrispScaleV, 1.0);
+			SnowTaps crispTaps = ComputeSnowTaps(snowUV * crispScale, worldXY);
+			SnowTaps crispTapsSide = ComputeSnowTaps(snowUVSide * crispScale, snowSidePlane);
+			float2 crispN = SampleSnowPlanar(SnowNormalMap, crispTaps, crispTapsSide, snowSteepness).xy * 2.0 - 1.0;
 			texN.xy += crispN * disturb;
 		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
@@ -1425,7 +1719,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
 	[branch] if (HasSnowTexture != 0)
 	{
-		kSnowAlbedo = SampleSnowMap(SnowDiffuse, snowTaps).rgb;
+		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
@@ -1441,7 +1735,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float snowAO = 1.0;
 	[branch] if (HasSnowRmaos > 0.5)
 	{
-		float4 rmaos = SampleSnowMap(SnowRmaosMap, snowTaps);
+		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
 		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
@@ -1532,7 +1826,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef PATCH
 		preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 #else
-		preLit = float3(0.1, 0.4 + 0.5 * saturate(input.Coverage), 0.9);
+		[branch] if (StaticsDebugView > 1.5)
+		{
+			// Coverage mode. R = coverageAlpha as the dither sees it, G = the
+			// facing gates' product, B = the two seam blends. A rim band that
+			// is dark in R but bright in G and B is owned by neither, so the
+			// owner is one of the remaining multiplies.
+			preLit = float3(dbgAlpha, dbgFacing, dbgSeam);
+		}
+		else
+		{
+			// Taper mode. R = height the taper allows as a fraction of class
+			// depth (1 where nothing limited it), G = up-facing mask, B = the
+			// raster returned no data here.
+			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 1.0 - wallHasData);
+		}
 #endif
 	}
 

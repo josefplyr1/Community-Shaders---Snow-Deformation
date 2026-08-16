@@ -48,6 +48,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RangeTrenchesM,
 	RangeSkinsM,
 	RangeSkinsFadeM,
+	RangeSkinsGeometryM,
+	ObjectTrenches,
 	DistantSnowLineZ,
 	DistantSnowNorthDrop,
 	DistantSnowLineFade,
@@ -228,7 +230,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DebugTerrainOverlay = debugTerrainOverlay ? 1u : 0u;
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
-	// (where the shell ends), so the recolor simply applies to all of it —
+	// (where the shell ends), so the recolor simply applies to all of it â€”
 	// including any LOD peeking through under the shell, which then wears
 	// the same material and helps hide holes.
 	EnsureShellSnowTextures();
