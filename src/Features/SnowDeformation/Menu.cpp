@@ -447,6 +447,17 @@ void SnowDeformation::DrawSettings()
 				for (const auto& layer : probe.layers)
 					ImGui::Text("    %s x%.2f @ %.0f units", layer.label.c_str(), layer.weight, layer.depth);
 			}
+
+			// Object snow probe: which captured meshes cover this spot, largest
+			// first. Bound top Z against the camera height says whether one of
+			// them is the surface an artifact sits on.
+			const ObjectSnowProbe objects = ProbeObjectSnow(eye.x, eye.y);
+			ImGui::Text("Object snow probe: %zu captured this frame, %zu cover this spot (camera z %.0f)",
+				objects.captured, objects.overlapping, eye.z);
+			for (const auto& entry : objects.entries)
+				ImGui::Text("  %s r%.0f top %.0f (%.0f away)%s  %s",
+					entry.name.empty() ? "<unnamed>" : entry.name.c_str(),
+					entry.radius, entry.topZ, entry.distXY, entry.road ? " [road]" : "", entry.model.c_str());
 		}
 		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
 			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);

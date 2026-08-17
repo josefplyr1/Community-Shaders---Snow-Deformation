@@ -159,6 +159,24 @@ public:
 		std::vector<Layer> layers;
 	};
 
+	/** @brief The captured statics around a world position, for naming whatever the object snow is actually skinning. */
+	struct ObjectSnowProbe
+	{
+		struct Entry
+		{
+			std::string name;
+			std::string model;
+			float centerZ = 0.0f;
+			float radius = 0.0f;
+			float topZ = 0.0f;
+			float distXY = 0.0f;
+			bool road = false;
+		};
+		size_t captured = 0;
+		size_t overlapping = 0;
+		std::vector<Entry> entries;
+	};
+
 	/** @brief One landscape texture discovered by the bake. The diffuse path is the settings key; the class supplies the depth until the user overrides it. */
 	struct LandTextureEntry
 	{
@@ -760,6 +778,9 @@ public:
 
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+
+	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
+	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
 

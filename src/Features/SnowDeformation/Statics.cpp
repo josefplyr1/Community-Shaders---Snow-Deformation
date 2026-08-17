@@ -22,6 +22,53 @@ static bool HasActiveLight(RE::NiAVObject* a_obj)
 	return false;
 }
 
+// Model path of the reference a captured geometry belongs to. The ref hangs off
+// the 3D root's user data, so walk up from the drawn trishape.
+static std::string CapturedModelPath(RE::NiAVObject* a_object)
+{
+	for (RE::NiAVObject* node = a_object; node; node = node->parent) {
+		if (auto* ref = node->GetUserData()) {
+			if (auto* base = ref->GetBaseObject()) {
+				if (auto* model = base->As<RE::TESModel>()) {
+					if (const char* path = model->GetModel(); path && path[0])
+						return path;
+				}
+				return std::format("{:08X} (no model)", base->GetFormID());
+			}
+		}
+	}
+	return "<no reference>";
+}
+
+SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, float a_y)
+{
+	ObjectSnowProbe probe;
+	probe.captured = capturedStatics.size();
+
+	for (const auto& capture : capturedStatics) {
+		if (!capture.geometry)
+			continue;
+		const auto& bound = capture.geometry->worldBound;
+		const float dx = bound.center.x - a_x;
+		const float dy = bound.center.y - a_y;
+		const float distXY = std::sqrt(dx * dx + dy * dy);
+		if (distXY > bound.radius)
+			continue;
+
+		probe.overlapping++;
+		probe.entries.push_back({ capture.geometry->name.c_str(),
+			CapturedModelPath(capture.geometry.get()),
+			bound.center.z, bound.radius, bound.center.z + bound.radius, distXY, capture.road });
+	}
+
+	// Largest first: a sheet that covers a courtyard belongs to a big capture.
+	std::sort(probe.entries.begin(), probe.entries.end(),
+		[](const ObjectSnowProbe::Entry& a, const ObjectSnowProbe::Entry& b) { return a.radius > b.radius; });
+	if (probe.entries.size() > 8)
+		probe.entries.resize(8);
+	return probe;
+}
+
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
