@@ -113,6 +113,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	data.height.fill(kShellMissingHeight);
 	for (auto& classArray : data.classWeights)
 		classArray.fill(0);
+	if (auto* worldspace = cell->GetRuntimeData().worldSpace)
+		data.worldspaceID = worldspace->GetFormID();
 
 	auto loadedData = land->loadedData;
 
@@ -168,7 +170,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		// Land material setup re-runs frequently; only mark the window dirty
 		// when the baked data actually changed.
 		auto it = shellCells.find(key);
-		if (it != shellCells.end() && it->second.height == data.height && it->second.classWeights == data.classWeights)
+		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
+			it->second.height == data.height && it->second.classWeights == data.classWeights)
 			return;
 		shellCells[key] = data;
 	}
@@ -187,7 +190,7 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
 	const std::shared_lock lock(shellCellMutex);
 	const auto it = shellCells.find(key);
-	if (it == shellCells.end())
+	if (it == shellCells.end() || it->second.worldspaceID != activeWorldspace.load(std::memory_order_acquire))
 		return a_missing;
 
 	// Same class-weight resolve the window rebuild uses, for one vertex.
@@ -196,6 +199,31 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 		depth += it->second.classWeights[classI][idx] / 255.0f * settings.SnowClassDepths[classI];
 	return depth;
+}
+
+void SnowDeformation::UpdateActiveWorldspace()
+{
+	auto* tes = RE::TES::GetSingleton();
+	auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+	// Interiors keep the last exterior's state: a shop visit must not wipe the
+	// tracks outside its door.
+	if (!worldspace)
+		return;
+
+	const uint32_t id = worldspace->GetFormID();
+	if (id == activeWorldspace.exchange(id, std::memory_order_acq_rel))
+		return;
+
+	// City worldspaces share their parent's cell coordinates AND world XY
+	// (WindhelmWorld sits on the same 28-36 / 6-12 block as the Tamriel
+	// terrain outside its gate), so every world-anchored cache now describes
+	// the worldspace we just left. Baked cells carry their worldspace and are
+	// filtered below; the object raster and the deformation map have no such
+	// tag and have to be dropped.
+	shellDataDirty.store(true, std::memory_order_release);
+	heightMapValid = false;
+	clearRequested = true;
+	logger::debug("[SNOW DEFORMATION] Worldspace changed to {:08X}: dropping world-anchored caches", id);
 }
 
 void SnowDeformation::UpdateShellTerrainWindow()
@@ -214,11 +242,17 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	auto& terrainShadows = globals::features::terrainShadows;
 	const std::string fillWorldspace = (terrainShadows.loaded && terrainShadows.IsHeightMapReady()) ? terrainShadows.cachedHeightmap->worldspace : std::string{};
 	bool fillChanged = lastFillWorldspace != fillWorldspace;
-	if (!originChanged && !fillChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
+	// A worldspace with no landscape of its own bakes nothing, so nothing
+	// would ever mark the window dirty and the previous worldspace's texels
+	// would stay resident.
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	bool worldspaceChanged = worldspace != shellWindowWorldspace;
+	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
 		return;
 
 	shellWindowCellX = desiredOriginX;
 	shellWindowCellY = desiredOriginY;
+	shellWindowWorldspace = worldspace;
 	shellDataDirty.store(false, std::memory_order_release);
 
 	shellUploadScratch.resize(size_t(kShellWindowDim) * kShellWindowDim * 4);
@@ -242,7 +276,11 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
 				if (key != rowKey) {
 					auto it = shellCells.find(key);
-					rowCell = it != shellCells.end() ? &it->second : nullptr;
+					// A cell baked in another worldspace is not this window's
+					// ground: city worldspaces reuse the coordinates of the
+					// terrain outside them, so an unfiltered hit drapes the
+					// countryside through the city at its own elevation.
+					rowCell = it != shellCells.end() && it->second.worldspaceID == worldspace ? &it->second : nullptr;
 					rowKey = key;
 				}
 

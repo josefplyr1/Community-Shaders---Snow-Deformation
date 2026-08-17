@@ -102,6 +102,10 @@ public:
 	{
 		std::array<float, 33 * 33> height;
 		std::array<std::array<uint8_t, 33 * 33>, kSnowClassCount> classWeights;
+		// City worldspaces reuse their Tamriel cell coordinates (WindhelmWorld
+		// spans the same 28-36 / 6-12 block as the terrain outside its gate),
+		// so the coordinate key alone matches cells from a worldspace we left.
+		uint32_t worldspaceID = 0;
 	};
 
 	/** @brief Cached stamp bones per actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). Feet stamp heel-to-toe prints; limbs are joint-to-joint segments (nearest matched ancestor to bone) that carve when inside the snow layer. */
@@ -568,6 +572,9 @@ public:
 
 	/** @brief Recenters and re-uploads the terrain data window when the camera crosses cells or new cells were baked. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
 	void UpdateShellTerrainWindow();
+
+	/** @brief Tracks the camera's worldspace and invalidates the world-anchored caches on a change. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
+	void UpdateActiveWorldspace();
 
 	// ---- Far fill: heightmap-sourced distant terrain ----
 
@@ -1048,10 +1055,14 @@ protected:
 	std::unordered_map<uintptr_t, uint8_t> snowMasks;
 	std::shared_mutex snowMaskMutex;
 
-	/** @brief Baked cells keyed by (cellX << 32) | cellY. */
+	/** @brief Baked cells keyed by (cellX << 32) | cellY; entries carry their worldspace, which the window rebuild must match. */
 	std::unordered_map<uint64_t, ShellCellData> shellCells;
 	std::shared_mutex shellCellMutex;
 	std::atomic<bool> shellDataDirty{ true };
+	/** @brief Form ID of the worldspace the camera is in; 0 until the first exterior. Interiors keep the last exterior's value. */
+	std::atomic<uint32_t> activeWorldspace{ 0 };
+	/** @brief Worldspace the current terrain window was built for. */
+	uint32_t shellWindowWorldspace = 0;
 	int shellWindowCellX = INT_MIN;
 	int shellWindowCellY = INT_MIN;
 	std::vector<float> shellUploadScratch;

@@ -331,6 +331,8 @@ void SnowDeformation::Prepass()
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
 
+	UpdateActiveWorldspace();
+
 	if (settings.EnableSnowDeformation && globals::state->inWorld)
 		UpdateShellTerrainWindow();
 
