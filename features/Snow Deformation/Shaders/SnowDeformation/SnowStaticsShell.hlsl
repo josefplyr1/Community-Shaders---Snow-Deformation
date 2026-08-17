@@ -218,7 +218,10 @@ static const float kShelterDust = 1.0;
 // geometric face normal, target screen width of the rim contour in pixels, and
 // the hard cap on how far that contour may travel inboard, as a fraction of
 // class depth.
-static const float kFacingLODMax = 0.75;
+// Ceiling set from the in-game tuning pass: past ~0.21 effective blend the
+// per-triangle quantization reads as jagged rock and visible facet seams, so
+// the slider spans 0-0.34 and its default sits just above the measured best.
+static const float kFacingLODMax = 0.34;
 static const float kRimBandPx = 1.2;
 static const float kRimBandMax = 0.25;
 
@@ -1494,8 +1497,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FIXED - widening that is what dithers into a translucent film. Capped,
 	// because the taper is all the range this field has: past it the facing
 	// LOD above is the only source of bare surface.
+	// Not scaled by SkinDistantBareness: that slider tunes the facing handover
+	// in the far field, and sharing it here silently drops the contour below a
+	// pixel (its whole point) at any setting that suits the far field.
 	float liftBand = 0.45 * liftEdge;
-	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * SkinDistantBareness * fwidth(input.Lift)), kRimBandMax * liftBase);
+	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * fwidth(input.Lift)), kRimBandMax * liftBase);
 	float liftCoverage = smoothstep(liftEdgeLOD - liftBand, liftEdgeLOD, input.Lift);
 	pixelCoverage *= liftCoverage;
 #	endif

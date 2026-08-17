@@ -246,8 +246,8 @@ public:
 		float RangeSkinsFadeM = 100.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
-		/** @brief Strength of the skin's coverage LOD: as a pixel grows past the edge taper's own width the facing test hands over to the true face normal and the rim contour is pushed inboard, so distant objects keep bare rock on steep faces instead of collapsing to white. 0 disables both terms. */
-		float SkinDistantBareness = 1.0f;
+		/** @brief Strength of the far-field facing handover: as a pixel grows past the edge taper's own width the coverage test hands over to the true face normal, so distant objects keep bare rock on steep faces instead of collapsing to white. Scales against kFacingLODMax; 0 disables it. The near-field rim-contour push is deliberately NOT on this dial (see the PS). */
+		float SkinDistantBareness = 0.6f;
 		/** @brief Distant snow line (world Z units): heightmap-sourced far terrain above this height gets snow coverage. */
 		float DistantSnowLineZ = 5000.0f;
 		/** @brief How far the snow line sinks (world units) toward the worldspace's north edge, so the northern coast is snowy at sea level. */
