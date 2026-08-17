@@ -246,6 +246,8 @@ public:
 		float RangeSkinsFadeM = 100.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
+		/** @brief Strength of the skin's coverage LOD: as a pixel grows past the edge taper's own width the facing test hands over to the true face normal and the rim contour is pushed inboard, so distant objects keep bare rock on steep faces instead of collapsing to white. 0 disables both terms. */
+		float SkinDistantBareness = 1.0f;
 		/** @brief Distant snow line (world Z units): heightmap-sourced far terrain above this height gets snow coverage. */
 		float DistantSnowLineZ = 5000.0f;
 		/** @brief How far the snow line sinks (world units) toward the worldspace's north edge, so the northern coast is snowy at sea level. */
@@ -814,6 +816,9 @@ public:
 		float MoundSteepness;
 		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
 		float ObjectTrenches;
+		/** @brief Strength of the skin's coverage LOD terms (facing handover to the geometric face normal, rim-contour push); 0 reproduces the pre-LOD gates exactly. */
+		float SkinDistantBareness;
+		float padStatics[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

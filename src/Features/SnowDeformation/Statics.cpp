@@ -1277,6 +1277,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+		scb.SkinDistantBareness = settings.SkinDistantBareness;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);

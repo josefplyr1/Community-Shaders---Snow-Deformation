@@ -50,6 +50,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RangeSkinsM,
 	RangeSkinsFadeM,
 	RangeSkinsGeometryM,
+	SkinDistantBareness,
 	ObjectTrenches,
 	DistantSnowLineZ,
 	DistantSnowNorthDrop,

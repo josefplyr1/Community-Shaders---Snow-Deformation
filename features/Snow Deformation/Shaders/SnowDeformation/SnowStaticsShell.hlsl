@@ -162,6 +162,11 @@ cbuffer StaticCB : register(b1)
 	// >0.5: trenches are carved on this draw. Roads always carve; other
 	// objects are gated by the setting until the object trench work lands.
 	float ObjectTrenches;
+
+	// Strength of the coverage LOD terms (facing handover, rim contour push).
+	// 0 reproduces the pre-LOD gates exactly.
+	float SkinDistantBareness;
+	float3 padStatics;
 }
 
 Texture2D<float> DeformationMap : register(t1);
@@ -200,6 +205,14 @@ static const float kShelterFar = 32.0;
 // roofs to a dusting rather than killing coverage; matching it stops the
 // object's own projected snow being exposed where the skin steps aside.
 static const float kShelterDust = 1.0;
+
+// Coverage LOD (see the facing-LOD block in the PS). Blend ceiling toward the
+// geometric face normal, target screen width of the rim contour in pixels, and
+// the hard cap on how far that contour may travel inboard, as a fraction of
+// class depth.
+static const float kFacingLODMax = 0.75;
+static const float kRimBandPx = 1.2;
+static const float kRimBandMax = 0.25;
 
 // Bilinear deformation sample from grid-local XY (world - GridOrigin);
 // matches the terrain shell's window math. Returns 0 outside the window.
@@ -1390,7 +1403,35 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// rounded snow edges (z 0.4+) stay interpolation-shaped and per-face
 	// blockiness cannot return. The PATCH is exempt: its trench walls are
 	// legitimately steep real geometry.
-	float3 geoFacing = normalize(cross(ddy(input.WorldPos), ddx(input.WorldPos)));
+	float3 dPosX = ddx(input.WorldPos);
+	float3 dPosY = ddy(input.WorldPos);
+	float3 geoFacing = normalize(cross(dPosY, dPosX));
+	// World units spanned by this pixel. Every LOD term below keys off it
+	// rather than off camera distance, so they track resolution and FOV.
+	float footprint = length(abs(dPosX) + abs(dPosY));
+	float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+
+	// Facing LOD. The interpolated normal over-reports up-ness on low-poly
+	// meshes (one top vertex's up-ness smeared down a whole face), which is
+	// why a distant rock reads as solid white: every flank passes the gate
+	// below. geoFacing is the true face orientation. It was rejected for near
+	// coverage because it is constant per triangle and quantizes rims into
+	// sawtooth, but that is a NEAR-field artifact: once a pixel spans the
+	// taper the facets are sub-pixel, and the face normal is the only slope
+	// signal left. Handover scales with the taper's own world length
+	// (coneSeed / steepness), so it follows the depth and repose sliders.
+	// The blend is capped short of 1: interpolation always contributes, which
+	// keeps the facet contours soft through the transition.
+	float coneRamp = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) / clamp(MoundSteepness, 0.5, 3.0);
+	float faceLOD = kFacingLODMax * SkinDistantBareness * smoothstep(0.5, 2.0, footprint / max(coneRamp, 1.0));
+	[branch] if (faceLOD > 0.001)
+	{
+		// cross() handedness is not reliable here (the trench gate below takes
+		// abs for the same reason); align to the shading normal before reading z.
+		float geoUp = geoFacing.z * (dot(geoFacing, normalWS) < 0.0 ? -1.0 : 1.0);
+		pixelCoverage = smoothstep(0.4, 0.7, lerp(input.Coverage, geoUp, faceLOD));
+	}
+
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal.
 	// geoFacing is a screen-derivative of world position and therefore
 	// constant across a triangle, so thresholding it quantizes coverage per
@@ -1403,9 +1444,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// that used to sheet down house walls; and a clean threshold on a linearly
 	// interpolated field traces the mesh's own polygons, so the contour comes
 	// out faceted. The jitter breaks that contour without widening the band.
-	float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
 	float liftEdge = 0.06 * liftBase * (0.6 + 0.8 * CoverageNoise(worldXY * 3.0));
-	float liftCoverage = smoothstep(liftEdge * 0.55, liftEdge, input.Lift);
+	// Rim contour LOD. The band is a contour of an interpolated field, so its
+	// screen width is liftEdge / fwidth(Lift): it thins below a pixel and
+	// averages into the blanket while the taper still has run left. Push the
+	// contour inboard to hold roughly a pixel, keeping the partial-alpha width
+	// FIXED - widening that is what dithers into a translucent film. Capped,
+	// because the taper is all the range this field has: past it the facing
+	// LOD above is the only source of bare surface.
+	float liftBand = 0.45 * liftEdge;
+	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * SkinDistantBareness * fwidth(input.Lift)), kRimBandMax * liftBase);
+	float liftCoverage = smoothstep(liftEdgeLOD - liftBand, liftEdgeLOD, input.Lift);
 	pixelCoverage *= liftCoverage;
 #	endif
 	// Applied after every steepness multiply; the rim wall is exempt from all

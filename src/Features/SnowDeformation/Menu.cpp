@@ -85,6 +85,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("range_skins_geometry"), "Object Snow Geometry Range"), &settings.RangeSkinsGeometryM, 10.0f, 200.0f, "%.0f m");
 		if (auto _ttRkg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before Distant Snow Blend starts dissolving it, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
+		ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
+		if (auto _ttSdb = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant objects keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. 0 keeps the old behaviour."));
 		ImGui::TreePop();
 	}
 
