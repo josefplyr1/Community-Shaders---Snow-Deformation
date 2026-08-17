@@ -224,6 +224,11 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	// when this hook runs and cannot be used for placement.
 	float cellBaseZ = (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
 
+	// Filler-plane detection, resolved after the vertex loop.
+	bool painted = false;
+	float minHeight = FLT_MAX;
+	float maxHeight = -FLT_MAX;
+
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
 		// Index-based quad layout: 0=SW, 1=SE, 2=NW, 3=NE, vertices x-fastest.
 		uint32_t quadX = quadI & 1;
@@ -242,6 +247,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			uint32_t cellIdx = cellY * 33 + cellX;
 
 			data.height[cellIdx] = loadedData->heights[quadI][vertexI] + cellBaseZ;
+			minHeight = std::min(minHeight, data.height[cellIdx]);
+			maxHeight = std::max(maxHeight, data.height[cellIdx]);
 
 			// Gather this vertex's weight per distinct texture: at most the
 			// base plus 6 layers, and layers of the same texture merge. An
@@ -272,6 +279,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 				layerSum += weight;
 				addWeight(layerTexture[layerI], weight);
 			}
+			painted = painted || layerSum > 0.0f;
 			addWeight(baseTexture, std::max(0.0f, 1.0f - layerSum));
 
 			// Keep the heaviest kShellVertexLayers: a vertex painted with more
@@ -288,6 +296,22 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 				data.layerWeight[cellIdx][slot] = (uint8_t)std::clamp(vertexWeight[slot] * 255.0f + 0.5f, 0.0f, 255.0f);
 			}
 		}
+	}
+
+	// Exterior cells with no LAND record still get a TESObjectLAND: the engine
+	// fills them with a dead-flat, unpainted plane at the worldspace's default
+	// land height, which in a city worldspace sits a thousand units under the
+	// built city (Windhelm bakes at -13240 with the ground at -12300). Baking
+	// it hands the shell a full snow surface nobody can ever see. Real terrain
+	// carries relief or painted layers; this carries neither.
+	if (!painted && maxHeight - minHeight < 1.0f) {
+		const std::unique_lock lock(shellCellMutex);
+		uint64_t fillerKey = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+		if (auto it = shellCells.find(fillerKey); it != shellCells.end() && it->second.worldspaceID == data.worldspaceID) {
+			shellCells.erase(it);
+			shellDataDirty.store(true, std::memory_order_release);
+		}
+		return;
 	}
 
 	uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
