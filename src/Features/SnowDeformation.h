@@ -332,8 +332,13 @@ public:
 	Texture2D* deformationTextures[2] = { nullptr, nullptr };
 	uint currentTexture = 0;
 
+	/** @brief Baked berm field: the 17-tap disc average of the deformation map, rebuilt from the current map every frame so the shells read it with one bilinear tap instead of 68 loads per call. */
+	Texture2D* bermFieldTexture = nullptr;
+
 	/** @brief SRV of the most recently written deformation map, for shader sampling and debug UI. */
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[currentTexture]->srv.get(); }
+	/** @brief SRV of the baked berm field; null before SetupResources. */
+	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
 	/** @brief World XY of the corner of texel (0,0) of the current deformation window. */
 	float2 GetWindowOrigin() const { return windowOrigin; }
 
@@ -352,6 +357,9 @@ public:
 	/** @brief Returns the deformation update compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationUpdateCS();
 	ID3D11ComputeShader* deformationUpdateCS = nullptr;
+	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
+	ID3D11ComputeShader* GetBermFieldCS();
+	ID3D11ComputeShader* bermFieldCS = nullptr;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */
@@ -467,10 +475,14 @@ public:
 		uint ShellLODDebug;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;
-		float padObjDetail;
+		/** @brief >0.5: the shells read the baked berm field (t14) instead of recomputing its 17 taps per call. */
+		float BermBakeActive;
 
 		/** @brief Loaded-cell boundary square (minX, minY, maxX, maxY): the shell ends here and the horizon recolor takes over. */
 		float4 SeamBounds;
+
+		/** @brief Wide exclusion field window: xy = world centre, z = 1/half extent, w > 0.5 when the field was baked this frame. */
+		float4 ExclusionFieldWindow;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -529,6 +541,12 @@ public:
 	bool shellDataDebug = false;
 	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
 	bool shellExclusionDebug = false;
+
+	/** @brief A/B measurement: gates the wide exclusion field off, returning clearings to the near mask's ~57 m reach. Runtime-only. */
+	bool shellDistantExclusionsDisabled = false;
+
+	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
+	bool shellBermBakeDisabled = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
@@ -1044,7 +1062,42 @@ public:
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 
-	/** @brief Layout must match DoorCB in HeightMapProcessCS.hlsl. */
+	// ---- Wide exclusion field: clearings at any range ----
+
+	/** @brief The near mask (ObjectBottoms) stops at the object height window, ~57 m, because it also carries the SHELTER term, which needs a top-down render of real geometry. Clearings are analytic - position, radius, type - so they are baked separately over a window that reaches the shell's own extent. */
+	static constexpr uint kExclusionFieldDim = 1024;
+	/** @brief Half extent in world units. Sized to cover uGridsToLoad=7 plus the shell's seam overlap; references only exist inside loaded cells, so a wider window would find nothing to bake. 32 units/texel at kExclusionFieldDim, against a 300-unit campfire bowl. */
+	static constexpr float kExclusionFieldHalfExtent = 16384.0f;
+
+	Texture2D* exclusionFieldTexture = nullptr;
+	/** @brief Texel-snapped window centre, so the baked edges do not crawl as the camera moves. */
+	float2 exclusionFieldCenter = { 0.0f, 0.0f };
+	/** @brief Set once the field has been baked at least once this session; until then the shells fall back to the near mask alone. */
+	bool exclusionFieldValid = false;
+
+	/** @brief Layout must match ExclusionFieldCB in ExclusionFieldCS.hlsl. */
+	struct alignas(16) ExclusionFieldCB
+	{
+		float2 FieldCenter;
+		float FieldHalfExtent;
+		float FieldTexelSize;
+
+		float2 TerrainWindowOrigin;
+		float TerrainTexelSize;
+		uint TerrainDim;
+	};
+	STATIC_ASSERT_ALIGNAS_16(ExclusionFieldCB);
+	ConstantBuffer* exclusionFieldCB = nullptr;
+
+	/** @brief Returns the exclusion field bake compute shader, compiling it on first use. */
+	ID3D11ComputeShader* GetExclusionFieldCS();
+	ID3D11ComputeShader* exclusionFieldCS = nullptr;
+	/** @brief Bakes the wide exclusion field from the gathered exclusion list. Implemented in SnowDeformation/Statics.cpp. */
+	void RenderExclusionField();
+	/** @brief SRV of the wide exclusion field; null before SetupResources. */
+	ID3D11ShaderResourceView* GetExclusionFieldSRV() const { return exclusionFieldTexture ? exclusionFieldTexture->srv.get() : nullptr; }
+
+	/** @brief Layout must match ExclusionCB in SnowExclusions.hlsli. */
 	struct alignas(16) ExclusionsCB
 	{
 		float4 PosRadius[kMaxExclusions];   ///< xyz = position, w = radius

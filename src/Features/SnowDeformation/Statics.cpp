@@ -486,7 +486,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		std::vector<float4> stationFlameGuards;
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto tes = RE::TES::GetSingleton()) {
-				tes->ForEachReferenceInRange(player, kHeightMapHalfExtent * 1.5f,
+				// Reaches the WIDE field's window, not just the near mask's: a
+				// campfire only shows at 200 m if it was gathered at 200 m.
+				// References exist only inside loaded cells, so this is bounded by
+				// uGridsToLoad rather than by the radius.
+				tes->ForEachReferenceInRange(player, kExclusionFieldHalfExtent + 512.0f,
 					[&](RE::TESObjectREFR* a_ref) {
 						// Collect past the CB cap: the nearest-first sort below
 						// picks the winners, so a far sconce can never evict a
@@ -707,6 +711,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		statExclusionCount = exclusionCount;
 		doorsCB->Update(exclusionData);
 	}
+
+	// Rebaked every frame: the window follows the camera, so a cadence-gated
+	// bake would drag the clearings behind it.
+	RenderExclusionField();
 
 	uint previous = heightCurrent;
 	heightCurrent ^= 1;
@@ -1383,4 +1391,58 @@ void SnowDeformation::DrawCapturedStatics()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);
 	context->PSSetConstantBuffers(1, 1, &nullCB);
+}
+
+void SnowDeformation::RenderExclusionField()
+{
+	exclusionFieldValid = false;
+	if (!exclusionFieldTexture || !exclusionFieldCB || !shellTerrainTexture)
+		return;
+	auto* cs = GetExclusionFieldCS();
+	if (!cs)
+		return;
+
+	auto context = globals::d3d::context;
+	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+
+	// Snap the window to whole texels so a texel keeps covering the same patch
+	// of world as the camera moves; an unsnapped window resamples the bowls
+	// every frame and their noisy rims crawl.
+	constexpr float texelSize = kExclusionFieldHalfExtent * 2.0f / kExclusionFieldDim;
+	exclusionFieldCenter = {
+		std::floor(eye.x / texelSize) * texelSize,
+		std::floor(eye.y / texelSize) * texelSize
+	};
+
+	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	ExclusionFieldCB cbData{};
+	cbData.FieldCenter = exclusionFieldCenter;
+	cbData.FieldHalfExtent = kExclusionFieldHalfExtent;
+	cbData.FieldTexelSize = texelSize;
+	cbData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
+	cbData.TerrainTexelSize = kShellVertexSpacing;
+	cbData.TerrainDim = kShellWindowDim;
+	exclusionFieldCB->Update(cbData);
+
+	ID3D11Buffer* cbs[2] = { exclusionFieldCB->CB(), doorsCB->CB() };
+	context->CSSetConstantBuffers(0, 2, cbs);
+	ID3D11ShaderResourceView* srv = shellTerrainTexture->srv.get();
+	context->CSSetShaderResources(0, 1, &srv);
+	ID3D11UnorderedAccessView* uav = exclusionFieldTexture->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(cs, nullptr, 0);
+
+	globals::profiler->BeginPass("SnowDeformation::ExclusionField");
+	context->Dispatch(kExclusionFieldDim / 16, kExclusionFieldDim / 16, 1);
+	globals::profiler->EndPass();
+
+	ID3D11Buffer* nullCBs[2] = { nullptr, nullptr };
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetConstantBuffers(0, 2, nullCBs);
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	exclusionFieldValid = true;
 }

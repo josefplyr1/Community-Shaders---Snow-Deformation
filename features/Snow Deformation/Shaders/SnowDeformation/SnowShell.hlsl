@@ -138,12 +138,18 @@ cbuffer ShellCB : register(b0)
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
 	// data (fall back to the warped-span fade alone).
 	float SeamRampInv;
-	float padObjDetail;
+	// >0.5: read the berm field from the bake at t14 instead of recomputing
+	// its 17 taps per call.
+	float BermBakeActive;
 
 	// Loaded-cell boundary square (minX, minY, maxX, maxY): full terrain
 	// inside, LOD terrain outside. The shell ends here and hands off to the
 	// horizon recolor, which wears the same snow material.
 	float4 SeamBounds;
+
+	// Wide exclusion field window: xy = world centre, z = 1/half extent,
+	// w > 0.5 when the field was baked this frame.
+	float4 ExclusionFieldWindow;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -170,6 +176,13 @@ Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
 // Displacement companion (_p): parallax occlusion relief.
 Texture2D<float> SnowHeightMap : register(t8);
+// Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
+// map, at the map's own resolution and addressing.
+Texture2D<float> BermFieldMap : register(t14);
+// Wide exclusion field (ExclusionFieldCS): x = door suppression, y = melt, over
+// a window that reaches the shell's own extent. The near mask at t5 still owns
+// the SHELTER term, which needs geometry and so cannot travel this far.
+Texture2D<float2> ExclusionFieldMap : register(t15);
 SamplerState SnowSampler : register(s0);
 
 static const float kSnowUVTile = 256.0;
@@ -381,6 +394,35 @@ float SampleObjectHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+// Wide exclusion field, bilinear. Returns 0 outside the window, so the near
+// mask alone governs there (and nothing is claimed where nothing was baked).
+float2 SampleExclusionField(float2 worldXY)
+{
+	float2 result = 0.0;
+	[branch] if (ExclusionFieldWindow.w > 0.5)
+	{
+		float2 local = (worldXY - ExclusionFieldWindow.xy) * ExclusionFieldWindow.z;
+		[branch] if (all(abs(local) < 0.995))
+		{
+			float2 dims;
+			ExclusionFieldMap.GetDimensions(dims.x, dims.y);
+			float2 uv = local * 0.5 + 0.5;
+			float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+			int2 t0 = (int2)t;
+			float2 f = t - t0;
+			int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+			float2 s00 = ExclusionFieldMap.Load(int3(t0.x, t0.y, 0));
+			float2 s10 = ExclusionFieldMap.Load(int3(t1.x, t0.y, 0));
+			float2 s01 = ExclusionFieldMap.Load(int3(t0.x, t1.y, 0));
+			float2 s11 = ExclusionFieldMap.Load(int3(t1.x, t1.y, 0));
+
+			result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		}
+	}
+	return result;
+}
+
 float2 SampleObjectBottom(float2 worldXY)
 {
 	float2 dims;
@@ -405,6 +447,18 @@ float2 SampleObjectBottom(float2 worldXY)
 	float2 s11 = ObjectBottoms.Load(int3(t1.x, t1.y, 0));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Near mask unioned with the wide field. The near one wins where it has data -
+// it alone carries shelter (roofs, tents, walkways) and it resolves clearings
+// at four times the field's resolution - and the field fills in beyond its
+// reach, which is where every clearing used to vanish.
+float2 SampleExclusionMask(float2 worldXY)
+{
+	float2 nearMask = 0.0;
+	[branch] if (ObjectLiftCap > 0.0)
+		nearMask = SampleObjectBottom(worldXY);
+	return max(nearMask, SampleExclusionField(worldXY));
 }
 
 // The object-layer depth cap: the skin depth (max of 4 texels; the raster is
@@ -507,12 +561,48 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
-float BermField(float2 gridLocal)
+float BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDeformationFast(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDeformationFast(gridLocal + kBermTaps[i]);
 	return saturate(b / 17.0);
+}
+
+// One bilinear tap of the baked field, addressed exactly like the deformation
+// map it was baked from (BermFieldCS writes texel-for-texel).
+float BermFieldBaked(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	BermFieldMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = BermFieldMap.Load(int3(t0.x, t0.y, 0));
+	float s10 = BermFieldMap.Load(int3(t1.x, t0.y, 0));
+	float s01 = BermFieldMap.Load(int3(t0.x, t1.y, 0));
+	float s11 = BermFieldMap.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// The berm field dominated the shell's pixel cost at 68 loads a call, and the
+// normal alone needs four. BermBakeActive routes to the bake; the tapped path
+// stays compiled so the two can be A/B'd from the debug menu.
+float BermField(float2 gridLocal)
+{
+	float field = 0.0;
+	[branch] if (BermBakeActive > 0.5)
+		field = BermFieldBaked(gridLocal);
+	else
+		field = BermFieldTapped(gridLocal);
+	return field;
 }
 
 // ---- Trench churn: chunky broken snow in disturbed zones ----
@@ -681,12 +771,17 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				coverage = max(coverage, liftForce);
 				rampDepth = max(rampDepth, liftForce * 6.0);
 			}
-			// The mask carries two independent channels. x = door suppression,
-			// smooth 0-1, so doorstep clearings fade at their edges instead of
-			// cutting. y = melt fraction: depth thins toward kFireMeltFloor
-			// (coverage untouched), so melted ground keeps a thin snow floor
-			// instead of fading to bare ground.
-			float2 shelterMask = SampleObjectBottom(worldXY);
+		}
+
+		// The mask carries two independent channels. x = door suppression,
+		// smooth 0-1, so doorstep clearings fade at their edges instead of
+		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
+		// (coverage untouched), so melted ground keeps a thin snow floor
+		// instead of fading to bare ground. Outside the ObjectLiftCap gate: the
+		// wide field needs no object height data, so clearings survive even
+		// where the near window has nothing to say.
+		{
+			float2 shelterMask = SampleExclusionMask(GridOrigin + gridLocal);
 			coverage *= saturate(1.0 - shelterMask.x);
 			float melt = saturate(shelterMask.y);
 			rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
@@ -872,32 +967,51 @@ static const float kTessMax = 8.0;
 #endif
 
 #ifdef HULLSHADER
+// Deformed edges stretch the detail reach by this much (see EdgeTessFactor).
+static const float kTessReachBoost = 3.0;
+// Past the BOOSTED reach the factor clamps to 1 for every deformation value,
+// so the map taps cannot change the answer.
+static const float kTessCutoff = kTessNear * kTessReachBoost;
+
 // Edge factor from the edge midpoint's camera distance, computed from the
 // shared corners only, so both patches on an edge agree (crack-free).
-// Trench-aware: edges carrying deformation get up to 3x the detail reach,
-// so trench walls stay smooth well past the base band while untouched
-// snowfields keep the cheap factors; the boost reads only edge-derived
-// positions, preserving the crack-free property.
+// Trench-aware: edges carrying deformation get up to kTessReachBoost times the
+// detail reach, so trench walls stay smooth well past the base band while
+// untouched snowfields keep the cheap factors; the boost reads only edge-
+// derived positions, preserving the crack-free property.
 float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 {
 	float2 midLocal = 0.5 * (gridLocalA + gridLocalB);
 	float2 midAbs = GridOrigin + midLocal;
 	float dist = length(midAbs - ShellCameraPosAdjust.xy);
-	float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
-	float reach = kTessNear * lerp(1.0, 3.0, smoothstep(0.02, 0.25, deform));
+	// Past the cutoff even the fully boosted reach clamps to 1, so the taps -
+	// three bicubics, sixteen loads each, the bulk of this shader - cannot
+	// change the answer and are skipped.
+	float reach = kTessNear;
+	[branch] if (dist < kTessCutoff)
+	{
+		float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
+		reach = kTessNear * lerp(1.0, kTessReachBoost, smoothstep(0.02, 0.25, deform));
+	}
 	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 }
 
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 {
-	TessFactors f;
 	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
 	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
-	f.Edge[0] = EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal);
-	f.Edge[1] = EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal);
-	f.Edge[2] = EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal);
-	f.Edge[3] = EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal);
-	float inner = max(max(f.Edge[0], f.Edge[1]), max(f.Edge[2], f.Edge[3]));
+	float4 edges = float4(
+		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal),
+		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal),
+		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal),
+		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal));
+	float inner = max(max(edges.x, edges.y), max(edges.z, edges.w));
+
+	TessFactors f;
+	f.Edge[0] = edges.x;
+	f.Edge[1] = edges.y;
+	f.Edge[2] = edges.z;
+	f.Edge[3] = edges.w;
 	f.Inside[0] = inner;
 	f.Inside[1] = inner;
 	return f;
@@ -1130,11 +1244,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
 		[flatten] if (fieldHeight > -50000.0)
 			pixelLift = fieldHeight - pixelTerrain.x;
-		// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above
-		// it); without an override the proximity fade dithers them into
-		// translucency like any other near-coincident surface.
-		pixelMelt = saturate(SampleObjectBottom(GridOrigin + gridLocal).y);
 	}
+	// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above it);
+	// without an override the proximity fade dithers them into translucency
+	// like any other near-coincident surface.
+	pixelMelt = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
@@ -1352,9 +1466,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// sun. Same rule for MELT bowls (fires, workspace clearings):
 			// without the melt, every bowl-floor pixel reads as ringed by
 			// full-height snow and the whole bowl darkens.
-			[branch] if (ObjectLiftCap > 0.0)
 			{
-				float sampleMelt = saturate(SampleObjectBottom(GridOrigin + sampleLocal).y);
+				float sampleMelt = saturate(SampleExclusionMask(GridOrigin + sampleLocal).y);
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
@@ -1454,7 +1567,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// G = melt fraction (fires, workspaces, shelter), B = door
 		// suppression. Black = untouched by any of them.
 		float2 dbgWorldXY = GridOrigin + gridLocal;
-		float2 dbgMask = SampleObjectBottom(dbgWorldXY);
+		float2 dbgMask = SampleExclusionMask(dbgWorldXY);
 		float dbgField = SampleObjectHeight(dbgWorldXY);
 		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
 		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);

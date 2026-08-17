@@ -95,6 +95,14 @@ void SnowDeformation::CreateDeformationTextures()
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
 	}
+
+	// Berm field: a bake of the 17-tap disc average the shells used to run per
+	// pixel. Same dimensions and format as the map it is derived from, and no
+	// ping-pong - it is rebuilt from scratch from the current map each frame.
+	delete bermFieldTexture;
+	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
+	bermFieldTexture->CreateSRV(srvDesc);
+	bermFieldTexture->CreateUAV(uavDesc);
 }
 
 void SnowDeformation::SetupResources()
@@ -102,6 +110,35 @@ void SnowDeformation::SetupResources()
 	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
 
 	CreateDeformationTextures();
+
+	{
+		// Wide exclusion field. Two 8-bit channels (suppression, melt) are
+		// plenty for values the shells only ever smoothstep.
+		D3D11_TEXTURE2D_DESC fieldDesc = {
+			.Width = kExclusionFieldDim,
+			.Height = kExclusionFieldDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R8G8_UNORM,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC fieldSrvDesc = {
+			.Format = fieldDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC fieldUavDesc = {
+			.Format = fieldDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		exclusionFieldTexture = new Texture2D(fieldDesc, "SnowDeformation::ExclusionField");
+		exclusionFieldTexture->CreateSRV(fieldSrvDesc);
+		exclusionFieldTexture->CreateUAV(fieldUavDesc);
+		exclusionFieldCB = new ConstantBuffer(ConstantBufferDesc<ExclusionFieldCB>(), "SnowDeformation::ExclusionFieldCB");
+	}
 
 	{
 		D3D11_TEXTURE2D_DESC terrainDesc = {
@@ -404,6 +441,27 @@ void SnowDeformation::Prepass()
 		globals::profiler->EndPass();
 	}
 
+	// Berm bake, reading the map the pass above just wrote. Skipped while the
+	// A/B toggle holds the shells on their per-pixel path, so the comparison
+	// measures the whole trade and not just the sampling half of it.
+	if (!shellBermBakeDisabled && bermFieldTexture) {
+		if (auto* bermCS = GetBermFieldCS()) {
+			ID3D11ShaderResourceView* bermSrvs[] = { deformationTextures[currentTexture]->srv.get() };
+			ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
+			// The freshly written map is still bound as a UAV; a texture cannot
+			// be read and written at once, so drop that binding first.
+			ID3D11UnorderedAccessView* nullUav = nullptr;
+			context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+			context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
+
+			context->CSSetShader(bermCS, nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::BermField");
+			context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+			globals::profiler->EndPass();
+		}
+	}
+
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	ID3D11Buffer* nullBuffer = nullptr;
@@ -420,6 +478,24 @@ void SnowDeformation::Prepass()
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 }
 
+ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()
+{
+	if (!exclusionFieldCS) {
+		logger::debug("Compiling ExclusionFieldCS");
+		exclusionFieldCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", {}, "cs_5_0"));
+	}
+	return exclusionFieldCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetBermFieldCS()
+{
+	if (!bermFieldCS) {
+		logger::debug("Compiling BermFieldCS");
+		bermFieldCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0"));
+	}
+	return bermFieldCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetDeformationUpdateCS()
 {
 	if (!deformationUpdateCS) {
@@ -434,6 +510,12 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationUpdateCS)
 		deformationUpdateCS->Release();
 	deformationUpdateCS = nullptr;
+	if (bermFieldCS)
+		bermFieldCS->Release();
+	bermFieldCS = nullptr;
+	if (exclusionFieldCS)
+		exclusionFieldCS->Release();
+	exclusionFieldCS = nullptr;
 	if (shellVS)
 		shellVS->Release();
 	shellVS = nullptr;

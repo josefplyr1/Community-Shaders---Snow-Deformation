@@ -304,6 +304,14 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPlane = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 
+		ImGui::Checkbox(T(TKEY("shell_distant_exclusions_disabled"), "Shell: Disable Distant Clearings"), &shellDistantExclusionsDisabled);
+		if (auto _ttExclusionField = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_distant_exclusions_disabled_tooltip"), "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render."));
+
+		ImGui::Checkbox(T(TKEY("shell_berm_bake_disabled"), "Shell: Disable Berm Bake"), &shellBermBakeDisabled);
+		if (auto _ttBerm = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
+
 		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));

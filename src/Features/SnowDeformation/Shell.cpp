@@ -383,6 +383,19 @@ void SnowDeformation::DrawShell()
 	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
 	cbData.TrenchFloorFade = std::clamp(settings.TrenchFloorFade, 0.0f, 1.0f);
+	// The bake is only usable once its texture exists AND Prepass has filled it
+	// this frame; the A/B toggle suppresses both together.
+	cbData.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	// Wide exclusion field window: filled provisionally here and RE-UPLOADED
+	// below, after the height pass has rebaked the field and moved its centre.
+	// Sampling this frame's texture through last frame's centre offsets the
+	// whole field by a texel whenever the camera advances one, which reads as
+	// clearing depth (and the berm riding on it) twitching while the camera
+	// moves and settling when it stops. w gates the sampler off until the bake
+	// has actually run.
+	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
+		1.0f / kExclusionFieldHalfExtent,
+		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 
 	// Point lights: LLF's clustered visible-light list. The cluster buffers
 	// are only coherent when LLF ran this frame (CORE, but boot-disableable).
@@ -436,6 +449,9 @@ void SnowDeformation::DrawShell()
 	// the current center. (Any CPU value consumed by both a constant buffer
 	// and a same-frame-scrolled texture must be uploaded after the scroll.)
 	cbData.ObjectHeightCenter = heightWindowCenter;
+	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
+		1.0f / kExclusionFieldHalfExtent,
+		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the
@@ -503,6 +519,17 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 	context->VSSetShaderResources(11, 2, objectCapSRVs);
 	context->PSSetShaderResources(11, 2, objectCapSRVs);
+	// Baked berm field (t14). The berm is read by the surface evaluation
+	// (VS/DS) and by the normal block (PS), so every stage that can run
+	// ShellSurfaceZ or shade needs it.
+	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
+	context->VSSetShaderResources(14, 1, &bermSRV);
+	context->PSSetShaderResources(14, 1, &bermSRV);
+	// Wide exclusion field (t15): read by the surface evaluation and by the
+	// pixel-side melt overrides, so the same stages as the berm.
+	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
+	context->VSSetShaderResources(15, 1, &exclusionSRV);
+	context->PSSetShaderResources(15, 1, &exclusionSRV);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
 	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {
@@ -591,6 +618,8 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
 		context->DSSetShaderResources(11, 2, objectCapSRVs);
+		context->DSSetShaderResources(14, 1, &bermSRV);
+		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
 		context->Draw(kShellGridDim * kShellGridDim * 4, 0);
@@ -651,9 +680,9 @@ void SnowDeformation::DrawShell()
 	// tessellation is unavailable, and the deformation map is UAV-written
 	// next Prepass so it must not linger on a DS slot.
 	{
-		ID3D11ShaderResourceView* nullDSSRVs[13] = {};
-		context->DSSetShaderResources(0, 13, nullDSSRVs);
-		context->HSSetShaderResources(0, 13, nullDSSRVs);
+		ID3D11ShaderResourceView* nullDSSRVs[16] = {};
+		context->DSSetShaderResources(0, 16, nullDSSRVs);
+		context->HSSetShaderResources(0, 16, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
@@ -665,9 +694,9 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(0, 1, &nullCB);
 	context->PSSetConstantBuffers(0, 1, &nullCB);
-	ID3D11ShaderResourceView* nullSRVs[13] = {};
-	context->VSSetShaderResources(0, 13, nullSRVs);
-	context->PSSetShaderResources(0, 13, nullSRVs);
+	ID3D11ShaderResourceView* nullSRVs[16] = {};
+	context->VSSetShaderResources(0, 16, nullSRVs);
+	context->PSSetShaderResources(0, 16, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
 	// D3D silently drops the binding with warning spam. t20 (glint noise) and
@@ -798,6 +827,11 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(0, 6, csSRVs);
 			ID3D11ShaderResourceView* csCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 			context->CSSetShaderResources(11, 2, csCapSRVs);
+			// ShellSurfaceZ's berm term reads the bake at t14.
+			ID3D11ShaderResourceView* csBermSRV = GetBermFieldSRV();
+			context->CSSetShaderResources(14, 1, &csBermSRV);
+			ID3D11ShaderResourceView* csExclusionSRV = GetExclusionFieldSRV();
+			context->CSSetShaderResources(15, 1, &csExclusionSRV);
 			ID3D11UnorderedAccessView* probeUAV = lodProbeUAV.get();
 			context->CSSetUnorderedAccessViews(0, 1, &probeUAV, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
@@ -810,6 +844,8 @@ void SnowDeformation::RunLODProbePass()
 			ID3D11ShaderResourceView* nullSRVs[6] = {};
 			context->CSSetShaderResources(0, 6, nullSRVs);
 			context->CSSetShaderResources(11, 2, nullSRVs);
+			context->CSSetShaderResources(14, 1, nullSRVs);
+			context->CSSetShaderResources(15, 1, nullSRVs);
 			ID3D11Buffer* nullCB = nullptr;
 			context->CSSetConstantBuffers(0, 1, &nullCB);
 			context->CSSetShader(nullptr, nullptr, 0);

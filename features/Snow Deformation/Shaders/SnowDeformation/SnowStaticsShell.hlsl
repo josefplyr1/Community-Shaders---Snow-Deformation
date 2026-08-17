@@ -126,7 +126,12 @@ cbuffer ShellCB : register(b0)
 	float ObjCrispScaleV;
 
 	float ObjCrispStrengthV;
-	float3 padObjDetail;
+	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
+	uint ShellLODDebug;
+	float SeamRampInv;
+	// >0.5: read the berm field from the bake at t14 instead of recomputing
+	// its 17 taps per call.
+	float BermBakeActive;
 }
 
 cbuffer StaticCB : register(b1)
@@ -170,6 +175,9 @@ cbuffer StaticCB : register(b1)
 }
 
 Texture2D<float> DeformationMap : register(t1);
+// Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
+// map, at the map's own resolution and addressing.
+Texture2D<float> BermFieldMap : register(t14);
 
 // The domain shader samples the displacement companion for tessellated
 // relief, so the material block is visible to it as well as the PS.
@@ -251,12 +259,46 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
-float BermField(float2 gridLocal)
+float BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDeformation(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDeformation(gridLocal + kBermTaps[i]);
 	return saturate(b / 17.0);
+}
+
+// One bilinear tap of the bake (BermFieldCS), which stores the average above
+// texel-for-texel over the deformation map. The PS calls the berm five times,
+// so this is 340 loads a pixel replaced by five.
+float BermFieldBaked(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	BermFieldMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = BermFieldMap.Load(int3(t0.x, t0.y, 0));
+	float s10 = BermFieldMap.Load(int3(t1.x, t0.y, 0));
+	float s01 = BermFieldMap.Load(int3(t0.x, t1.y, 0));
+	float s11 = BermFieldMap.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float BermField(float2 gridLocal)
+{
+	float field = 0.0;
+	[branch] if (BermBakeActive > 0.5)
+		field = BermFieldBaked(gridLocal);
+	else
+		field = BermFieldTapped(gridLocal);
+	return field;
 }
 
 float BermShape(float bermDeform)

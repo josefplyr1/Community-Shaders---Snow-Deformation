@@ -418,6 +418,15 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
 		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
 	context->VSSetShaderResources(0, 6, vsSRVs);
+	// ShellSurfaceZ's berm term reads the bake at t14; without it the caster
+	// geometry would lose its berms and undercut the shadows of the shell it
+	// is meant to match.
+	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
+	context->VSSetShaderResources(14, 1, &bermSRV);
+	// Same for the wide exclusion field at t15: caster geometry must sink into
+	// the clearings, or a melted camp still casts full-depth snow shadows.
+	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
+	context->VSSetShaderResources(15, 1, &exclusionSRV);
 	ID3D11Buffer* cb0 = shellCB->CB();
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -488,6 +497,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t i = 0; i < 6; i++)
 			srvs[i] = prevVSSRVs[i].get();
 		context->VSSetShaderResources(0, 6, srvs);
+		// t14 was not saved (nothing else in the frame uses it); clear it.
+		ID3D11ShaderResourceView* nullBermSRV = nullptr;
+		context->VSSetShaderResources(14, 1, &nullBermSRV);
+		context->VSSetShaderResources(15, 1, &nullBermSRV);
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();

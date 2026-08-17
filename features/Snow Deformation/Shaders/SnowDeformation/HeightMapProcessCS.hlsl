@@ -57,8 +57,6 @@ cbuffer HeightProcessCB : register(b0)
 	float4 ObstructionRot[MAX_OBSTRUCTIONS];     // xy = sin/cos of Z rotation, z = foundation height
 }
 
-#define MAX_EXCLUSIONS 256
-
 // Wall drifts: band width past the wall, baseline bank fraction in calm
 // weather, extra fraction earned by windward alignment x wind strength.
 #define DRIFT_BAND 140.0
@@ -75,13 +73,8 @@ cbuffer HeightProcessCB : register(b0)
 // of presenting a snow cliff at the roofline.
 #define SHELTER_RING_TEXELS 10
 
-cbuffer DoorCB : register(b1)
-{
-	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius
-	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // doors (w=0): xy = facing, z = forward extent. Fires (w=1 noisy, w=2 smooth): xy = elongation axis x (aspect-1), z = melt strength
-	uint ExclusionCount;
-	float3 exclusionPad;
-}
+
+#include "SnowDeformation/SnowExclusions.hlsli"
 
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
@@ -94,21 +87,6 @@ RWTexture2D<float> OutB : register(u1);
 // discarded melt wherever a door's faint influence tail reached - a ring
 // of full-depth plateau snow around every sheltered door.
 RWTexture2D<float2> OutMask : register(u2);
-
-// Cheap value noise for organic clearing edges.
-float ExclusionNoise(float2 worldXY)
-{
-	float2 c = worldXY / 24.0;
-	float2 i = floor(c);
-	float2 f = frac(c);
-	f = f * f * (3.0 - 2.0 * f);
-	float4 h;
-	h.x = frac(sin(dot(i, float2(127.1, 311.7))) * 43758.5453);
-	h.y = frac(sin(dot(i + float2(1, 0), float2(127.1, 311.7))) * 43758.5453);
-	h.z = frac(sin(dot(i + float2(0, 1), float2(127.1, 311.7))) * 43758.5453);
-	h.w = frac(sin(dot(i + float2(1, 1), float2(127.1, 311.7))) * 43758.5453);
-	return lerp(lerp(h.x, h.y, f.x), lerp(h.z, h.w, f.x), f.y);
-}
 
 // World XY of a height-map texel (v axis mirrors world +Y).
 float2 TexelWorldXY(uint2 p, uint2 dims)
@@ -284,62 +262,13 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	// Exclusion zones: pull the field back to terrain, then either suppress
 	// snow (doors: coverage fades to bare ground) or melt it (fires: depth
-	// thins toward a floor). Doors use an ELLIPSE stretched along their
-	// facing axis (both ways; the recess and the doorstep); fires use a
-	// noisy-edged circle for an organic melt basin. Z-gated (300) so
-	// upper-floor doors do not clear ground snow far below, while sunken
-	// cave entrances still qualify.
-	for (uint exclusionI = 0; exclusionI < ExclusionCount; exclusionI++) {
-		float3 center = ExclusionPosRadius[exclusionI].xyz;
-		float radius = ExclusionPosRadius[exclusionI].w;
-		float4 dirExtType = ExclusionDirExtType[exclusionI];
-		[branch] if (abs(center.z - terrain) < 300.0)
-		{
-			float2 d = worldXY - center.xy;
-			[branch] if (dirExtType.w < 0.5)
-			{
-				// Door: symmetric ellipse, long axis along the facing, edge
-				// perturbed by the same noise as fire clearings so no two
-				// doorway hollows read as identical stamped shapes.
-				float u = dot(d, dirExtType.xy);
-				float v = dot(d, float2(-dirExtType.y, dirExtType.x));
-				float a = radius + dirExtType.z;
-				float b = radius * 0.85;
-				float e = sqrt((u * u) / (a * a) + (v * v) / (b * b));
-				e /= 0.8 + 0.4 * ExclusionNoise(worldXY);
-				float influence = 1.0 - smoothstep(0.45, 1.0, e);
-				field = lerp(field, terrain, influence);
-				suppress = max(suppress, influence);
-			}
-			else
-			{
-				// Melt bowl - full melt in the core, then a long gradual
-				// rise. Type 1 (fires): two noise octaves, fine wobble plus
-				// large-scale shape irregularity, so no two bowls read as
-				// stamped circles. Type 2 (bedding): smooth edge, so a
-				// bedroll's bowl joins a tent's shelter sink cleanly.
-				// dirExtType.xy = elongation axis x (aspect-1): compressing
-				// the along-axis distance stretches the bowl into an oval
-				// centered on the object. dirExtType.z = melt strength.
-				float2 dEff = d;
-				float axisLen = length(dirExtType.xy);
-				[branch] if (axisLen > 0.001)
-				{
-					float2 axisDir = dirExtType.xy / axisLen;
-					dEff -= axisDir * dot(d, axisDir) * (axisLen / (1.0 + axisLen));
-				}
-				float noisy = 1.0;
-				[branch] if (dirExtType.w < 1.5)
-				{
-					noisy = 0.7 + 0.35 * ExclusionNoise(worldXY) + 0.35 * ExclusionNoise(worldXY * 0.3);
-				}
-				float noisyRadius = radius * noisy;
-				float dist = length(dEff);
-				float influence = (1.0 - smoothstep(noisyRadius * 0.35, noisyRadius, dist)) * dirExtType.z;
-				field = lerp(field, terrain, influence);
-				melt = max(melt, influence);
-			}
-		}
+	// thins toward a floor). Shared with the wide field bake so the near and
+	// far answers are the same function of the same constant buffer.
+	{
+		ExclusionResult exclusion = EvaluateExclusions(worldXY, terrain);
+		field = lerp(field, terrain, exclusion.Flatten);
+		suppress = max(suppress, exclusion.Suppress);
+		melt = max(melt, exclusion.Melt);
 	}
 
 	// Corpse burial mounds: resting dead actors inject their collision-
