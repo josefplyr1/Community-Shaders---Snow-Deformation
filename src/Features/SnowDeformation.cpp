@@ -17,6 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillRateMultiplier,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
+	TextureDepths,
 	ObjectsSnowDepth,
 	SnowMeshesDepth,
 	RoadMeshesDepth,
@@ -527,6 +528,7 @@ void SnowDeformation::LoadSettings(json& o_json)
 	// Loaded values may change the window size; the apply path is a no-op
 	// when they match the current state.
 	trenchRangeDirty = true;
+	RefreshLandTextureDepths();
 }
 
 void SnowDeformation::SaveSettings(json& o_json)
@@ -539,6 +541,8 @@ void SnowDeformation::RestoreDefaultSettings()
 	settings = {};
 	trenchRangeDirty = true;
 	clearRequested = true;
+	RefreshLandTextureDepths();
+	shellDataDirty.store(true, std::memory_order_release);
 }
 
 namespace

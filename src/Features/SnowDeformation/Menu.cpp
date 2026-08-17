@@ -141,12 +141,68 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttClasses = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Shell height per snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). Negative values submerge the shell below the surface. Retunes live from cached data."));
+			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Starting height for each snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). This is the DEFAULT a texture uses until it is given its own value below. Negative values submerge the shell below the surface. Retunes live from cached data."));
 		bool classDepthsChanged = false;
 		for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 			classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
-		if (classDepthsChanged)
+		if (classDepthsChanged) {
+			RefreshLandTextureDepths();
 			shellDataDirty.store(true, std::memory_order_release);
+		}
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("texture_depths"), "Snow Depth by Landscape Texture"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttTextures = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("texture_depths_tooltip"), "Every landscape texture the game has loaded this session, each with its own shell height. A texture starts at its family's default above; moving it here pins it to its own value, saved by texture path so load order cannot rebind it. Use this to give snow to textures the families lump in with bare ground (snowy stone, frozen marsh), or to hold one texture back."));
+
+		std::vector<LandTextureEntry> textures;
+		{
+			const std::shared_lock lock(landTextureMutex);
+			textures = landTextures;
+		}
+
+		ImGui::InputText(T(TKEY("texture_filter"), "Filter"), &textureFilter);
+		std::string filter = textureFilter;
+		std::transform(filter.begin(), filter.end(), filter.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+
+		// Snow families first (table order), then alphabetical, so the
+		// textures worth tuning are not buried under the bare ground ones.
+		std::vector<uint16_t> order(textures.size());
+		std::iota(order.begin(), order.end(), (uint16_t)0);
+		std::sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
+			if (textures[a].classIndex != textures[b].classIndex)
+				return textures[a].classIndex < textures[b].classIndex;
+			return textures[a].label < textures[b].label;
+		});
+
+		ImGui::Text("%zu textures loaded this session", textures.size());
+
+		for (uint16_t textureI : order) {
+			const auto& entry = textures[textureI];
+			if (!filter.empty() && entry.path.find(filter) == std::string::npos)
+				continue;
+
+			ImGui::PushID((int)textureI);
+			float depth = entry.depth;
+			if (ImGui::SliderFloat(entry.label.c_str(), &depth, -20.0f, 64.0f, "%.0f units")) {
+				SetLandTextureOverride(entry.path, depth);
+				shellDataDirty.store(true, std::memory_order_release);
+			}
+			if (auto _ttEntry = Util::HoverTooltipWrapper())
+				ImGui::Text("%s\nFamily: %s (%.0f units)%s", entry.path.c_str(),
+					kSnowClasses[entry.classIndex].label, settings.SnowClassDepths[entry.classIndex],
+					entry.overridden ? "\nPinned to its own value." : "");
+			if (entry.overridden) {
+				ImGui::SameLine();
+				if (ImGui::SmallButton(T(TKEY("texture_reset"), "Reset"))) {
+					SetLandTextureOverride(entry.path, std::nullopt);
+					shellDataDirty.store(true, std::memory_order_release);
+				}
+			}
+			ImGui::PopID();
+		}
 		ImGui::TreePop();
 	}
 

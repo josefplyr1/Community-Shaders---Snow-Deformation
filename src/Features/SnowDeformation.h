@@ -73,9 +73,10 @@ public:
 	// on diffuse filename substrings. First match wins: more specific names
 	// must precede their substrings ("grasssnow" before "snow01"). Unmatched
 	// snow-material textures fall to "Snow 01", anything else to "Other".
+	// A class is only the DEFAULT depth for the textures that match it; each
+	// texture is tunable on its own and the terrain-shader snow mask follows
+	// the resolved depth, not the class.
 	static constexpr uint kSnowClassCount = 12;
-	// Classes below this index count as snow for the terrain-shader mask bits.
-	static constexpr uint kSnowOnlyClassCount = 5;
 	struct SnowClassDef
 	{
 		const char* label;
@@ -98,14 +99,35 @@ public:
 	};
 
 	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-class coverage weights (0-255). Depths are applied at window-rebuild time so class sliders retune without a game re-bake. */
+	/** @brief Texture layers kept per vertex: the heaviest of the quad's base texture plus its 6 painted layers. */
+	static constexpr uint kShellVertexLayers = 4;
+	/** @brief Layer slot with no texture (unpainted weight, or an LTEX with no texture set). */
+	static constexpr uint16_t kNoLandTexture = 0xFFFF;
+	/** @brief Registry cap. Beyond it new textures fall back to their class depth. */
+	static constexpr size_t kMaxLandTextures = 512;
+
 	struct ShellCellData
 	{
 		std::array<float, 33 * 33> height;
-		std::array<std::array<uint8_t, 33 * 33>, kSnowClassCount> classWeights;
+		// Land-texture registry indices and their 0-255 weights. Depth is
+		// resolved at window-rebuild time, not here, so the sliders retune the
+		// shell from cached data without a re-bake.
+		std::array<std::array<uint16_t, kShellVertexLayers>, 33 * 33> layerTexture;
+		std::array<std::array<uint8_t, kShellVertexLayers>, 33 * 33> layerWeight;
 		// City worldspaces reuse their Tamriel cell coordinates (WindhelmWorld
 		// spans the same 28-36 / 6-12 block as the terrain outside its gate),
 		// so the coordinate key alone matches cells from a worldspace we left.
 		uint32_t worldspaceID = 0;
+	};
+
+	/** @brief One landscape texture discovered by the bake. The diffuse path is the settings key; the class supplies the depth until the user overrides it. */
+	struct LandTextureEntry
+	{
+		std::string path;
+		std::string label;
+		int classIndex = (int)kSnowClassCount - 1;
+		float depth = -5.0f;
+		bool overridden = false;
 	};
 
 	/** @brief Cached stamp bones per actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). Feet stamp heel-to-toe prints; limbs are joint-to-joint segments (nearest matched ancestor to bone) that carve when inside the snow layer. */
@@ -143,8 +165,10 @@ public:
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
-		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
+		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
+		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
 		float ObjectsSnowDepth = 3.0f;
 		/** @brief Statics skin, rounded class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. Default 0 like the flat class, per in-game tuning. */
@@ -575,6 +599,21 @@ public:
 
 	/** @brief Tracks the camera's worldspace and invalidates the world-anchored caches on a change. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
 	void UpdateActiveWorldspace();
+
+	/** @brief Registers a land texture and returns its registry index, or kNoLandTexture for an absent one. Implemented in SnowDeformation/TerrainData.cpp. */
+	uint16_t RegisterLandTexture(RE::TESLandTexture* a_landTexture);
+
+	/** @brief Re-resolves every non-overridden texture against the current class depths. Call after the class sliders or the whole settings block move. Implemented in SnowDeformation/TerrainData.cpp. */
+	void RefreshLandTextureDepths();
+
+	/** @brief Pins one texture to its own depth, or clears the pin when the depth is empty. Holds the registry lock: the bake thread reads the same map. Implemented in SnowDeformation/TerrainData.cpp. */
+	void SetLandTextureOverride(const std::string& a_path, std::optional<float> a_depth);
+
+	/** @brief Snapshot of the per-index depths, taken once per window rebuild so the texel loop needs no lock. Implemented in SnowDeformation/TerrainData.cpp. */
+	std::vector<float> LandTextureDepthSnapshot();
+
+	/** @brief Re-resolves every entry against the class defaults and the override map. Caller holds landTextureMutex exclusively. */
+	void ResolveLandTextureDepthsLocked();
 
 	// ---- Far fill: heightmap-sourced distant terrain ----
 
@@ -1059,6 +1098,13 @@ protected:
 	std::unordered_map<uint64_t, ShellCellData> shellCells;
 	std::shared_mutex shellCellMutex;
 	std::atomic<bool> shellDataDirty{ true };
+	/** @brief Landscape textures discovered by the bake; indices are stable for the session and are what the baked cells store. */
+	std::vector<LandTextureEntry> landTextures;
+	/** @brief Substring filter for the texture list. Runtime UI state, not persisted. */
+	std::string textureFilter;
+	std::unordered_map<uint32_t, uint16_t> landTextureByForm;
+	std::shared_mutex landTextureMutex;
+
 	/** @brief Form ID of the worldspace the camera is in; 0 until the first exterior. Interiors keep the last exterior's value. */
 	std::atomic<uint32_t> activeWorldspace{ 0 };
 	/** @brief Worldspace the current terrain window was built for. */

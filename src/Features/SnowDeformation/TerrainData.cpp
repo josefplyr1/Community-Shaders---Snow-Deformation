@@ -7,23 +7,27 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
-/** @brief Classifies a land texture into a kSnowClasses index by diffuse filename substring (first match wins), falling back on the snow material check. Returns -1 for absent textures. */
-static int ClassifySnowClass(RE::TESLandTexture* a_landTexture)
+/** @brief Lowercased diffuse path of a land texture, empty when it has none. */
+static std::string LandTexturePath(RE::TESLandTexture* a_landTexture)
 {
-	if (!a_landTexture || a_landTexture->formID == 0)
-		return -1;
-
 	if (auto textureSet = a_landTexture->textureSet) {
 		if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 			std::string lowered(path);
 			std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 				[](unsigned char c) { return (char)std::tolower(c); });
-			for (uint32_t classI = 0; classI < SnowDeformation::kSnowClassCount; ++classI) {
-				const char* match = SnowDeformation::kSnowClasses[classI].match;
-				if (match[0] != '\0' && lowered.find(match) != std::string::npos)
-					return (int)classI;
-			}
+			return lowered;
 		}
+	}
+	return {};
+}
+
+/** @brief Classifies a land texture into a kSnowClasses index by diffuse filename substring (first match wins), falling back on the snow material check. Only supplies the DEFAULT depth now; per-texture overrides win. */
+static int ClassifySnowClass(RE::TESLandTexture* a_landTexture, const std::string& a_path)
+{
+	for (uint32_t classI = 0; classI < SnowDeformation::kSnowClassCount; ++classI) {
+		const char* match = SnowDeformation::kSnowClasses[classI].match;
+		if (match[0] != '\0' && a_path.find(match) != std::string::npos)
+			return (int)classI;
 	}
 
 	bool snowMaterial = a_landTexture->materialType &&
@@ -32,33 +36,113 @@ static int ClassifySnowClass(RE::TESLandTexture* a_landTexture)
 	return snowMaterial ? 3 /* Snow 01 */ : (int)SnowDeformation::kSnowClassCount - 1 /* Other */;
 }
 
-/** @brief True for classes that count as snow (terrain-shader mask bits). */
-static bool IsSnowClass(int a_classIndex)
+/** @brief Display label for the texture list: filename without directory or extension. */
+static std::string LandTextureLabel(const std::string& a_path)
 {
-	return a_classIndex >= 0 && a_classIndex < (int)SnowDeformation::kSnowOnlyClassCount;
+	size_t begin = a_path.find_last_of("\\/");
+	begin = begin == std::string::npos ? 0 : begin + 1;
+	size_t end = a_path.find_last_of('.');
+	if (end == std::string::npos || end < begin)
+		end = a_path.size();
+	return a_path.substr(begin, end - begin);
 }
 
-// One-shot diagnostic: log each distinct land texture with its
-// classification, so misclassified modlist textures show up in the log.
-static void LogLandTextureOnce(RE::TESLandTexture* a_landTexture, int a_classIndex)
+uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 {
-	static std::mutex logMutex;
-	static std::unordered_set<uint32_t> loggedForms;
+	if (!a_landTexture || a_landTexture->formID == 0)
+		return kNoLandTexture;
 
-	if (!a_landTexture)
-		return;
+	{
+		const std::shared_lock lock(landTextureMutex);
+		if (auto it = landTextureByForm.find(a_landTexture->formID); it != landTextureByForm.end())
+			return it->second;
+	}
 
-	const std::lock_guard lock(logMutex);
-	if (loggedForms.size() > 200 || !loggedForms.insert(a_landTexture->formID).second)
-		return;
+	// Two LTEX forms can share one diffuse (vanilla does it), and the settings
+	// key is the path, so both forms must land on the same registry entry.
+	const std::string path = LandTexturePath(a_landTexture);
+	if (path.empty())
+		return kNoLandTexture;
 
-	const char* path = "<no texture set>";
-	if (a_landTexture->textureSet)
-		if (auto p = a_landTexture->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
-			path = p;
+	const std::unique_lock lock(landTextureMutex);
+	if (auto it = landTextureByForm.find(a_landTexture->formID); it != landTextureByForm.end())
+		return it->second;
 
-	const char* label = a_classIndex < 0 ? "BARE" : SnowDeformation::kSnowClasses[a_classIndex].label;
-	logger::info("[SNOW DEFORMATION] LTEX {:08X} [{}] {}", a_landTexture->formID, label, path);
+	for (size_t i = 0; i < landTextures.size(); ++i) {
+		if (landTextures[i].path == path) {
+			landTextureByForm[a_landTexture->formID] = (uint16_t)i;
+			return (uint16_t)i;
+		}
+	}
+
+	if (landTextures.size() >= kMaxLandTextures) {
+		static bool warned = false;
+		if (!std::exchange(warned, true))
+			logger::warn("[SNOW DEFORMATION] Land texture registry full at {}; further textures read as bare ground", kMaxLandTextures);
+		return kNoLandTexture;
+	}
+
+	LandTextureEntry entry;
+	entry.path = path;
+	entry.label = LandTextureLabel(path);
+	entry.classIndex = ClassifySnowClass(a_landTexture, path);
+	if (auto it = settings.TextureDepths.find(path); it != settings.TextureDepths.end()) {
+		entry.depth = it->second;
+		entry.overridden = true;
+	} else {
+		entry.depth = settings.SnowClassDepths[entry.classIndex];
+	}
+
+	const uint16_t index = (uint16_t)landTextures.size();
+	landTextures.push_back(entry);
+	landTextureByForm[a_landTexture->formID] = index;
+
+	logger::info("[SNOW DEFORMATION] LTEX {:08X} [{}] {:.0f} units{} {}", a_landTexture->formID,
+		kSnowClasses[entry.classIndex].label, entry.depth, entry.overridden ? " (override)" : "", path);
+	return index;
+}
+
+void SnowDeformation::ResolveLandTextureDepthsLocked()
+{
+	for (auto& entry : landTextures) {
+		auto it = settings.TextureDepths.find(entry.path);
+		entry.overridden = it != settings.TextureDepths.end();
+		entry.depth = entry.overridden ? it->second : settings.SnowClassDepths[entry.classIndex];
+	}
+}
+
+void SnowDeformation::RefreshLandTextureDepths()
+{
+	const std::unique_lock lock(landTextureMutex);
+	ResolveLandTextureDepthsLocked();
+}
+
+void SnowDeformation::SetLandTextureOverride(const std::string& a_path, std::optional<float> a_depth)
+{
+	const std::unique_lock lock(landTextureMutex);
+	if (a_depth)
+		settings.TextureDepths[a_path] = *a_depth;
+	else
+		settings.TextureDepths.erase(a_path);
+	ResolveLandTextureDepthsLocked();
+}
+
+std::vector<float> SnowDeformation::LandTextureDepthSnapshot()
+{
+	const std::shared_lock lock(landTextureMutex);
+	std::vector<float> depths(landTextures.size());
+	for (size_t i = 0; i < landTextures.size(); ++i)
+		depths[i] = landTextures[i].depth;
+	return depths;
+}
+
+namespace
+{
+	// A texture counts as snow for the terrain-shader mask when it currently
+	// carries a raised layer. The mask is cached per material and the game
+	// re-runs SetupMaterial constantly, so a slider that crosses zero corrects
+	// itself within seconds; no re-bake is needed.
+	bool IsSnowDepth(float a_depth) { return a_depth > 0.0f; }
 }
 
 void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
@@ -82,12 +166,18 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 			continue;
 
 		// Bit 0 = base texture, bits 1-5 = the quad's layer textures.
+		uint16_t quadTextures[6] = { RegisterLandTexture(land->loadedData->defQuadTextures[quadI]) };
+		for (uint32_t textureI = 0; textureI < 5; ++textureI)
+			quadTextures[textureI + 1] = RegisterLandTexture(land->loadedData->quadTextures[quadI][textureI]);
+
 		uint8_t mask = 0;
-		if (IsSnowClass(ClassifySnowClass(land->loadedData->defQuadTextures[quadI])))
-			mask |= 1;
-		for (uint32_t textureI = 0; textureI < 5; ++textureI) {
-			if (IsSnowClass(ClassifySnowClass(land->loadedData->quadTextures[quadI][textureI])))
-				mask |= uint8_t(1 << (textureI + 1));
+		{
+			const std::shared_lock textureLock(landTextureMutex);
+			for (uint32_t textureI = 0; textureI < 6; ++textureI) {
+				const uint16_t index = quadTextures[textureI];
+				if (index != kNoLandTexture && IsSnowDepth(landTextures[index].depth))
+					mask |= uint8_t(1 << textureI);
+			}
 		}
 
 		const std::unique_lock lock(snowMaskMutex);
@@ -111,8 +201,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 	ShellCellData data{};
 	data.height.fill(kShellMissingHeight);
-	for (auto& classArray : data.classWeights)
-		classArray.fill(0);
+	for (auto& vertexTextures : data.layerTexture)
+		vertexTextures.fill(kNoLandTexture);
+	for (auto& vertexWeights : data.layerWeight)
+		vertexWeights.fill(0);
 	if (auto* worldspace = cell->GetRuntimeData().worldSpace)
 		data.worldspaceID = worldspace->GetFormID();
 
@@ -128,13 +220,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		uint32_t quadX = quadI & 1;
 		uint32_t quadY = quadI >> 1;
 
-		int baseClass = ClassifySnowClass(loadedData->defQuadTextures[quadI]);
-		LogLandTextureOnce(loadedData->defQuadTextures[quadI], baseClass);
-		int layerClass[6];
-		for (uint32_t layerI = 0; layerI < 6; ++layerI) {
-			layerClass[layerI] = ClassifySnowClass(loadedData->quadTextures[quadI][layerI]);
-			LogLandTextureOnce(loadedData->quadTextures[quadI][layerI], layerClass[layerI]);
-		}
+		uint16_t baseTexture = RegisterLandTexture(loadedData->defQuadTextures[quadI]);
+		uint16_t layerTexture[6];
+		for (uint32_t layerI = 0; layerI < 6; ++layerI)
+			layerTexture[layerI] = RegisterLandTexture(loadedData->quadTextures[quadI][layerI]);
 
 		for (uint32_t vertexI = 0; vertexI < 289; ++vertexI) {
 			uint32_t vx = vertexI % 17;
@@ -145,20 +234,50 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 			data.height[cellIdx] = loadedData->heights[quadI][vertexI] + cellBaseZ;
 
+			// Gather this vertex's weight per distinct texture: at most the
+			// base plus 6 layers, and layers of the same texture merge. An
+			// absent layer texture still spends its weight, so unpainted
+			// ground keeps its coverage gap and the shell submerges there.
+			uint16_t vertexTexture[7];
+			float vertexWeight[7];
+			uint32_t textureCount = 0;
+			auto addWeight = [&](uint16_t texture, float weight) {
+				if (texture == kNoLandTexture || weight <= 0.0f)
+					return;
+				for (uint32_t i = 0; i < textureCount; ++i) {
+					if (vertexTexture[i] == texture) {
+						vertexWeight[i] += weight;
+						return;
+					}
+				}
+				vertexTexture[textureCount] = texture;
+				vertexWeight[textureCount] = weight;
+				textureCount++;
+			};
+
 			float layerSum = 0.0f;
-			float classSum[kSnowClassCount] = {};
 			for (uint32_t layerI = 0; layerI < 6; ++layerI) {
 				// percents is declared std::int8_t but holds 0-255: a fully
 				// painted layer reads as -1 without the unsigned cast.
 				float weight = static_cast<uint8_t>(loadedData->percents[quadI][vertexI][layerI]) / 255.0f;
 				layerSum += weight;
-				if (layerClass[layerI] >= 0)
-					classSum[layerClass[layerI]] += weight;
+				addWeight(layerTexture[layerI], weight);
 			}
-			if (baseClass >= 0)
-				classSum[baseClass] += std::max(0.0f, 1.0f - layerSum);
-			for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
-				data.classWeights[classI][cellIdx] = (uint8_t)std::clamp(classSum[classI] * 255.0f + 0.5f, 0.0f, 255.0f);
+			addWeight(baseTexture, std::max(0.0f, 1.0f - layerSum));
+
+			// Keep the heaviest kShellVertexLayers: a vertex painted with more
+			// textures than that has the rest below noise, and the slot count
+			// is what holds the per-cell footprint at the old 12-class size.
+			for (uint32_t slot = 0; slot < kShellVertexLayers && slot < textureCount; ++slot) {
+				uint32_t best = slot;
+				for (uint32_t i = slot + 1; i < textureCount; ++i)
+					if (vertexWeight[i] > vertexWeight[best])
+						best = i;
+				std::swap(vertexTexture[slot], vertexTexture[best]);
+				std::swap(vertexWeight[slot], vertexWeight[best]);
+				data.layerTexture[cellIdx][slot] = vertexTexture[slot];
+				data.layerWeight[cellIdx][slot] = (uint8_t)std::clamp(vertexWeight[slot] * 255.0f + 0.5f, 0.0f, 255.0f);
+			}
 		}
 	}
 
@@ -171,7 +290,8 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		// when the baked data actually changed.
 		auto it = shellCells.find(key);
 		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
-			it->second.height == data.height && it->second.classWeights == data.classWeights)
+			it->second.height == data.height && it->second.layerTexture == data.layerTexture &&
+			it->second.layerWeight == data.layerWeight)
 			return;
 		shellCells[key] = data;
 	}
@@ -193,11 +313,15 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	if (it == shellCells.end() || it->second.worldspaceID != activeWorldspace.load(std::memory_order_acquire))
 		return a_missing;
 
-	// Same class-weight resolve the window rebuild uses, for one vertex.
+	// Same layer resolve the window rebuild uses, for one vertex.
 	const uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
 	float depth = 0.0f;
-	for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
-		depth += it->second.classWeights[classI][idx] / 255.0f * settings.SnowClassDepths[classI];
+	const std::shared_lock textureLock(landTextureMutex);
+	for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
+		const uint16_t texture = it->second.layerTexture[idx][slot];
+		if (texture < landTextures.size())
+			depth += it->second.layerWeight[idx][slot] / 255.0f * landTextures[texture].depth;
+	}
 	return depth;
 }
 
@@ -256,6 +380,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	shellDataDirty.store(false, std::memory_order_release);
 
 	shellUploadScratch.resize(size_t(kShellWindowDim) * kShellWindowDim * 4);
+	// One snapshot for the whole texel loop; the bake thread may register new
+	// textures while it runs, and those cells are not in this window yet.
+	const std::vector<float> textureDepths = LandTextureDepthSnapshot();
 
 	uint32_t statSnowTexels = 0;
 	float statMinH = FLT_MAX;
@@ -287,13 +414,16 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				float* texel = &shellUploadScratch[(size_t(ty) * kShellWindowDim + tx) * 4];
 				if (rowCell) {
 					uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
-					// Class depths are applied here, so the sliders retune the
-					// shell from cached weights without a re-bake.
+					// Texture depths are applied here, so the sliders retune
+					// the shell from cached weights without a re-bake.
 					float rampDepth = 0.0f;
 					float coverage = 0.0f;
-					for (uint32_t classI = 0; classI < kSnowClassCount; ++classI) {
-						float w = rowCell->classWeights[classI][idx] / 255.0f;
-						rampDepth += w * settings.SnowClassDepths[classI];
+					for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
+						const uint16_t texture = rowCell->layerTexture[idx][slot];
+						if (texture >= textureDepths.size())
+							continue;
+						float w = rowCell->layerWeight[idx][slot] / 255.0f;
+						rampDepth += w * textureDepths[texture];
 						coverage += w;
 					}
 					texel[0] = rowCell->height[idx];
