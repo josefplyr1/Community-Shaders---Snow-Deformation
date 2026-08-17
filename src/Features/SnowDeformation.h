@@ -86,7 +86,7 @@ public:
 	static constexpr SnowClassDef kSnowClasses[kSnowClassCount] = {
 		{ "Grass Snow", "grasssnow", 14.0f },
 		{ "Trodden Path", "snowpath", 18.0f },
-		{ "Snowy Rocks", "snowrocks", 26.0f },
+		{ "Snowy Rocks", "snowrocks", 30.0f },
 		{ "Snow 01", "snow01", 30.0f },
 		{ "Snow 02", "snow02", 30.0f },
 		{ "Roads", "road", -5.0f },
@@ -96,6 +96,19 @@ public:
 		{ "Coast & Beach", "coast", -5.0f },
 		{ "Mud & Rivers", "mud", -5.0f },
 		{ "Other", "", -5.0f },
+	};
+
+	// Textures whose family default is wrong for them: frozen marsh ice is
+	// snow but shares no name with any snow family. Substring match on the
+	// diffuse path, first match wins. These do not follow their family
+	// slider; the user's own value still wins over both.
+	struct TextureDefaultDef
+	{
+		const char* match;
+		float depth;
+	};
+	static constexpr TextureDefaultDef kTextureDefaults[] = {
+		{ "frozenmarshice", 20.0f },
 	};
 
 	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-class coverage weights (0-255). Depths are applied at window-rebuild time so class sliders retune without a game re-bake. */
@@ -128,6 +141,9 @@ public:
 		int classIndex = (int)kSnowClassCount - 1;
 		float depth = -5.0f;
 		bool overridden = false;
+		/** @brief Set when kTextureDefaults ships a depth for this texture, which then replaces the family default. */
+		bool shipped = false;
+		float shippedDepth = 0.0f;
 	};
 
 	/** @brief Cached stamp bones per actor, keyed by formID; rebuilt when the 3D root changes (cell reload, decapitation swap). Feet stamp heel-to-toe prints; limbs are joint-to-joint segments (nearest matched ancestor to bone) that carve when inside the snow layer. */
@@ -166,7 +182,7 @@ public:
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
-		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
@@ -188,7 +204,7 @@ public:
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
-		float SnowBorderNoise = 64.0f;
+		float SnowBorderNoise = 48.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. */
@@ -611,6 +627,9 @@ public:
 
 	/** @brief Snapshot of the per-index depths, taken once per window rebuild so the texel loop needs no lock. Implemented in SnowDeformation/TerrainData.cpp. */
 	std::vector<float> LandTextureDepthSnapshot();
+
+	/** @brief Re-resolves one entry: user value, then shipped per-texture default, then the family depth. Caller holds landTextureMutex exclusively. */
+	void ResolveLandTextureDepthLocked(LandTextureEntry& a_entry);
 
 	/** @brief Re-resolves every entry against the class defaults and the override map. Caller holds landTextureMutex exclusively. */
 	void ResolveLandTextureDepthsLocked();

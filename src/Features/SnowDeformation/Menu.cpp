@@ -190,10 +190,14 @@ void SnowDeformation::DrawSettings()
 				SetLandTextureOverride(entry.path, depth);
 				shellDataDirty.store(true, std::memory_order_release);
 			}
-			if (auto _ttEntry = Util::HoverTooltipWrapper())
-				ImGui::Text("%s\nFamily: %s (%.0f units)%s", entry.path.c_str(),
-					kSnowClasses[entry.classIndex].label, settings.SnowClassDepths[entry.classIndex],
-					entry.overridden ? "\nPinned to its own value." : "");
+			if (auto _ttEntry = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s\nFamily: %s (%.0f units)", entry.path.c_str(),
+					kSnowClasses[entry.classIndex].label, settings.SnowClassDepths[entry.classIndex]);
+				if (entry.overridden)
+					ImGui::Text("%s", T(TKEY("texture_pinned"), "Pinned to its own value; Reset hands it back."));
+				else if (entry.shipped)
+					ImGui::Text("%s", T(TKEY("texture_shipped"), "Ships with its own default, so the family slider does not reach it."));
+			}
 			if (entry.overridden) {
 				ImGui::SameLine();
 				if (ImGui::SmallButton(T(TKEY("texture_reset"), "Reset"))) {

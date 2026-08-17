@@ -86,12 +86,14 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 	entry.path = path;
 	entry.label = LandTextureLabel(path);
 	entry.classIndex = ClassifySnowClass(a_landTexture, path);
-	if (auto it = settings.TextureDepths.find(path); it != settings.TextureDepths.end()) {
-		entry.depth = it->second;
-		entry.overridden = true;
-	} else {
-		entry.depth = settings.SnowClassDepths[entry.classIndex];
+	for (const auto& shipped : kTextureDefaults) {
+		if (path.find(shipped.match) != std::string::npos) {
+			entry.shipped = true;
+			entry.shippedDepth = shipped.depth;
+			break;
+		}
 	}
+	ResolveLandTextureDepthLocked(entry);
 
 	const uint16_t index = (uint16_t)landTextures.size();
 	landTextures.push_back(entry);
@@ -102,13 +104,20 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 	return index;
 }
 
+void SnowDeformation::ResolveLandTextureDepthLocked(LandTextureEntry& a_entry)
+{
+	// User value, then a shipped per-texture default, then the family slider.
+	auto it = settings.TextureDepths.find(a_entry.path);
+	a_entry.overridden = it != settings.TextureDepths.end();
+	a_entry.depth = a_entry.overridden ? it->second :
+	                a_entry.shipped    ? a_entry.shippedDepth :
+	                                     settings.SnowClassDepths[a_entry.classIndex];
+}
+
 void SnowDeformation::ResolveLandTextureDepthsLocked()
 {
-	for (auto& entry : landTextures) {
-		auto it = settings.TextureDepths.find(entry.path);
-		entry.overridden = it != settings.TextureDepths.end();
-		entry.depth = entry.overridden ? it->second : settings.SnowClassDepths[entry.classIndex];
-	}
+	for (auto& entry : landTextures)
+		ResolveLandTextureDepthLocked(entry);
 }
 
 void SnowDeformation::RefreshLandTextureDepths()
