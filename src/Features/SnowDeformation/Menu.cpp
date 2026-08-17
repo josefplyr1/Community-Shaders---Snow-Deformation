@@ -421,6 +421,33 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
 			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
 			shellStatMinHeight, shellStatMaxHeight);
+
+		// Shell probe: what the landscape shell reads at the camera. A shell
+		// artifact that this call cannot account for is not the landscape
+		// shell - it is object snow, which the Object Snow debug view owns.
+		{
+			auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+			const ShellProbe probe = ProbeShellData(eye.x, eye.y);
+			const char* worldspaceName = "none";
+			if (auto* tes = RE::TES::GetSingleton())
+				if (auto* worldspace = tes->GetRuntimeData2().worldSpace)
+					worldspaceName = worldspace->GetFormEditorID();
+
+			ImGui::Text("Shell probe @ (%.0f, %.0f) cell (%d, %d) vertex (%d, %d)",
+				probe.worldX, probe.worldY, probe.cellX, probe.cellY, probe.vertexX, probe.vertexY);
+			ImGui::Text("  worldspace %08X %s, window built for %08X",
+				probe.activeWorldspaceID, worldspaceName, probe.windowWorldspaceID);
+			if (!probe.cellFound) {
+				ImGui::Text("  no baked cell: the shell has NO terrain data here");
+			} else if (!probe.worldspaceMatch) {
+				ImGui::Text("  cell baked in worldspace %08X: REJECTED, shell has no data here", probe.cellWorldspace);
+			} else {
+				ImGui::Text("  height %.0f, depth %.1f, coverage %.2f -> surface %.0f",
+					probe.height, probe.rampDepth, probe.coverage, probe.height + probe.rampDepth);
+				for (const auto& layer : probe.layers)
+					ImGui::Text("    %s x%.2f @ %.0f units", layer.label.c_str(), layer.weight, layer.depth);
+			}
+		}
 		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
 			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 

@@ -133,6 +133,32 @@ public:
 		uint32_t worldspaceID = 0;
 	};
 
+	/** @brief One-point readout of the terrain data behind the shell, for the menu diagnostics. Reads the CPU cache the window is built from. */
+	struct ShellProbe
+	{
+		float worldX = 0.0f;
+		float worldY = 0.0f;
+		int cellX = 0;
+		int cellY = 0;
+		int vertexX = 0;
+		int vertexY = 0;
+		bool cellFound = false;
+		bool worldspaceMatch = false;
+		uint32_t cellWorldspace = 0;
+		uint32_t activeWorldspaceID = 0;
+		uint32_t windowWorldspaceID = 0;
+		float height = 0.0f;
+		float rampDepth = 0.0f;
+		float coverage = 0.0f;
+		struct Layer
+		{
+			std::string label;
+			float weight = 0.0f;
+			float depth = 0.0f;
+		};
+		std::vector<Layer> layers;
+	};
+
 	/** @brief One landscape texture discovered by the bake. The diffuse path is the settings key; the class supplies the depth until the user overrides it. */
 	struct LandTextureEntry
 	{
@@ -647,6 +673,9 @@ public:
 
 	/** @brief Snapshot of the per-index depths, taken once per window rebuild so the texel loop needs no lock. Implemented in SnowDeformation/TerrainData.cpp. */
 	std::vector<float> LandTextureDepthSnapshot();
+
+	/** @brief Reads the baked cell under a world position: which worldspace it came from, its height, and the textures resolving its depth. Implemented in SnowDeformation/TerrainData.cpp. */
+	ShellProbe ProbeShellData(float a_x, float a_y);
 
 	/** @brief Re-resolves one entry: user value, then shipped per-texture default, then the family depth. Caller holds landTextureMutex exclusively. */
 	void ResolveLandTextureDepthLocked(LandTextureEntry& a_entry);

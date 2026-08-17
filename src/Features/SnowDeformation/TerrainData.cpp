@@ -334,6 +334,46 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	return depth;
 }
 
+SnowDeformation::ShellProbe SnowDeformation::ProbeShellData(float a_x, float a_y)
+{
+	ShellProbe probe;
+	probe.worldX = a_x;
+	probe.worldY = a_y;
+	probe.activeWorldspaceID = activeWorldspace.load(std::memory_order_acquire);
+	probe.windowWorldspaceID = shellWindowWorldspace;
+
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	probe.cellX = (int)std::floor(a_x / kCellSize);
+	probe.cellY = (int)std::floor(a_y / kCellSize);
+	probe.vertexX = std::clamp((int)std::lround((a_x - probe.cellX * kCellSize) / kShellVertexSpacing), 0, 32);
+	probe.vertexY = std::clamp((int)std::lround((a_y - probe.cellY * kCellSize) / kShellVertexSpacing), 0, 32);
+
+	const uint64_t key = (uint64_t(uint32_t(probe.cellX)) << 32) | uint32_t(probe.cellY);
+	const std::shared_lock lock(shellCellMutex);
+	const auto it = shellCells.find(key);
+	if (it == shellCells.end())
+		return probe;
+
+	probe.cellFound = true;
+	probe.cellWorldspace = it->second.worldspaceID;
+	probe.worldspaceMatch = probe.cellWorldspace == probe.activeWorldspaceID;
+
+	const uint32_t idx = uint32_t(probe.vertexY) * 33 + uint32_t(probe.vertexX);
+	probe.height = it->second.height[idx];
+
+	const std::shared_lock textureLock(landTextureMutex);
+	for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
+		const uint16_t texture = it->second.layerTexture[idx][slot];
+		const float weight = it->second.layerWeight[idx][slot] / 255.0f;
+		if (texture >= landTextures.size() || weight <= 0.0f)
+			continue;
+		probe.layers.push_back({ landTextures[texture].label, weight, landTextures[texture].depth });
+		probe.rampDepth += weight * landTextures[texture].depth;
+		probe.coverage += weight;
+	}
+	return probe;
+}
+
 void SnowDeformation::UpdateActiveWorldspace()
 {
 	auto* tes = RE::TES::GetSingleton();
