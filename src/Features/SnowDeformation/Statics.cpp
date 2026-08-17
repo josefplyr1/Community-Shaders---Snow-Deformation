@@ -92,6 +92,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim))
 		return;
+	// Object LOD never qualifies. LOD trishapes carry the same projected-snow
+	// flags as the real meshes they stand in for, but each merges a whole
+	// worldspace quad, so a skin on one is a flat sheet at the LOD surface
+	// cutting through everything the real meshes build. City worldspaces draw
+	// object LOD inside their own walls, which is where this shows.
+	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
+		return;
 	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
@@ -128,6 +135,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
 	if (dx * dx + dy * dy > captureRange * captureRange)
 		return;
+
+	// Backstop for LOD geometry that reaches here without the flags: nothing
+	// belonging to a real reference spans a cell, and merged LOD trishapes
+	// hang off no reference at all.
+	if (a_pass->geometry->worldBound.radius > 4096.0f) {
+		bool referenced = false;
+		for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
+			referenced = node->GetUserData() != nullptr;
+		if (!referenced)
+			return;
+	}
 
 	// The same geometry renders through multiple passes; capture once.
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
